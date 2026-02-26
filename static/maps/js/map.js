@@ -160,6 +160,9 @@ function loadAmenityTypes() {
                 });
                 amenityList.appendChild(item);
             });
+
+            // After loading types and setting their active state, update the map display
+            updateDisplayedAmenities();
         })
         .catch(error => console.error('Error loading amenity types:', error));
 }
