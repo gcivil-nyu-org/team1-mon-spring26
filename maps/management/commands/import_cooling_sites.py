@@ -1,8 +1,9 @@
 import requests
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from maps.models import AmenityType, Amenity
+import stateplane
 
 
 class Command(BaseCommand):
@@ -32,7 +33,8 @@ class Command(BaseCommand):
             query_params = {
                 '$top': 5000,
                 '$skip': 0,
-                '$count': 'true'
+                '$count': 'true',
+                '$format': 'json'
             }
 
             response = requests.get(url, params=query_params, timeout=120)
@@ -68,9 +70,10 @@ class Command(BaseCommand):
                         
                         # Add robust validation for coordinates
                         try:
-                            lat_decimal = Decimal(str(latitude))
-                            lon_decimal = Decimal(str(longitude))
-                        except (ValueError, Decimal.InvalidOperation):
+                            lat_decimal = Decimal(latitude)
+                            lon_decimal = Decimal(longitude)
+                        except (ValueError, InvalidOperation):
+                            print(f"Invalid coordinates for site: {site.get('propertyname', 'Unknown')} - lat: {latitude}, lon: {longitude}")
                             skipped_count += 1
                             continue
 
@@ -104,17 +107,34 @@ class Command(BaseCommand):
                         # Determine active status
                         is_active = str(site.get('status') or '').upper() == 'ACTIVATED' # From sample: "status":"Activated"
 
-                        obj, created = Amenity.objects.update_or_create(
-                            amenity_type=amenity_type,
-                            external_id=str(external_id),
-                            defaults={
-                                'name': prop_name,
-                                'latitude': lat_decimal,
-                                'longitude': lon_decimal,
-                                'description': f"Type: {feature_type_name}",
-                                'active': is_active,
-                            }
-                        )
+                        #print(f"Trying to add: {prop_name}, {feature_type_name}, {  external_id}, {latitude}, {longitude}, Active: {is_active}")
+                        #check if in long island format
+                        if longitude > 910000:
+                            lat, lon = stateplane.to_latlon(longitude, latitude, abbr='NY_LI')
+                            lat_decimal = Decimal(lat)
+                            lon_decimal = Decimal(lon)
+                            print(f"{prop_name} converted from Long Island format: {lat_decimal}, {lon_decimal}")
+                            #continue
+
+                        #print(f"Final coordinates: {lat_decimal}, {lon_decimal}")
+                        try:
+                            obj, created = Amenity.objects.update_or_create(
+                                amenity_type=amenity_type,
+                                external_id=str(external_id),
+                                defaults={
+                                    'name': prop_name,
+                                    'latitude': lat_decimal,
+                                    'longitude': lon_decimal,
+                                    'description': f"Type: {feature_type_name}",
+                                    'active': is_active,
+                                }
+                            )
+
+                            print(f"Added/Updated: {obj.name} (ID: {obj.id})")
+                        except (ValueError, InvalidOperation):
+                            print(f"Invalid coordinates for site: {site.get('propertyname', 'Unknown')} - lat: {latitude}, lon: {longitude}")
+                            skipped_count += 1
+                            continue
 
                         if created:
                             created_count += 1
