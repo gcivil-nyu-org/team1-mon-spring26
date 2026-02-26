@@ -117,6 +117,10 @@ function retryGeolocation() {
  * Fetch all amenity types and populate the sidebar
  */
 function loadAmenityTypes() {
+    // Load saved amenity types from localStorage
+    const savedAmenityTypes = localStorage.getItem('activeAmenityTypes');
+    const previouslyActiveTypes = savedAmenityTypes ? new Set(JSON.parse(savedAmenityTypes).map(id => String(id))) : null;
+
     fetch('/api/amenity-types/')
         .then(response => response.json())
         .then(data => {
@@ -129,40 +133,95 @@ function loadAmenityTypes() {
             const amenityList = document.getElementById('amenity-list');
             amenityList.innerHTML = '';
             
-            data.types.forEach(type => {
+            // Function to create a single amenity item (checkbox)
+            const createAmenityItem = (type, isSubItem = false) => {
                 const item = document.createElement('div');
                 item.className = 'amenity-item';
+                if (isSubItem) {
+                    item.classList.add('sub-item');
+                }
                 item.dataset.typeId = type.id;
-                
-                // Check water fountains by default
-                const isWaterFountain = type.name === 'Water Fountain';
-                
+
+                let isChecked;
+                if (previouslyActiveTypes) {
+                    // If there's a saved state, use it
+                    isChecked = previouslyActiveTypes.has(String(type.id));
+                } else {
+                    // Otherwise, use the default logic
+                    isChecked = type.name === 'Water Fountain' || type.name === 'Cooling Sites';
+                }
+
                 item.innerHTML = `
-                    <input type="checkbox" class="amenity-checkbox" data-type-id="${type.id}" ${isWaterFountain ? 'checked' : ''}>
+                    <input type="checkbox" class="amenity-checkbox" data-type-id="${type.id}" ${isChecked ? 'checked' : ''}>
                     <div class="amenity-color" style="background-color: ${type.color}"></div>
                     <span class="amenity-item-label">${type.name}</span>
                 `;
-                
+
                 const checkbox = item.querySelector('.amenity-checkbox');
-                
-                // If it's water fountain and checked, add to active types
-                if (isWaterFountain && checkbox.checked) {
+
+                if (checkbox.checked) {
                     activeAmenityTypes.add(type.id);
                     item.classList.add('active');
                 }
-                
-                checkbox.addEventListener('change', () => toggleAmenityType(type.id, item, checkbox));
+
+                return { item, checkbox };
+            };
+
+            data.types.forEach(type => {
+                const { item, checkbox } = createAmenityItem(type);
+                amenityList.appendChild(item);
+
+                // If it has sub-types, create a container for them
+                if (type.sub_types && type.sub_types.length > 0) {
+                    const subList = document.createElement('div');
+                    subList.className = 'amenity-sub-list';
+                    amenityList.appendChild(subList);
+
+                    let anySubtypeChecked = false;
+
+                    type.sub_types.forEach(subType => {
+                        const { item: subItem, checkbox: subCheckbox } = createAmenityItem(subType, true);
+                        if (subCheckbox.checked) {
+                            anySubtypeChecked = true;
+                        }
+                        subList.appendChild(subItem);
+                        subCheckbox.addEventListener('change', () => toggleAmenityType(subType.id, subItem, subCheckbox));
+                    });
+
+                    // Show sub-list if parent is checked or if any sub-item was checked from localStorage
+                    if (checkbox.checked || anySubtypeChecked) {
+                        subList.style.display = 'flex';
+                    } else {
+                        subList.style.display = 'none';
+                    }
+                }
+
                 item.addEventListener('click', (e) => {
                     if (e.target !== checkbox) {
                         checkbox.checked = !checkbox.checked;
                         checkbox.dispatchEvent(new Event('change'));
                     }
                 });
-                amenityList.appendChild(item);
-            });
 
-            // After loading types and setting their active state, update the map display
-            updateDisplayedAmenities();
+                checkbox.addEventListener('change', () => {
+                    const subTypeIds = (type.sub_types || []).map(st => st.id);
+                    toggleAmenityType(type.id, item, checkbox, subTypeIds);
+
+                    // If it's a parent, toggle all its children
+                    if (type.sub_types && type.sub_types.length > 0) {
+                        const subList = item.nextElementSibling;
+                        subList.style.display = checkbox.checked ? 'flex' : 'none';
+
+                        const subCheckboxes = item.nextElementSibling.querySelectorAll('.amenity-checkbox');
+                        subCheckboxes.forEach(subCheckbox => {
+                            if (subCheckbox.checked !== checkbox.checked) {
+                                subCheckbox.checked = checkbox.checked;
+                                subCheckbox.dispatchEvent(new Event('change'));
+                            }
+                        });
+                    }
+                });
+            });
         })
         .catch(error => console.error('Error loading amenity types:', error));
 }
@@ -170,20 +229,29 @@ function loadAmenityTypes() {
 /**
  * Toggle amenity type selection and filter markers
  */
-function toggleAmenityType(typeId, element, checkbox) {
+function toggleAmenityType(typeId, element, checkbox, subTypeIds = []) {
     if (checkbox.checked) {
         activeAmenityTypes.add(typeId);
         element.classList.add('active');
+        // If it's a parent, also add all its children
+        subTypeIds.forEach(id => activeAmenityTypes.add(id));
     } else {
         activeAmenityTypes.delete(typeId);
         element.classList.remove('active');
+        // If it's a parent, also remove all its children
+        subTypeIds.forEach(id => activeAmenityTypes.delete(id));
     }
     
+    // Save the updated set of active types to localStorage
+    localStorage.setItem('activeAmenityTypes', JSON.stringify(Array.from(activeAmenityTypes)));
+
     updateDisplayedAmenities();
 }
 
 /**
- * Fetch all amenities from the API, optionally filtered by bounds
+ * Fetch all amenities from the API within the current map bounds.
+ * This function makes a single API call to get all visible amenities,
+ * which are then filtered on the client-side by `updateDisplayedAmenities`.
  */
 function loadAmenities() {
     const bounds = map.getBounds();
@@ -220,13 +288,13 @@ function loadAmenities() {
  * Update displayed amenities on the map based on active filters
  */
 function updateDisplayedAmenities() {
-    // Clear all existing markers
+    // Clear all existing amenity markers
     Object.values(amenityMarkers).forEach(marker => {
         map.removeLayer(marker);
     });
     amenityMarkers = {};
     
-    // Only show amenities if at least one type is selected
+    // Don't show any amenities if no types are selected
     if (activeAmenityTypes.size === 0) {
         return; // Don't show any amenities if nothing is selected
     }
@@ -257,6 +325,8 @@ function addAmenityMarker(amenity) {
     const icons = {
         'droplet': '<path d="M12 0 C8 8, 2 14, 2 19 C2 26.7, 6.5 32, 12 32 C17.5 32, 22 26.7, 22 19 C22 14, 16 8, 12 0 Z"/>',
         'restroom': '<path d="M4,8 C4,6.34 5.34,5 7,5 C8.66,5 10,6.34 10,8 C10,9.66 8.66,11 7,11 C5.34,11 4,9.66 4,8 M17,5 C15.34,5 14,6.34 14,8 C14,9.66 15.34,11 17,11 C18.66,11 20,9.66 20,8 C20,6.34 18.66,5 17,5 M12,13 L12,30 L16,30 L16,20 L18,20 L18,30 L22,30 L22,13 L12,13 M2,13 L2,30 L6,30 L6,20 L8,20 L8,30 L12,30 L12,13 L2,13 Z"/>',
+        'bicycle': '<path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>',
+        'snowflake': '<path d="M12 2.5l-2.5 4.33h5L12 2.5zm0 19l-2.5-4.33h5L12 21.5zM4.33 7.5L2.5 12l1.83 4.5h4.34L4.33 7.5zm15.34 0L15.33 12l1.83 4.5h4.34L19.67 7.5zM8.67 16.5L12 10l3.33 6.5H8.67zm0-9L12 14l3.33-6.5H8.67z" transform="scale(1.2) translate(-2, -2)"/>',
         'default': '<path d="M12 0 C8 8, 2 14, 2 19 C2 26.7, 6.5 32, 12 32 C17.5 32, 22 26.7, 22 19 C22 14, 16 8, 12 0 Z"/>'
     };
 
@@ -358,6 +428,8 @@ function addAmenityMarker(amenity) {
     const popupIcons = {
         'droplet': '💧',
         'restroom': '🚻',
+        'bicycle': '🚲',
+        'snowflake': '❄️',
         'default': '📍' // A generic location pin
     };
     const popupIcon = popupIcons[amenity.icon] || popupIcons['default'];
@@ -478,10 +550,12 @@ function showDetailPanel(amenity) {
     
     if (amenity.hours_of_operation) {
         content += `
-        <div class="detail-field">
-            <div class="detail-field-label">Hours of Operation</div>
-            <div class="detail-field-value">${amenity.hours_of_operation}</div>
-        </div>
+            <div class="detail-field">
+                <div class="detail-field-label">Hours of Operation</div>
+                <div class="detail-field-value">
+                    ${formatHours(amenity.hours_of_operation)}
+                </div>
+            </div>
         `;
     }
     
@@ -517,6 +591,46 @@ function showDetailPanel(amenity) {
     
     contentEl.innerHTML = content;
     panel.classList.add('open');
+}
+
+/**
+ * Formats the hours of operation from a JSON object into a readable string.
+ * @param {object} hours - The hours object from the amenity.
+ * @returns {string} - An HTML string representing the hours.
+ */
+function formatHours(hours) {
+    if (typeof hours !== 'object' || hours === null) {
+        return hours; // Return as-is if it's a simple string or not an object
+    }
+
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    let output = '<ul class="hours-list">';
+
+    if (hours.default) {
+        output += `<li><strong>All Days:</strong> ${formatTimeRange(hours.default)}</li>`;
+    } else {
+        days.forEach(day => {
+            if (hours[day]) {
+                output += `<li><strong>${day}:</strong> ${formatTimeRange(hours[day])}</li>`;
+            } else if (hours.hasOwnProperty(day) && hours[day] === null) {
+                output += `<li><strong>${day}:</strong> Closed</li>`;
+            }
+        });
+    }
+
+    if (hours.notes) {
+        output += `<li class="hours-notes">${hours.notes}</li>`;
+    }
+
+    output += '</ul>';
+    return output;
+}
+
+function formatTimeRange(range) {
+    if (Array.isArray(range)) {
+        return `${range[0]} - ${range[1]}`;
+    }
+    return range; // For notes or other string values
 }
 
 /**
