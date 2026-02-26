@@ -36,13 +36,13 @@ class AmenityTypeAdmin(admin.ModelAdmin):
 class AmenityAdmin(admin.ModelAdmin):
     list_display = ['name', 'amenity_type', 'active', 'latitude', 'longitude', 'created_at']
     list_filter = ['amenity_type', 'active', 'created_at']
-    search_fields = ['name', 'address', 'position', 'external_id']
+    search_fields = ['name', 'address', 'description', 'external_id']
     fieldsets = (
         ('Basic Info', {
             'fields': ('name', 'amenity_type', 'active')
         }),
         ('Location', {
-            'fields': ('latitude', 'longitude', 'address', 'position', 'prop_name')
+            'fields': ('latitude', 'longitude', 'address', 'description', 'prop_name')
         }),
         ('Details', {
             'fields': ('description', 'operator', 'hours_of_operation', 'accessibility', 'changing_stations', 'external_id'),
