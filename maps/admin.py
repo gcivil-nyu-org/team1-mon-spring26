@@ -42,7 +42,7 @@ class AmenityAdmin(admin.ModelAdmin):
             'fields': ('name', 'amenity_type', 'active')
         }),
         ('Location', {
-            'fields': ('latitude', 'longitude', 'address', 'description', 'prop_name')
+            'fields': ('latitude', 'longitude', 'address', 'prop_name')
         }),
         ('Details', {
             'fields': ('description', 'operator', 'hours_of_operation', 'accessibility', 'changing_stations', 'external_id'),
