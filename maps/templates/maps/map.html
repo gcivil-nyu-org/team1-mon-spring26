@@ -1,0 +1,119 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NYC Essentials Now!</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{% static 'maps/css/style.css' %}">
+</head>
+<body>
+    <div class="container">
+        <!-- Top Panel -->
+        <div class="top-panel">
+            <div class="panel-content">
+                <div class="header-section">
+                    <div class="header-main">
+                        <h1>NYC Essentials Now!</h1>
+                        <div id="user-display" style="display: none;"></div>
+                    </div>
+                    <button class="auth-button" id="auth-button">Login / Sign Up</button>
+                    <p id="location-status">Locating...</p>
+                </div>
+                
+                <div class="search-section">
+                    <input 
+                        type="text" 
+                        id="search-input" 
+                        placeholder="Search address or location..."
+                        autocomplete="off"
+                    >
+                    <div id="search-results" class="search-results"></div>
+                </div>
+                
+                <div class="amenity-types">
+                    <h3>Filter by Amenity Type</h3>
+                    <div id="amenity-list" class="amenity-list">
+                        <!-- Populated by JavaScript -->
+                    </div>
+                </div>
+                
+                <div class="active-filter">
+                    <label>
+                        <input type="checkbox" id="include-inactive" checked>
+                        Show inactive amenities
+                    </label>
+                    <label>
+                        <input type="checkbox" id="only-accessible" unchecked>
+                        Only show accessible
+                    </label>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Map -->
+        <main class="map-container">
+            <div id="map"></div>
+            <button class="location-button" id="location-button" title="Go to my location">📍</button>
+        </main>
+        
+        <!-- Detail Panel -->
+        <aside class="detail-panel" id="detail-panel">
+            <div class="detail-panel-header">
+                <h2 id="detail-name"></h2>
+                <button class="detail-close-btn" id="detail-close-btn">✕</button>
+            </div>
+            <div class="detail-panel-content" id="detail-content">
+                <!-- Populated by JavaScript -->
+            </div>
+        </aside>
+    </div>
+
+    <!-- Auth Modal -->
+    <div id="auth-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="auth-modal-title">Login</h2>
+                <button id="auth-modal-close" class="detail-close-btn">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="auth-tabs">
+                    <button class="auth-tab-link active" data-tab="login-tab">Login</button>
+                    <button class="auth-tab-link" data-tab="register-tab">Sign Up</button>
+                </div>
+
+                <!-- Login Form -->
+                <div id="login-tab" class="auth-tab-content active">
+                    <form id="login-form">
+                        <p id="login-error" class="error-message" style="display: none;"></p>
+                        <input type="email" id="login-email" placeholder="Email" required autocomplete="email">
+                        <input type="password" id="login-password" placeholder="Password" required autocomplete="current-password">
+                        <button type="submit" class="amenity-nav-button" style="width: 100%; margin-top: 10px;">Login</button>
+                    </form>
+                </div>
+
+                <!-- Register Form -->
+                <div id="register-tab" class="auth-tab-content">
+                    <form id="register-form">
+                        <p id="register-error" class="error-message" style="display: none;"></p>
+                        <input type="email" id="register-email" placeholder="Email" required autocomplete="email">
+                        <input type="password" id="register-password" placeholder="Password" required autocomplete="new-password">
+                        <button type="submit" class="amenity-nav-button" style="width: 100%; margin-top: 10px;">Create Account</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Leaflet JavaScript -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    
+    <!-- Custom Map Script -->
+    <script src="{% static 'maps/js/map.js' %}?v={% now 'U' %}"></script>
+</body>
+</html>
