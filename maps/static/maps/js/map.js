@@ -11,7 +11,40 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 let userLocation = null;
 let userMarker = null;
 let selectedLocationMarker = null;
-let amenityMarkers = {};
+let amenityMarkers = L.markerClusterGroup({
+    iconCreateFunction: function (cluster) {
+        const markers = cluster.getAllChildMarkers();
+        const childCount = cluster.getChildCount();
+
+        // Get unique amenity types and their colors
+        const typeColors = {};
+        markers.forEach(marker => {
+            const amenity = marker.options.amenityData;
+            if (amenity) {
+                typeColors[amenity.type_id] = amenity.color;
+            }
+        });
+
+        const uniqueColors = Object.values(typeColors);
+        let backgroundStyle = 'background-color: #999;'; // Default for empty clusters
+
+        if (uniqueColors.length === 1) {
+            backgroundStyle = `background-color: ${uniqueColors[0]};`;
+        } else if (uniqueColors.length > 1) {
+            const segmentSize = 100 / uniqueColors.length;
+            const gradientParts = uniqueColors.map((color, i) => {
+                return `${color} ${i * segmentSize}% ${(i + 1) * segmentSize}%`;
+            });
+            backgroundStyle = `background: conic-gradient(${gradientParts.join(', ')});`;
+        }
+
+        const c = ' marker-cluster-';
+        const className = 'marker-cluster' + (childCount < 10 ? c + 'small' : childCount < 100 ? c + 'medium' : c + 'large');
+        const iconHtml = `<div style="${backgroundStyle}"><span>${childCount}</span></div>`;
+
+        return L.divIcon({ html: iconHtml, className: className, iconSize: L.point(40, 40) });
+    }
+});
 let activeAmenityTypes = new Set();
 let allAmenitiesData = {};
 let searchTimeout = null;
@@ -301,11 +334,8 @@ function loadAmenities() {
  * Update displayed amenities on the map based on active filters
  */
 function updateDisplayedAmenities() {
-    // Clear all existing amenity markers
-    Object.values(amenityMarkers).forEach(marker => {
-        map.removeLayer(marker);
-    });
-    amenityMarkers = {};
+    // Clear all existing markers from the cluster group
+    amenityMarkers.clearLayers();
     
     // Don't show any amenities if no types are selected
     if (activeAmenityTypes.size === 0) {
@@ -324,12 +354,6 @@ function updateDisplayedAmenities() {
  * Add a single amenity marker to the map
  */
 function addAmenityMarker(amenity) {
-    const key = `${amenity.id}`;
-    
-    if (amenityMarkers[key]) {
-        return; // Marker already exists
-    }
-    
     // Style inactive amenities with reduced opacity
     const opacity = amenity.active ? 1 : 0.5;
     const filter = amenity.active ? '' : 'opacity(0.5)';
@@ -378,7 +402,7 @@ function addAmenityMarker(amenity) {
         className: 'leaflet-div-icon-custom' // Use a generic class to avoid confusion
     });
     
-    const marker = L.marker([amenity.latitude, amenity.longitude], { icon: icon }).addTo(map);
+    const marker = L.marker([amenity.latitude, amenity.longitude], { icon: icon, amenityData: amenity });
     
     // Add click handler to show detail panel
     marker.on('click', () => {
@@ -484,9 +508,8 @@ function addAmenityMarker(amenity) {
     `;
     
     marker.bindPopup(popupContent);
-    marker.addTo(map);
-    
-    amenityMarkers[key] = marker;
+    // Add the marker to the cluster group instead of directly to the map
+    amenityMarkers.addLayer(marker);
 }
 
 /**
@@ -976,6 +999,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeGeolocation();
     loadAmenityTypes();
     loadAmenities();
+
+    // Add the cluster group to the map
+    map.addLayer(amenityMarkers);
     
     // Listen for map movements to reload amenities based on visible area
     map.on('moveend', () => {
