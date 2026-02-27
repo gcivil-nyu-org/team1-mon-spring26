@@ -11,7 +11,40 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 let userLocation = null;
 let userMarker = null;
 let selectedLocationMarker = null;
-let amenityMarkers = L.markerClusterGroup(); // Use MarkerClusterGroup
+let amenityMarkers = L.markerClusterGroup({
+    iconCreateFunction: function (cluster) {
+        const markers = cluster.getAllChildMarkers();
+        const childCount = cluster.getChildCount();
+
+        // Get unique amenity types and their colors
+        const typeColors = {};
+        markers.forEach(marker => {
+            const amenity = marker.options.amenityData;
+            if (amenity) {
+                typeColors[amenity.type_id] = amenity.color;
+            }
+        });
+
+        const uniqueColors = Object.values(typeColors);
+        let backgroundStyle = 'background-color: #999;'; // Default for empty clusters
+
+        if (uniqueColors.length === 1) {
+            backgroundStyle = `background-color: ${uniqueColors[0]};`;
+        } else if (uniqueColors.length > 1) {
+            const segmentSize = 100 / uniqueColors.length;
+            const gradientParts = uniqueColors.map((color, i) => {
+                return `${color} ${i * segmentSize}% ${(i + 1) * segmentSize}%`;
+            });
+            backgroundStyle = `background: conic-gradient(${gradientParts.join(', ')});`;
+        }
+
+        const c = ' marker-cluster-';
+        const className = 'marker-cluster' + (childCount < 10 ? c + 'small' : childCount < 100 ? c + 'medium' : c + 'large');
+        const iconHtml = `<div style="${backgroundStyle}"><span>${childCount}</span></div>`;
+
+        return L.divIcon({ html: iconHtml, className: className, iconSize: L.point(40, 40) });
+    }
+});
 let activeAmenityTypes = new Set();
 let allAmenitiesData = {};
 let searchTimeout = null;
@@ -369,7 +402,7 @@ function addAmenityMarker(amenity) {
         className: 'leaflet-div-icon-custom' // Use a generic class to avoid confusion
     });
     
-    const marker = L.marker([amenity.latitude, amenity.longitude], { icon: icon });
+    const marker = L.marker([amenity.latitude, amenity.longitude], { icon: icon, amenityData: amenity });
     
     // Add click handler to show detail panel
     marker.on('click', () => {
