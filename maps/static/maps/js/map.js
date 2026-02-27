@@ -1,5 +1,5 @@
 // Initialize map with default center
-const map = L.map('map').setView([40, -95], 4);
+const map = L.map('map', { renderer: L.canvas() }).setView([40, -95], 4);
 
 // Add OpenStreetMap tile layer
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
