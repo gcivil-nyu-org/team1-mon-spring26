@@ -245,7 +245,8 @@ function toggleAmenityType(typeId, element, checkbox, subTypeIds = []) {
     // Save the updated set of active types to localStorage
     localStorage.setItem('activeAmenityTypes', JSON.stringify(Array.from(activeAmenityTypes)));
 
-    updateDisplayedAmenities();
+    // Reload amenities with the new set of active types
+    loadAmenities();
 }
 
 /**
@@ -254,6 +255,13 @@ function toggleAmenityType(typeId, element, checkbox, subTypeIds = []) {
  * which are then filtered on the client-side by `updateDisplayedAmenities`.
  */
 function loadAmenities() {
+    // If no amenity types are selected, clear the map and don't fetch.
+    if (activeAmenityTypes.size === 0) {
+        allAmenitiesData = {};
+        updateDisplayedAmenities();
+        return;
+    }
+
     const bounds = map.getBounds();
     const includeInactive = document.getElementById('include-inactive').checked;
     const onlyAccessible = document.getElementById('only-accessible').checked;
@@ -265,6 +273,11 @@ function loadAmenities() {
         west: bounds.getWest(),
         include_inactive: includeInactive,
         only_accessible: onlyAccessible
+    });
+
+    // Add the active amenity types to the request
+    activeAmenityTypes.forEach(typeId => {
+        params.append('type_id', typeId);
     });
     
     fetch(`/api/amenities/?${params}`)

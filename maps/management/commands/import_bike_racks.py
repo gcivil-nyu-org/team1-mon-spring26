@@ -30,7 +30,7 @@ class Command(BaseCommand):
             self.stdout.write(f'Fetching data from: {url}')
 
             query_params = {
-                '$top': 20000,  # A large number to get all racks
+                '$top': 100000,  # A large number to get all racks
                 '$skip': 0,
                 '$count': 'true'
             }
@@ -78,15 +78,16 @@ class Command(BaseCommand):
                         external_id = rack.get('site_id') or f"bikerack_{latitude}_{longitude}"
 
                         # Map fields to the Amenity model
-                        neighborhood_name = rack.get('ntaname', 'Unknown Neighborhood')
-                        rack_type_desc = rack.get('racktype', 'Standard Rack')
                         ifo_address = rack.get('ifoaddress', '')  # Capture the physical address
+                        # Use the address as a fallback for the name if 'ntaname' is missing or empty.
+                        name = rack.get('ntaname') or ifo_address or 'Bike Rack'
+                        rack_type_desc = rack.get('racktype', 'Standard Rack')
 
                         obj, created = Amenity.objects.update_or_create(
                             amenity_type=amenity_type,
                             external_id=str(external_id),
                             defaults={
-                                'name': neighborhood_name,
+                                'name': name,
                                 'address': ifo_address,
                                 'latitude': lat_decimal,
                                 'longitude': lon_decimal,
