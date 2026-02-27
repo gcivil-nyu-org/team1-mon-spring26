@@ -10,6 +10,11 @@
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
     
+    <!-- Leaflet MarkerCluster for performance with many markers -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
     <!-- Custom CSS -->
     <link rel="stylesheet" href="{% static 'maps/css/style.css' %}">
 </head>
@@ -111,10 +116,7 @@
         </div>
     </div>
     
-    <!-- Leaflet JavaScript -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-    
     <!-- Custom Map Script -->
-    <script src="{% static 'maps/js/map.js' %}?v={% now 'U' %}"></script>
+    <script src="{% static 'maps/js/map.js' %}" defer></script>
 </body>
 </html>
