@@ -249,18 +249,24 @@ function toggleAmenityType(typeId, element, checkbox, subTypeIds = []) {
         element.classList.add('active');
         // If it's a parent, also add all its children
         subTypeIds.forEach(id => activeAmenityTypes.add(id));
+
+        // If we don't have data for this type, fetch it. Otherwise, just update the display.
+        if (!allAmenitiesData[typeId]) {
+            loadAmenities();
+        } else {
+            updateDisplayedAmenities();
+        }
     } else {
         activeAmenityTypes.delete(typeId);
         element.classList.remove('active');
         // If it's a parent, also remove all its children
         subTypeIds.forEach(id => activeAmenityTypes.delete(id));
+        // When unchecking, just update the display to hide markers. No need to fetch.
+        updateDisplayedAmenities();
     }
     
     // Save the updated set of active types to localStorage
     localStorage.setItem('activeAmenityTypes', JSON.stringify(Array.from(activeAmenityTypes)));
-
-    // Reload amenities with the new set of active types
-    loadAmenities();
 }
 
 /**
@@ -297,13 +303,15 @@ function loadAmenities() {
     fetch(`/api/amenities/?${params}`)
         .then(response => response.json())
         .then(data => {
-            // Store all amenities by type
-            allAmenitiesData = {};
+            // Merge new data into our cache instead of replacing it
             data.amenities.forEach(amenity => {
                 if (!allAmenitiesData[amenity.type_id]) {
                     allAmenitiesData[amenity.type_id] = [];
                 }
-                allAmenitiesData[amenity.type_id].push(amenity);
+                // A simple check to avoid duplicate entries if the API sends them
+                if (!allAmenitiesData[amenity.type_id].some(a => a.id === amenity.id)) {
+                    allAmenitiesData[amenity.type_id].push(amenity);
+                }
             });
             
             updateDisplayedAmenities(); // This will now filter from the comprehensive `allAmenitiesData`
