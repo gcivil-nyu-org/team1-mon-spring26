@@ -11,40 +11,21 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 let userLocation = null;
 let userMarker = null;
 let selectedLocationMarker = null;
-let amenityMarkers = L.markerClusterGroup({
-    iconCreateFunction: function (cluster) {
-        const markers = cluster.getAllChildMarkers();
+// A cluster group specifically for bike racks
+let bikeRackMarkers = L.markerClusterGroup({
+    iconCreateFunction: function(cluster) {
         const childCount = cluster.getChildCount();
-
-        // Get unique amenity types and their colors
-        const typeColors = {};
-        markers.forEach(marker => {
-            const amenity = marker.options.amenityData;
-            if (amenity) {
-                typeColors[amenity.type_id] = amenity.color;
-            }
-        });
-
-        const uniqueColors = Object.values(typeColors);
-        let backgroundStyle = 'background-color: #999;'; // Default for empty clusters
-
-        if (uniqueColors.length === 1) {
-            backgroundStyle = `background-color: ${uniqueColors[0]};`;
-        } else if (uniqueColors.length > 1) {
-            const segmentSize = 100 / uniqueColors.length;
-            const gradientParts = uniqueColors.map((color, i) => {
-                return `${color} ${i * segmentSize}% ${(i + 1) * segmentSize}%`;
-            });
-            backgroundStyle = `background: conic-gradient(${gradientParts.join(', ')});`;
-        }
-
         const c = ' marker-cluster-';
         const className = 'marker-cluster' + (childCount < 10 ? c + 'small' : childCount < 100 ? c + 'medium' : c + 'large');
-        const iconHtml = `<div style="${backgroundStyle}"><span>${childCount}</span></div>`;
+        // Bike rack clusters will always be orange
+        const iconHtml = `<div style="background-color: #FF9800;"><span>${childCount}</span></div>`;
 
         return L.divIcon({ html: iconHtml, className: className, iconSize: L.point(40, 40) });
     }
 });
+// A regular layer group for all other amenities that should not be clustered
+let otherAmenityMarkers = L.layerGroup();
+
 let activeAmenityTypes = new Set();
 let allAmenitiesData = {};
 let searchTimeout = null;
@@ -334,8 +315,9 @@ function loadAmenities() {
  * Update displayed amenities on the map based on active filters
  */
 function updateDisplayedAmenities() {
-    // Clear all existing markers from the cluster group
-    amenityMarkers.clearLayers();
+    // Clear all existing markers from both groups
+    bikeRackMarkers.clearLayers();
+    otherAmenityMarkers.clearLayers();
     
     // Don't show any amenities if no types are selected
     if (activeAmenityTypes.size === 0) {
@@ -508,8 +490,12 @@ function addAmenityMarker(amenity) {
     `;
     
     marker.bindPopup(popupContent);
-    // Add the marker to the cluster group instead of directly to the map
-    amenityMarkers.addLayer(marker);
+    // Add the marker to the appropriate group based on its type
+    if (amenity.type === 'Bike Rack') {
+        bikeRackMarkers.addLayer(marker);
+    } else {
+        otherAmenityMarkers.addLayer(marker);
+    }
 }
 
 /**
@@ -1000,8 +986,9 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAmenityTypes();
     loadAmenities();
 
-    // Add the cluster group to the map
-    map.addLayer(amenityMarkers);
+    // Add both marker groups to the map
+    map.addLayer(bikeRackMarkers);
+    map.addLayer(otherAmenityMarkers);
     
     // Listen for map movements to reload amenities based on visible area
     map.on('moveend', () => {
