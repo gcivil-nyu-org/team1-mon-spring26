@@ -27,7 +27,7 @@ def map_view(request):
 
 def amenities_api(request):
     """API endpoint to fetch amenities, optionally filtered by type and bounding box."""
-    amenity_type_id = request.GET.get('type_id')
+    amenity_type_ids = request.GET.getlist('type_id')
     amenity_type_name = request.GET.get('type')
     include_inactive = request.GET.get('include_inactive', 'false').lower() == 'true'
     only_accessible = request.GET.get('only_accessible', 'false').lower() == 'true'
@@ -59,8 +59,8 @@ def amenities_api(request):
         amenities = Amenity.objects.all()
     
     # Filter by amenity type if specified
-    if amenity_type_id:
-        amenities = amenities.filter(amenity_type_id=amenity_type_id)
+    if amenity_type_ids:
+        amenities = amenities.filter(amenity_type_id__in=amenity_type_ids)
     elif amenity_type_name:
         # Allow filtering by type name as well
         amenities = amenities.filter(amenity_type__name__iexact=amenity_type_name)
