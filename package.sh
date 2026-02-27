@@ -1,9 +1,12 @@
 zip=../django_map.zip
-# delete __pycache__ compiled bytecode files
-find . -name "__pycache__" -type d | xargs rm -rf {}\;
+rm $zip
 
 # populate /static folder to be served by nginx
-echo yes|python3 manage.py collectstatic --clear
+####### we do this on elastic beanstalk, no need here! #######
+#echo yes|python3 manage.py collectstatic --clear
+
+# delete __pycache__ compiled bytecode files
+find . -name "__pycache__" -type d | xargs rm -rf
 
 # package for elastic beanstalk
 zip -r $zip * .ebextensions .platform
