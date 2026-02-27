@@ -1,5 +1,5 @@
 // Initialize map with default center
-const map = L.map('map').setView([40, -95], 4);
+const map = L.map('map', { renderer: L.canvas() }).setView([40, -95], 4);
 
 // Add OpenStreetMap tile layer
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -11,7 +11,21 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 let userLocation = null;
 let userMarker = null;
 let selectedLocationMarker = null;
-let amenityMarkers = {};
+// A cluster group specifically for bike racks
+let bikeRackMarkers = L.markerClusterGroup({
+    iconCreateFunction: function(cluster) {
+        const childCount = cluster.getChildCount();
+        const c = ' marker-cluster-';
+        const className = 'marker-cluster' + (childCount < 10 ? c + 'small' : childCount < 100 ? c + 'medium' : c + 'large');
+        // Bike rack clusters will always be orange
+        const iconHtml = `<div style="background-color: #FF9800;"><span>${childCount}</span></div>`;
+
+        return L.divIcon({ html: iconHtml, className: className, iconSize: L.point(40, 40) });
+    }
+});
+// A regular layer group for all other amenities that should not be clustered
+let otherAmenityMarkers = L.layerGroup();
+
 let activeAmenityTypes = new Set();
 let allAmenitiesData = {};
 let searchTimeout = null;
@@ -235,17 +249,24 @@ function toggleAmenityType(typeId, element, checkbox, subTypeIds = []) {
         element.classList.add('active');
         // If it's a parent, also add all its children
         subTypeIds.forEach(id => activeAmenityTypes.add(id));
+
+        // If we don't have data for this type, fetch it. Otherwise, just update the display.
+        if (!allAmenitiesData[typeId]) {
+            loadAmenities();
+        } else {
+            updateDisplayedAmenities();
+        }
     } else {
         activeAmenityTypes.delete(typeId);
         element.classList.remove('active');
         // If it's a parent, also remove all its children
         subTypeIds.forEach(id => activeAmenityTypes.delete(id));
+        // When unchecking, just update the display to hide markers. No need to fetch.
+        updateDisplayedAmenities();
     }
     
     // Save the updated set of active types to localStorage
     localStorage.setItem('activeAmenityTypes', JSON.stringify(Array.from(activeAmenityTypes)));
-
-    updateDisplayedAmenities();
 }
 
 /**
@@ -254,6 +275,13 @@ function toggleAmenityType(typeId, element, checkbox, subTypeIds = []) {
  * which are then filtered on the client-side by `updateDisplayedAmenities`.
  */
 function loadAmenities() {
+    // If no amenity types are selected, clear the map and don't fetch.
+    if (activeAmenityTypes.size === 0) {
+        allAmenitiesData = {};
+        updateDisplayedAmenities();
+        return;
+    }
+
     const bounds = map.getBounds();
     const includeInactive = document.getElementById('include-inactive').checked;
     const onlyAccessible = document.getElementById('only-accessible').checked;
@@ -266,17 +294,24 @@ function loadAmenities() {
         include_inactive: includeInactive,
         only_accessible: onlyAccessible
     });
+
+    // Add the active amenity types to the request
+    activeAmenityTypes.forEach(typeId => {
+        params.append('type_id', typeId);
+    });
     
     fetch(`/api/amenities/?${params}`)
         .then(response => response.json())
         .then(data => {
-            // Store all amenities by type
-            allAmenitiesData = {};
+            // Merge new data into our cache instead of replacing it
             data.amenities.forEach(amenity => {
                 if (!allAmenitiesData[amenity.type_id]) {
                     allAmenitiesData[amenity.type_id] = [];
                 }
-                allAmenitiesData[amenity.type_id].push(amenity);
+                // A simple check to avoid duplicate entries if the API sends them
+                if (!allAmenitiesData[amenity.type_id].some(a => a.id === amenity.id)) {
+                    allAmenitiesData[amenity.type_id].push(amenity);
+                }
             });
             
             updateDisplayedAmenities(); // This will now filter from the comprehensive `allAmenitiesData`
@@ -288,11 +323,9 @@ function loadAmenities() {
  * Update displayed amenities on the map based on active filters
  */
 function updateDisplayedAmenities() {
-    // Clear all existing amenity markers
-    Object.values(amenityMarkers).forEach(marker => {
-        map.removeLayer(marker);
-    });
-    amenityMarkers = {};
+    // Clear all existing markers from both groups
+    bikeRackMarkers.clearLayers();
+    otherAmenityMarkers.clearLayers();
     
     // Don't show any amenities if no types are selected
     if (activeAmenityTypes.size === 0) {
@@ -311,12 +344,6 @@ function updateDisplayedAmenities() {
  * Add a single amenity marker to the map
  */
 function addAmenityMarker(amenity) {
-    const key = `${amenity.id}`;
-    
-    if (amenityMarkers[key]) {
-        return; // Marker already exists
-    }
-    
     // Style inactive amenities with reduced opacity
     const opacity = amenity.active ? 1 : 0.5;
     const filter = amenity.active ? '' : 'opacity(0.5)';
@@ -365,7 +392,7 @@ function addAmenityMarker(amenity) {
         className: 'leaflet-div-icon-custom' // Use a generic class to avoid confusion
     });
     
-    const marker = L.marker([amenity.latitude, amenity.longitude], { icon: icon }).addTo(map);
+    const marker = L.marker([amenity.latitude, amenity.longitude], { icon: icon, amenityData: amenity });
     
     // Add click handler to show detail panel
     marker.on('click', () => {
@@ -471,9 +498,12 @@ function addAmenityMarker(amenity) {
     `;
     
     marker.bindPopup(popupContent);
-    marker.addTo(map);
-    
-    amenityMarkers[key] = marker;
+    // Add the marker to the appropriate group based on its type
+    if (amenity.type === 'Bike Rack') {
+        bikeRackMarkers.addLayer(marker);
+    } else {
+        otherAmenityMarkers.addLayer(marker);
+    }
 }
 
 /**
@@ -963,6 +993,10 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeGeolocation();
     loadAmenityTypes();
     loadAmenities();
+
+    // Add both marker groups to the map
+    map.addLayer(bikeRackMarkers);
+    map.addLayer(otherAmenityMarkers);
     
     // Listen for map movements to reload amenities based on visible area
     map.on('moveend', () => {
