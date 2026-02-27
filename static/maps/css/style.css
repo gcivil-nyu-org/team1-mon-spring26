@@ -185,6 +185,17 @@ html, body {
     color: #2196F3;
 }
 
+.amenity-sub-list {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-left: 24px;
+    margin-top: 8px;
+    display: none; /* Hide by default, controlled by JS */
+}
+
+
 /* Active Filter */
 .active-filter {
     margin-top: 16px;
