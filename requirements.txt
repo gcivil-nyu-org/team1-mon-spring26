@@ -3,3 +3,4 @@ Pillow
 requests
 dateparser
 stateplane
+psycopg2-binary

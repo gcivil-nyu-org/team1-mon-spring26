@@ -2,6 +2,7 @@ import requests
 import time
 from decimal import Decimal
 from django.core.management.base import BaseCommand
+from django.contrib.gis.geos import Point, GEOSGeometry
 from django.db import transaction
 from maps.models import AmenityType, Amenity
 
@@ -74,37 +75,10 @@ class Command(BaseCommand):
                             active_str = str(fountain['Active']).lower()
                             active = active_str in ['true', 'yes', '1', 'y', 'active']
                         
-                        # Parse coordinates
-                        latitude = None
-                        longitude = None
+
+                        geom = fountain['the_geom']
                         
-                        # Try different coordinate field names
-                        if 'Latitude' in fountain and 'Longitude' in fountain:
-                            latitude = Decimal(str(fountain['Latitude']))
-                            longitude = Decimal(str(fountain['Longitude']))
-                        elif 'latitude' in fountain and 'longitude' in fountain:
-                            latitude = Decimal(str(fountain['latitude']))
-                            longitude = Decimal(str(fountain['longitude']))
-                        elif 'Lat' in fountain and 'Lon' in fountain:
-                            latitude = Decimal(str(fountain['Lat']))
-                            longitude = Decimal(str(fountain['Lon']))
-                        elif 'lat' in fountain and 'lon' in fountain:
-                            latitude = Decimal(str(fountain['lat']))
-                            longitude = Decimal(str(fountain['lon']))
-                        elif 'the_geom' in fountain:
-                            # Handle GeoJSON geometry
-                            geom = fountain['the_geom']
-                            if isinstance(geom, dict):
-                                if 'coordinates' in geom:
-                                    coords = geom['coordinates']
-                                    if len(coords) >= 2:
-                                        longitude = Decimal(str(coords[0]))
-                                        latitude = Decimal(str(coords[1]))
-                        
-                        # Skip if coordinates are missing or zero
-                        if not latitude or not longitude or latitude == 0 or longitude == 0:
-                            skipped_count += 1
-                            continue
+
                         
                         # Create or update using composite key (amenity_type, external_id)
                         obj, created = Amenity.objects.update_or_create(
@@ -112,8 +86,7 @@ class Command(BaseCommand):
                             external_id=str(external_id),
                             defaults={
                                 'name': str(name)[:200],
-                                'latitude': latitude,
-                                'longitude': longitude,
+                                'location': GEOSGeometry(str(geom)),
                                 'description': str(position)[:500],
                                 'prop_name': str(prop_name)[:200],
                                 'active': active,
@@ -141,4 +114,3 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f'Failed to fetch data: {e}'))
         except Exception as e:
             self.stdout.write(self.style.ERROR(f'Import failed: {e}'))
-
