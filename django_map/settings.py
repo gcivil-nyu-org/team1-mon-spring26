@@ -87,7 +87,17 @@ TEMPLATES = [
 WSGI_APPLICATION = 'django_map.wsgi.application'
 
 # Get the environment name (set this in the EB Console for each environment)
-APP_ENV = os.environ.get('APP_ENV', 'dev')
+APP_ENV = os.environ.get('APP_ENV', '')
+DB_NAME = os.environ.get('DB_NAME', 'amenities')
+DB_USER = os.environ.get('DB_USER', '')
+
+#dynamically determine DB_USER if not provided
+if not DB_USER:
+    if APP_ENV:
+        DB_USER = f"{DB_NAME}_{APP_ENV}"
+
+if not DB_USER:
+    DB_USER = DB_NAME
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
@@ -95,16 +105,11 @@ APP_ENV = os.environ.get('APP_ENV', 'dev')
 DATABASES = {
     'default': {
         'ENGINE': 'django.contrib.gis.db.backends.postgis',
-        'NAME': os.environ.get('DB_NAME', 'amenities'),
-        'USER': os.environ.get('DB_USER', 'myuser'),
+        'NAME': DB_NAME,
+        'USER': DB_USER,
         'PASSWORD': os.environ.get('DB_PASSWORD', 'mypassword'),
         'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
-        'OPTIONS': {
-            # THE KEY: Put your env schema FIRST. 
-            # 'public' must stay for PostGIS functions.
-            'options': f'-c search_path={APP_ENV},public'
-        }
+        'PORT': os.environ.get('DB_PORT', '5432')
     }
 }
 
