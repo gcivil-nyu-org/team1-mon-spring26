@@ -32,17 +32,25 @@ def get_cluster_grid_size(zoom):
     A larger grid size (smaller denominator) means fewer, larger clusters.
     These values can be tuned for best visual results.
     """
+    if zoom < 5:
+        return 0.1  # Very large clusters for continental view
     if zoom < 7:
-        return 0.8  # Very large clusters
+        return 0.075
     if zoom < 9:
-        return 0.4
-    if zoom < 11:
-        return 0.1
-    if zoom < 13:
         return 0.05
+    if zoom < 11:
+        return 0.04
+    if zoom < 13:
+        return 0.03
+    if zoom < 14:
+        return 0.02
     if zoom < 15:
         return 0.01
-    return 0.005 # Very small clusters
+    if zoom < 16:
+        return 0.005
+    if zoom < 17:
+        return 0.002
+    return 0.001 # Very small clusters for the highest zoom level
 
 def cluster_amenities(amenities, zoom):
     """
