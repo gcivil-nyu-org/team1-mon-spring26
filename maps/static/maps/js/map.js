@@ -13,6 +13,7 @@ let userMarker = null;
 let selectedLocationMarker = null;
 // A cluster group specifically for bike racks
 let bikeRackMarkers = L.markerClusterGroup({
+    disableClusteringAtZoom: 19, // Uncluster when map is at max zoom
     iconCreateFunction: function(cluster) {
         const childCount = cluster.getChildCount();
         const c = ' marker-cluster-';

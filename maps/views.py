@@ -3,8 +3,9 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import authenticate
-from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser
-from django.db.models import Q
+from django.contrib.gis.geos import Polygon
+from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser, Review
+from django.db.models import Q, Avg, Count, Subquery, OuterRef
 from decimal import Decimal
 import json
 
@@ -42,16 +43,13 @@ def amenities_api(request):
         # If bounding box is provided, use it for filtering
         if north and south and east and west:
             north = Decimal(north)
-            south = Decimal(south)
-            # Normalize longitude values to handle map wrapping
-            east = normalize_longitude(Decimal(east))
-            west = normalize_longitude(Decimal(west))
+            south = Decimal(south)            
+            east = Decimal(east)
+            west = Decimal(west)
 
-            # Base query for latitude
-            amenities = Amenity.objects.filter(latitude__gte=south, latitude__lte=north)
-
-            # Always use a simple longitude filter with the normalized coordinates
-            amenities = amenities.filter(longitude__gte=west, longitude__lte=east)
+            # Create a Polygon object for the bounding box
+            bbox = (west, south, east, north)
+            amenities = Amenity.objects.filter(location__bboverlaps=Polygon.from_bbox(bbox))
 
         else:
             amenities = Amenity.objects.all()
@@ -73,13 +71,30 @@ def amenities_api(request):
     if only_accessible:
         amenities = amenities.exclude(accessibility='Not Accessible')
     
+    # --- Performance Optimization: Annotate data at the database level ---
+    
+    # 1. Annotate average rating and review count
+    amenities = amenities.annotate(
+        avg_rating=Avg('reviews__rating'),
+        review_count=Count('reviews__id', distinct=True)
+    )
+
+    # 2. Use a Subquery to efficiently get the primary photo URL
+    primary_photo_subquery = AmenityPhoto.objects.filter(
+        amenity=OuterRef('pk'), 
+        is_primary=True
+    ).values('photo')[:1]
+    
+    amenities = amenities.annotate(
+        primary_photo_url=Subquery(primary_photo_subquery)
+    )
     data = {
         'amenities': [
             {
                 'id': a.id,
                 'name': a.name,
-                'latitude': float(a.latitude),
-                'longitude': float(a.longitude),
+                'latitude': a.location.y,
+                'longitude': a.location.x,
                 'address': a.address,
                 'prop_name': a.prop_name,
                 'description': a.description,
@@ -87,8 +102,8 @@ def amenities_api(request):
                 'hours_of_operation': a.hours_of_operation,
                 'changing_stations': a.changing_stations,
                 'accessibility': a.accessibility,
-                'rating': a.get_average_rating(),
-                'review_count': a.get_review_count(),
+                'rating': a.avg_rating,
+                'review_count': a.review_count,
                 'reviews': [
                     {
                         'user_name': r.user.email,
@@ -98,14 +113,14 @@ def amenities_api(request):
                     }
                     for r in a.reviews.all()[:5]  # Get last 5 reviews
                 ],
-                'photo_url': a.photos.filter(is_primary=True).first().photo.url if a.photos.filter(is_primary=True).exists() else None,
+                'photo_url': a.primary_photo_url,
                 'active': a.active,
                 'type': a.amenity_type.name,
                 'type_id': a.amenity_type.id,
                 'icon': a.amenity_type.icon,
                 'color': a.amenity_type.color,
             }
-            for a in amenities.select_related('amenity_type').prefetch_related('reviews', 'photos')
+            for a in amenities.select_related('amenity_type').prefetch_related('reviews__user')
         ]
     }
     return JsonResponse(data)
