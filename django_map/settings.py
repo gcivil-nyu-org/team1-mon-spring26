@@ -82,8 +82,8 @@ WSGI_APPLICATION = 'django_map.wsgi.application'
 
 # Get the environment name (set this in the EB Console for each environment)
 APP_ENV = os.environ.get('APP_ENV', '')
-DB_NAME = os.environ.get('DB_NAME', 'amenities')
-DB_USER = os.environ.get('DB_USER', '')
+DB_NAME = os.environ.get('RDS_DB_NAME', 'amenities')
+DB_USER = os.environ.get('RDS_USERNAME', '')
 
 #dynamically determine DB_USER if not provided
 if not DB_USER:
@@ -101,9 +101,9 @@ DATABASES = {
         'ENGINE': 'django.contrib.gis.db.backends.postgis',
         'NAME': DB_NAME,
         'USER': DB_USER,
-        'PASSWORD': os.environ.get('DB_PASSWORD', 'mypassword'),
-        'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '5432')
+        'PASSWORD': os.environ.get('DB_PASSWORD', os.environ.get('RDS_PASSWORD', 'mypassword')),
+        'HOST': os.environ.get('RDS_HOSTNAME', 'localhost'),
+        'PORT': os.environ.get('RDS_PORT', '5432')
     }
 }
 
