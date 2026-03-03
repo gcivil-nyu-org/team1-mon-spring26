@@ -6,8 +6,9 @@ import re
 from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.contrib.gis.geos import Point, GEOSGeometry
 from maps.models import AmenityType, Amenity
-
+import json
 
 def _parse_time(time_string):
     """
@@ -244,39 +245,14 @@ class Command(BaseCommand):
                             skipped_count += 1
                             continue
                         
-                        # Parse coordinates first (needed for fallback external_id)
-                        latitude = None
-                        longitude = None
-                        
-                        # Use direct lat/lon fields
-                        if 'latitude' in restroom and 'longitude' in restroom:
-                            try:
-                                latitude = Decimal(str(restroom['latitude']))
-                                longitude = Decimal(str(restroom['longitude']))
-                            except (ValueError, TypeError):
-                                pass
-                        
                         # Fallback to location_1 (GeoJSON Point) if direct fields not available
-                        if not latitude or not longitude:
-                            if 'location_1' in restroom:
-                                geom = restroom['location_1']
-                                if isinstance(geom, dict):
-                                    if 'coordinates' in geom:
-                                        coords = geom['coordinates']
-                                        if len(coords) >= 2:
-                                            longitude = Decimal(str(coords[0]))
-                                            latitude = Decimal(str(coords[1]))
-                        
-                        # Skip if coordinates are missing or zero
-                        if not latitude or not longitude or latitude == 0 or longitude == 0:
-                            skipped_count += 1
-                            continue
+                        geom = restroom.get('location_1')
                         
                         # Now extract ID - use the __id field (double underscore)
-                        external_id = restroom.get('__id') or f"restroom_{latitude}_{longitude}"
+                        external_id = restroom.get('__id') or f"restroom_{geom.coordinates[1]}_{geom.coordinates[0]}"
                         
                         # Location name - use facility_name
-                        name = restroom.get('facility_name') or restroom.get('location') or 'Public Restroom'
+                        name = restroom.get('facility_name') or 'Public Restroom'
                         
                         # Location type (additional description)
                         location_type = restroom.get('location_type') or restroom.get('Type') or ''
@@ -337,8 +313,7 @@ class Command(BaseCommand):
                             external_id=str(external_id),
                             defaults={
                                 'name': str(name)[:200],
-                                'latitude': latitude,
-                                'longitude': longitude,
+                                'location': GEOSGeometry(json.dumps(geom)),
                                 'description': str(description)[:1000],
                                 'operator': str(operator)[:200],
                                 'hours_of_operation': hours_of_operation,
@@ -370,192 +345,3 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f'Failed to fetch data: {e}'))
         except Exception as e:
             self.stdout.write(self.style.ERROR(f'An unexpected error occurred: {e}'))
-
-class Command(BaseCommand):
-    help = 'Import NYC public restrooms from NYC Open Data'
-
-    def handle(self, *args, **options):
-        self.stdout.write('Starting NYC public restrooms import...')
-        
-        # Create or get the Public Restroom amenity type
-        amenity_type, created = AmenityType.objects.get_or_create(
-            name='Restroom',
-            defaults={
-                'color': '#9C27B0',
-                'icon': 'restroom'
-            }
-        )
-        
-        if created:
-            self.stdout.write(self.style.SUCCESS(f'Created amenity type: {amenity_type.name}'))
-        
-        # NYC Open Data OData v4 endpoint for public restrooms
-        url = 'https://data.cityofnewyork.us/api/odata/v4/i7jb-7jku'
-        
-        try:
-            self.stdout.write(f'Fetching data from: {url}')
-
-            # Define your query parameters
-            query_params = {
-                '$top': 10000,      # Limit to 10k rows
-                '$skip': 0,         # Start at the beginning
-                '$count': 'true'    # Get total record count
-            }
-
-            response = requests.get(url, params=query_params, timeout=60)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            # OData v4 format has results in 'value' key
-            if 'value' not in data:
-                self.stdout.write(self.style.ERROR('Invalid OData response format'))
-                return
-            
-            restrooms = data['value']
-            self.stdout.write(f'Found {len(restrooms)} public restrooms')
-            
-            # Debug: Show sample of available fields
-            if restrooms:
-                self.stdout.write(f'Sample record fields: {list(restrooms[0].keys())}')
-                first_record = restrooms[0]
-                self.stdout.write(f'Sample ID fields: id={first_record.get("__id")}, _id={first_record.get("__id")}, location_zip={first_record.get("location_zip")}')
-            
-            created_count = 0
-            updated_count = 0
-            skipped_count = 0
-            
-            with transaction.atomic():
-                for restroom in restrooms:
-                    try:
-                        # OData format
-                        if not isinstance(restroom, dict):
-                            skipped_count += 1
-                            continue
-                        
-                        # Parse coordinates first (needed for fallback external_id)
-                        latitude = None
-                        longitude = None
-                        
-                        # Use direct lat/lon fields
-                        if 'latitude' in restroom and 'longitude' in restroom:
-                            try:
-                                latitude = Decimal(str(restroom['latitude']))
-                                longitude = Decimal(str(restroom['longitude']))
-                            except (ValueError, TypeError):
-                                pass
-                        
-                        # Fallback to location_1 (GeoJSON Point) if direct fields not available
-                        if not latitude or not longitude:
-                            if 'location_1' in restroom:
-                                geom = restroom['location_1']
-                                if isinstance(geom, dict):
-                                    if 'coordinates' in geom:
-                                        coords = geom['coordinates']
-                                        if len(coords) >= 2:
-                                            longitude = Decimal(str(coords[0]))
-                                            latitude = Decimal(str(coords[1]))
-                        
-                        # Skip if coordinates are missing or zero
-                        if not latitude or not longitude or latitude == 0 or longitude == 0:
-                            skipped_count += 1
-                            continue
-                        
-                        # Now extract ID - use the __id field (double underscore)
-                        external_id = restroom.get('__id') or f"restroom_{latitude}_{longitude}"
-                        
-                        # Location name - use facility_name
-                        name = restroom.get('facility_name') or restroom.get('location') or 'Public Restroom'
-                        
-                        # Location type (additional description)
-                        location_type = restroom.get('location_type') or restroom.get('Type') or ''
-                        
-                        # Restroom type (e.g., single stall, multiple stalls)
-                        restroom_type = restroom.get('restroom_type') or restroom.get('Restroom_Type') or ''
-                        
-                        # Additional notes
-                        additional_notes = restroom.get('additional_notes') or restroom.get('Additional_Notes') or ''
-                        
-                        # Build description from available text fields
-                        description_parts = []
-                        if restroom_type:
-                            description_parts.append(f"Type: {restroom_type}")
-                        if location_type:
-                            description_parts.append(location_type)
-                        if additional_notes:
-                            description_parts.append(additional_notes)
-                        description = ' | '.join(description_parts)
-                        
-                        # Operator/owner info
-                        operator = restroom.get('operator') or restroom.get('Operator') or ''
-                        
-                        # Hours of operation
-                        raw_hours = restroom.get('hours_of_operation') or restroom.get('Hours_of_Operation') or ''
-                        hours_of_operation = parse_hours(raw_hours) or {}
-                        
-                        # Seasonal status
-                        seasonal = str(restroom.get('open_year_round', '')).strip().lower() == 'seasonal'
-                        
-                        # Changing stations
-                        changing_stations = False
-                        if 'changing_stations' in restroom:
-                            cs_str = str(restroom.get('changing_stations', '')).lower()
-                            changing_stations = cs_str in ['true', 'yes', '1', 'y', 'available']
-                        
-                        # Accessibility (ADA accessible) - capture the actual text value
-                        accessibility = ''
-                        if 'accessibility' in restroom:
-                            acc_value = str(restroom.get('accessibility', '')).strip()
-                            # Normalize the value
-                            if 'fully' in acc_value.lower():
-                                accessibility = 'Fully Accessible'
-                            elif 'partial' in acc_value.lower():
-                                accessibility = 'Partially Accessible'
-                            elif 'not' in acc_value.lower() or 'no' in acc_value.lower():
-                                accessibility = 'Not Accessible'
-                            elif acc_value and acc_value.lower() not in ['', 'unknown']:
-                                # Preserve other values as-is if they're meaningful
-                                accessibility = acc_value[:50]
-                        
-                        # Check available status using 'status' field
-                        status_str = str(restroom.get('status', '')).strip().lower()
-                        active = (status_str == 'operational')
-
-                        obj, created = Amenity.objects.update_or_create(
-                            amenity_type=amenity_type,
-                            external_id=str(external_id),
-                            defaults={
-                                'name': str(name)[:200],
-                                'latitude': latitude,
-                                'longitude': longitude,
-                                'description': str(description)[:1000],
-                                'operator': str(operator)[:200],
-                                'hours_of_operation': hours_of_operation,
-                                'changing_stations': changing_stations,
-                                'accessibility': accessibility,
-                                'seasonal': seasonal,
-                                'active': active,
-                            }
-                        )
-                        
-                        if created:
-                            created_count += 1
-                        else:
-                            updated_count += 1
-                    
-                    except (ValueError, IndexError, TypeError, KeyError) as e:
-                        self.stdout.write(self.style.WARNING(f'Skipped entry: {e}'))
-                        skipped_count += 1
-                        continue
-            
-            self.stdout.write(self.style.SUCCESS(
-                f'\nImport complete!\n'
-                f'Created: {created_count}\n'
-                f'Updated: {updated_count}\n'
-                f'Skipped: {skipped_count}'
-            ))
-        
-        except requests.exceptions.RequestException as e:
-            self.stdout.write(self.style.ERROR(f'Failed to fetch data: {e}'))
-        except Exception as e:
-            self.stdout.write(self.style.ERROR(f'Import failed: {e}'))
