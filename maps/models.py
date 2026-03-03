@@ -1,4 +1,6 @@
-from django.db import models
+#from django.db import models
+from django.contrib.gis.db import models
+from django.contrib.postgres.indexes import GistIndex
 from django.contrib.auth.models import AbstractUser
 import re
 
@@ -39,8 +41,7 @@ class Amenity(models.Model):
     """Model to store amenity locations."""
     amenity_type = models.ForeignKey(AmenityType, on_delete=models.CASCADE, related_name='amenities')
     name = models.CharField(max_length=200)
-    latitude = models.DecimalField(max_digits=9, decimal_places=6)
-    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    location = models.PointField(srid=4326, null=False)
     address = models.CharField(max_length=300, blank=True, null=True)
     #position = models.CharField(max_length=500, blank=True)  # Text description for location
     prop_name = models.CharField(max_length=200, blank=True)  # Property name (e.g., park name)
@@ -69,7 +70,7 @@ class Amenity(models.Model):
         ordering = ['-created_at']
         unique_together = [('amenity_type', 'external_id')]
         indexes = [
-            models.Index(fields=['latitude', 'longitude']),
+            GistIndex(fields=['location'], name='amenity_location_gist_idx'),
             models.Index(fields=['active']),
             models.Index(fields=['amenity_type', 'active']),
         ]

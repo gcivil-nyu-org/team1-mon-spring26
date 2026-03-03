@@ -11,20 +11,10 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 let userLocation = null;
 let userMarker = null;
 let selectedLocationMarker = null;
-// A cluster group specifically for bike racks
-let bikeRackMarkers = L.markerClusterGroup({
-    iconCreateFunction: function(cluster) {
-        const childCount = cluster.getChildCount();
-        const c = ' marker-cluster-';
-        const className = 'marker-cluster' + (childCount < 10 ? c + 'small' : childCount < 100 ? c + 'medium' : c + 'large');
-        // Bike rack clusters will always be orange
-        const iconHtml = `<div style="background-color: #FF9800;"><span>${childCount}</span></div>`;
 
-        return L.divIcon({ html: iconHtml, className: className, iconSize: L.point(40, 40) });
-    }
-});
-// A regular layer group for all other amenities that should not be clustered
-let otherAmenityMarkers = L.layerGroup();
+// Layer groups for markers. We will manage them manually now.
+let bikeRackMarkers = L.layerGroup();
+let otherAmenityMarkers = L.layerGroup(); // For non-clustered amenities
 
 let activeAmenityTypes = new Set();
 let allAmenitiesData = {};
@@ -275,6 +265,9 @@ function toggleAmenityType(typeId, element, checkbox, subTypeIds = []) {
  * which are then filtered on the client-side by `updateDisplayedAmenities`.
  */
 function loadAmenities() {
+    // Clear the cache before every fetch to ensure we get fresh data (clusters or points)
+    allAmenitiesData = {};
+
     // If no amenity types are selected, clear the map and don't fetch.
     if (activeAmenityTypes.size === 0) {
         allAmenitiesData = {};
@@ -291,6 +284,7 @@ function loadAmenities() {
         south: bounds.getSouth(),
         east: bounds.getEast(),
         west: bounds.getWest(),
+        zoom: map.getZoom(), // Send current zoom level to the backend
         include_inactive: includeInactive,
         only_accessible: onlyAccessible
     });
@@ -323,10 +317,10 @@ function loadAmenities() {
  * Update displayed amenities on the map based on active filters
  */
 function updateDisplayedAmenities() {
-    // Clear all existing markers from both groups
+    // Clear all existing markers from the layer groups
     bikeRackMarkers.clearLayers();
     otherAmenityMarkers.clearLayers();
-    
+
     // Don't show any amenities if no types are selected
     if (activeAmenityTypes.size === 0) {
         return; // Don't show any amenities if nothing is selected
@@ -344,6 +338,41 @@ function updateDisplayedAmenities() {
  * Add a single amenity marker to the map
  */
 function addAmenityMarker(amenity) {
+    // --- Handle backend-provided clusters ---
+    if (amenity.is_cluster) {
+        const count = amenity.point_count;
+        const c = ' marker-cluster-';
+        const className = 'marker-cluster' + (count < 10 ? c + 'small' : count < 100 ? c + 'medium' : c + 'large');
+        
+        // Create a cluster icon. Bike rack clusters are always orange.
+        const clusterIcon = L.divIcon({
+            html: `<div style="background-color: ${amenity.color};"><span>${count}</span></div>`,
+            className: className,
+            iconSize: L.point(40, 40)
+        });
+
+        const clusterMarker = L.marker([amenity.latitude, amenity.longitude], {
+            icon: clusterIcon
+        });
+
+        // When a cluster is clicked, zoom in.
+        clusterMarker.on('click', () => {
+            // A simple way to zoom in is to increase the zoom level by 2.
+            // A more advanced implementation could calculate the bounds of the cluster.
+            const currentZoom = map.getZoom();
+            map.flyTo([amenity.latitude, amenity.longitude], currentZoom + 2);
+        });
+
+        // Add the cluster marker to the bike rack layer.
+        bikeRackMarkers.addLayer(clusterMarker);
+        return; // Stop here for clusters
+    }
+
+    // --- Handle individual markers (non-clusters) ---
+    // If we reach here, it's a regular amenity, not a cluster.
+    // This logic is mostly the same as before.
+
+
     // Style inactive amenities with reduced opacity
     const opacity = amenity.active ? 1 : 0.5;
     const filter = amenity.active ? '' : 'opacity(0.5)';
@@ -499,7 +528,7 @@ function addAmenityMarker(amenity) {
     
     marker.bindPopup(popupContent);
     // Add the marker to the appropriate group based on its type
-    if (amenity.type === 'Bike Rack') {
+    if (amenity.type === 'Bike Rack' || amenity.type.includes('Bike Rack')) {
         bikeRackMarkers.addLayer(marker);
     } else {
         otherAmenityMarkers.addLayer(marker);
