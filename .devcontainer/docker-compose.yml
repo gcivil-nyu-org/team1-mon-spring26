@@ -10,7 +10,7 @@ services:
       - DB_HOST=db
       - DB_NAME=amenities
       - DB_USER=postgres
-      - DB_PASSWORD=postgresF
+      - DB_PASSWORD=postgres
       - APP_ENV=dev
     network_mode: service:db # Simplifies networking for dev
 
