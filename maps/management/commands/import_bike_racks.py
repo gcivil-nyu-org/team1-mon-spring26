@@ -2,7 +2,9 @@ import requests
 from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.contrib.gis.geos import GEOSGeometry, Point
 from maps.models import AmenityType, Amenity
+import json
 
 
 class Command(BaseCommand):
@@ -32,7 +34,7 @@ class Command(BaseCommand):
             query_params = {
                 '$top': 100000,  # A large number to get all racks
                 '$skip': 0,
-                '$count': 'true'
+                '$count': 'true',
             }
 
             response = requests.get(url, params=query_params, timeout=120)
@@ -50,61 +52,78 @@ class Command(BaseCommand):
             created_count = 0
             updated_count = 0
             skipped_count = 0
+            
+            # --- Bulk Operation Optimization ---
+            # 1. Fetch existing racks into a dictionary for quick lookups.
+            self.stdout.write('Fetching existing bike racks from database...')
+            existing_racks = {
+                a.external_id: a for a in Amenity.objects.filter(amenity_type=amenity_type)
+            }
+            self.stdout.write(f'Found {len(existing_racks)} existing racks.')
 
-            with transaction.atomic():
-                for rack in racks:
-                    try:
-                        if not isinstance(rack, dict):
-                            skipped_count += 1
-                            continue
+            to_create = []
+            to_update = []
 
-                        # Extract coordinates
-                        latitude = rack.get('latitude')
-                        longitude = rack.get('longitude')
-
-                        if not latitude or not longitude:
-                            skipped_count += 1
-                            continue
-                        
-                        # Add robust validation for coordinates
-                        try:
-                            lat_decimal = Decimal(str(latitude))
-                            lon_decimal = Decimal(str(longitude))
-                        except (ValueError, Decimal.InvalidOperation):
-                            skipped_count += 1
-                            continue
-
-                        # Use a unique ID from the dataset if available, otherwise generate one
-                        external_id = rack.get('site_id') or f"bikerack_{latitude}_{longitude}"
-
-                        # Map fields to the Amenity model
-                        ifo_address = rack.get('ifoaddress', '')  # Capture the physical address
-                        # Use the address as a fallback for the name if 'ntaname' is missing or empty.
-                        name = rack.get('ntaname') or ifo_address or 'Bike Rack'
-                        rack_type_desc = rack.get('racktype', 'Standard Rack')
-
-                        obj, created = Amenity.objects.update_or_create(
-                            amenity_type=amenity_type,
-                            external_id=str(external_id),
-                            defaults={
-                                'name': name,
-                                'address': ifo_address,
-                                'latitude': lat_decimal,
-                                'longitude': lon_decimal,
-                                'description': f"Type: {rack_type_desc}",
-                                'active': True,  # Assume all imported racks are active
-                            }
-                        )
-
-                        if created:
-                            created_count += 1
-                        else:
-                            updated_count += 1
-
-                    except (ValueError, IndexError, TypeError, KeyError) as e:
-                        self.stdout.write(self.style.WARNING(f'Skipped entry: {e} - {rack}'))
+            for i, rack in enumerate(racks):
+                # Add a progress indicator
+                if i > 0 and i % 1000 == 0:
+                    self.stdout.write(f'  Processed {i}/{len(racks)} racks...')
+                
+                try:
+                    if not isinstance(rack, dict):
                         skipped_count += 1
                         continue
+
+                    geom_dict = rack.get('the_geom')
+                    if not geom_dict or 'coordinates' not in geom_dict:
+                        skipped_count += 1
+                        continue
+                    
+                    external_id = str(rack.get('site_id') or f"bikerack_{geom_dict['coordinates'][1]}_{geom_dict['coordinates'][0]}")
+
+                    ifo_address = rack.get('ifoaddress', '')
+                    name = rack.get('ntaname') or ifo_address or 'Bike Rack'
+                    rack_type_desc = rack.get('racktype', 'Standard Rack')
+                    location = GEOSGeometry(json.dumps(geom_dict))
+                    description = f"Type: {rack_type_desc}"
+
+                    # 2. Check if the rack exists and sort it into a create or update list.
+                    if external_id in existing_racks:
+                        # It's an update
+                        obj = existing_racks[external_id]
+                        obj.name = name
+                        obj.address = ifo_address
+                        obj.location = location
+                        obj.description = description
+                        obj.active = True
+                        to_update.append(obj)
+                        updated_count += 1
+                    else:
+                        # It's a new rack
+                        to_create.append(Amenity(
+                            amenity_type=amenity_type,
+                            external_id=external_id,
+                            name=name,
+                            address=ifo_address,
+                            location=location,
+                            description=description,
+                            active=True,
+                        ))
+                        created_count += 1
+
+                except (ValueError, IndexError, TypeError, KeyError) as e:
+                    self.stdout.write(self.style.WARNING(f'Skipped entry: {e} - {rack}'))
+                    skipped_count += 1
+                    continue
+
+            # 3. Perform bulk operations outside the loop.
+            if to_create:
+                self.stdout.write(f'Bulk creating {len(to_create)} new bike racks...')
+                Amenity.objects.bulk_create(to_create, batch_size=1000)
+            
+            if to_update:
+                self.stdout.write(f'Bulk updating {len(to_update)} existing bike racks...')
+                Amenity.objects.bulk_update(to_update, ['name', 'address', 'location', 'description', 'active'], batch_size=1000)
 
             self.stdout.write(self.style.SUCCESS(
                 f'\nImport complete!\n'
