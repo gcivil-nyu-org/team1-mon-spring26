@@ -2,9 +2,9 @@ import requests
 from decimal import Decimal, InvalidOperation
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.contrib.gis.geos import Point
 from maps.models import AmenityType, Amenity
 import stateplane
-
 
 class Command(BaseCommand):
     help = 'Import NYC cooling sites from NYC Open Data'
@@ -123,8 +123,7 @@ class Command(BaseCommand):
                                 external_id=str(external_id),
                                 defaults={
                                     'name': prop_name,
-                                    'latitude': lat_decimal,
-                                    'longitude': lon_decimal,
+                                    'location': Point(float(lon_decimal), float(lat_decimal), srid=4326),
                                     'description': f"Type: {feature_type_name}",
                                     'active': is_active,
                                 }
