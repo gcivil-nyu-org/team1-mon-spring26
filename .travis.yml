@@ -10,6 +10,10 @@ install:
   - pip install -r requirements-dev.txt
 
 script:
+  # --check: doesn't reformat, just exits with error if code isn't "blackened"
+  - black --check .
+  # Runs the linter using the rules in your .flake8 file
+  - flake8 .
   - pytest --cov=./ --cov-report=xml
 
 deploy:
