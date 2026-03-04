@@ -10,7 +10,7 @@ install:
   - pip install -r requirements-dev.txt
 
 script:
-  - pytest
+  - pytest --cov=./ --cov-report=xml
 
 deploy:
   provider: elasticbeanstalk
@@ -25,3 +25,7 @@ deploy:
   zip_file: "django_map.zip"
   on:
     branch: develop  # This allows the 'develop' branch to deploy
+
+after_success:
+  - pip install codecov
+  - codecov # This command automatically looks for the $CODECOV_TOKEN variable
