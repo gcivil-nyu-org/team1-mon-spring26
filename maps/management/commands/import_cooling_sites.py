@@ -74,11 +74,9 @@ class Command(BaseCommand):
                             lat_decimal = Decimal(latitude)
                             lon_decimal = Decimal(longitude)
                         except (ValueError, InvalidOperation):
-                            print(
-                                f"Invalid coordinates for site: \
+                            print(f"Invalid coordinates for site: \
                                 {site.get('propertyname', 'Unknown')} - \
-                                  lat: {latitude}, lon: {longitude}"
-                            )
+                                  lat: {latitude}, lon: {longitude}")
                             skipped_count += 1
                             continue
 
@@ -125,10 +123,8 @@ class Command(BaseCommand):
                             )
                             lat_decimal = Decimal(lat)
                             lon_decimal = Decimal(lon)
-                            print(
-                                f"{prop_name} converted from Long Island format: \
-                                     {lat_decimal}, {lon_decimal}"
-                            )
+                            print(f"{prop_name} converted from Long Island format: \
+                                     {lat_decimal}, {lon_decimal}")
                             # continue
 
                         # print(f"Final coordinates: {lat_decimal}, {lon_decimal}")
@@ -150,11 +146,9 @@ class Command(BaseCommand):
 
                             print(f"Added/Updated: {obj.name} (ID: {obj.id})")
                         except (ValueError, InvalidOperation):
-                            print(
-                                f"Invalid coordinates for site: \
+                            print(f"Invalid coordinates for site: \
                                     {site.get('propertyname', 'Unknown')} \
-                                        - lat: {latitude}, lon: {longitude}"
-                            )
+                                        - lat: {latitude}, lon: {longitude}")
                             skipped_count += 1
                             continue
 
@@ -171,10 +165,8 @@ class Command(BaseCommand):
                         continue
 
             self.stdout.write(
-                self.style.SUCCESS(
-                    f"\nImport complete!\nCreated: {created_count}\n \
-                        Updated: {updated_count}\nSkipped: {skipped_count}"
-                )
+                self.style.SUCCESS(f"\nImport complete!\nCreated: {created_count}\n \
+                        Updated: {updated_count}\nSkipped: {skipped_count}")
             )
 
         except requests.exceptions.RequestException as e:
