@@ -1,0 +1,13 @@
+[run]
+# Only measure your actual app code
+source = maps
+omit =
+    *migrations*
+    *tests*
+    manage.py
+    django_map/wsgi.py
+    django_map/asgi.py
+
+[report]
+# Show which lines are missing in the terminal output
+show_missing = True
