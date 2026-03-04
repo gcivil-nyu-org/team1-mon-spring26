@@ -11,10 +11,5 @@ omit =
     django_map/asgi.py
 
 [report]
-# omit here stops coverage from showing these files in the terminal/XML report
-omit = 
-    */migrations/*
-    */__init__.py
-
 # Show which lines are missing in the terminal output
 show_missing = True
