@@ -19,7 +19,7 @@ deploy:
   region: "us-east-2"
   app: "Nycnow-user"
   env: "Nycnow-user-env"
-  #bucket_name: "bucket-softeng-django-map"
+  bucket_name: "elasticbeanstalk-us-east-2-793314585930"
   #bucket_path: "/"
   zip_file: "django_map.zip"
   on:
