@@ -22,3 +22,5 @@ deploy:
   bucket_name: "bucket-softeng-django-map"
   bucket_path: "/"
   zip_file: "django_map.zip"
+  on:
+    branch: develop  # This allows the 'develop' branch to deploy
