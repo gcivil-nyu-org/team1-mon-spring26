@@ -1,0 +1,20 @@
+language: python
+python:
+  - "3.14"
+
+install:
+  - pip install -r requirements.txt
+
+script:
+  - pytest
+
+deploy:
+  provider: elasticbeanstalk
+  access_key_id: $AWS_ACCESS_KEY
+  secret_access_key: $AWS_SECRET_KEY
+  region: "us-east-2"
+  app: "Nycnow-user"
+  env: "Nycnow-user-env"
+  bucket_name: "bucket-softeng-django-map"
+  bucket_path: "/"
+  zip_file: "django_map.zip"
