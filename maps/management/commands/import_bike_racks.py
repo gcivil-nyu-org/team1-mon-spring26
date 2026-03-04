@@ -79,10 +79,7 @@ class Command(BaseCommand):
                     y = geom_dict["coordinates"][0]
                     x = geom_dict["coordinates"][1]
 
-                    external_id = str(
-                        rack.get("site_id")
-                        or f"bikerack_{x}_{y}"
-                    )
+                    external_id = str(rack.get("site_id") or f"bikerack_{x}_{y}")
 
                     ifo_address = rack.get("ifoaddress", "")
                     name = rack.get("ntaname") or ifo_address or "Bike Rack"

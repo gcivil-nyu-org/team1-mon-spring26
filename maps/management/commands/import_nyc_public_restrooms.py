@@ -265,11 +265,9 @@ class Command(BaseCommand):
             if restrooms:
                 self.stdout.write(f"Sample record fields: {list(restrooms[0].keys())}")
                 first_record = restrooms[0]
-                self.stdout.write(
-                    f'Sample ID fields: id={first_record.get("__id")}, \
+                self.stdout.write(f'Sample ID fields: id={first_record.get("__id")}, \
                           _id={first_record.get("__id")}, \
-                          location_zip={first_record.get("location_zip")}'
-                )
+                          location_zip={first_record.get("location_zip")}')
 
             created_count = 0
             updated_count = 0

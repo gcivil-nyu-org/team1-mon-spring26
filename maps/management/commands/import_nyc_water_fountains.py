@@ -61,7 +61,7 @@ class Command(BaseCommand):
                             continue
 
                         # Extract basic info
-                        propnum = fountain.get('gispropnum', '')
+                        propnum = fountain.get("gispropnum", "")
                         external_id = (
                             fountain.get("system")
                             or fountain.get("_id")
