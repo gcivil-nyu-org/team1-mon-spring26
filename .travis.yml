@@ -21,18 +21,36 @@ script:
   
 
 deploy:
-  provider: elasticbeanstalk
-  edge: true
-  access_key_id: $AWS_ACCESS_KEY
-  secret_access_key: $AWS_SECRET_KEY
-  region: "us-east-2"
-  app: "Nycnow-user"
-  env: "Nycnow-user-env"
-  bucket_name: "elasticbeanstalk-us-east-2-793314585930"
-  #bucket_path: "/"
-  zip_file: "django_map.zip"
-  on:
-    branch: develop  # This allows the 'develop' branch to deploy
+  - provider: elasticbeanstalk
+    edge: true
+    access_key_id: $AWS_ACCESS_KEY
+    secret_access_key: $AWS_SECRET_KEY
+    region: "us-east-2"
+    app: "nycnow"
+    env: "nycnow-staging"
+    bucket_name: "elasticbeanstalk-us-east-2-793314585930"
+    #bucket_path: "/"
+    zip_file: "django_map.zip"
+    on:
+      branch: develop
+      repo: gcivil-nyu-org/team1-mon-spring26
+
+  # this is per-user develop deployment
+  # (add your repo + env vars AWS_ACCESS/SECRET_KEY in travis)
+  - provider: elasticbeanstalk
+    edge: true
+    access_key_id: $AWS_ACCESS_KEY
+    secret_access_key: $AWS_SECRET_KEY
+    region: "us-east-2"
+    app: "nycnow"  # Update with your fork's app name
+    env: "nycnow-feature"  # Update with your fork's env name
+    bucket_name: "elasticbeanstalk-us-east-2-793314585930"
+    #bucket_path: "/"
+    zip_file: "django_map.zip"
+    on:
+      branch: develop
+      condition: "repo != gcivil-nyu-org/team1-mon-spring26"
+      #repo: ajslezak/team1-mon-spring26
 
 after_success:
   - bash <(curl -s https://codecov.io/bash)
