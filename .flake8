@@ -1,0 +1,8 @@
+[flake8]
+# Set line length to 88 to match Black
+max-line-length = 88
+# E203: whitespace before ':' (Black does this in slices)
+# W503: line break before binary operator (Black prefers this)
+extend-ignore = E203, W503
+# Exclude migrations and virtual environments
+exclude = .git,__pycache__,migrations,venv,settings.py,test_*.py,tests.py

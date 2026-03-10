@@ -9,6 +9,7 @@ https://docs.djangoproject.com/en/6.0/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
+
 import os
 
 from pathlib import Path
@@ -20,42 +21,48 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-+qycx#xxwszdp_9xr@lxekk)vb#y!71=_zk4@8)#gp_ow*ob#%'
+SECRET_KEY = "django-insecure-+qycx#xxwszdp_9xr@lxekk)vb#y!71=_zk4@8)#gp_ow*ob#%"
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # Set DEBUG to False in production. Use an environment variable.
 # '1' (string) is treated as True.
-DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
+DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
 
-ALLOWED_HOSTS = ['192.168.2.1', 'localhost', '127.0.0.1', '.elasticbeanstalk.com', '.amenity.help']
+ALLOWED_HOSTS = [
+    "192.168.2.1",
+    "localhost",
+    "127.0.0.1",
+    ".elasticbeanstalk.com",
+    ".amenity.help",
+]
 
 
 # Application definition
 
 INSTALLED_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-    'django.contrib.gis',
-    'django.contrib.postgres',
-    'maps',
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "django.contrib.gis",
+    "django.contrib.postgres",
+    "maps",
 ]
 
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'django.middleware.gzip.GZipMiddleware'
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "django.middleware.gzip.GZipMiddleware",
 ]
 
-ROOT_URLCONF = 'django_map.urls'
+ROOT_URLCONF = "django_map.urls"
 
 STORAGES = {
     "staticfiles": {
@@ -65,27 +72,27 @@ STORAGES = {
 
 TEMPLATES = [
     {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
-        'APP_DIRS': True,
-        'OPTIONS': {
-            'context_processors': [
-                'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
             ],
         },
     },
 ]
 
-WSGI_APPLICATION = 'django_map.wsgi.application'
+WSGI_APPLICATION = "django_map.wsgi.application"
 
 # Get the environment name (set this in the EB Console for each environment)
-APP_ENV = os.environ.get('APP_ENV', '')
-DB_NAME = os.environ.get('RDS_DB_NAME', 'amenities')
-DB_USER = os.environ.get('RDS_USERNAME', '')
+APP_ENV = os.environ.get("APP_ENV", "")
+DB_NAME = os.environ.get("RDS_DB_NAME", os.environ.get("DB_NAME", "amenities"))
+DB_USER = os.environ.get("RDS_USERNAME", os.environ.get("DB_USER", ""))
 
-#dynamically determine DB_USER if not provided
+# dynamically determine DB_USER if not provided
 if not DB_USER:
     if APP_ENV:
         DB_USER = f"{DB_NAME}_{APP_ENV}"
@@ -97,13 +104,15 @@ if not DB_USER:
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.contrib.gis.db.backends.postgis',
-        'NAME': DB_NAME,
-        'USER': DB_USER,
-        'PASSWORD': os.environ.get('DB_PASSWORD', os.environ.get('RDS_PASSWORD', 'mypassword')),
-        'HOST': os.environ.get('RDS_HOSTNAME', 'localhost'),
-        'PORT': os.environ.get('RDS_PORT', '5432')
+    "default": {
+        "ENGINE": "django.contrib.gis.db.backends.postgis",
+        "NAME": DB_NAME,
+        "USER": DB_USER,
+        "PASSWORD": os.environ.get(
+            "DB_PASSWORD", os.environ.get("RDS_PASSWORD", "mypassword")
+        ),
+        "HOST": os.environ.get("RDS_HOSTNAME", "localhost"),
+        "PORT": os.environ.get("RDS_PORT", "5432"),
     }
 }
 
@@ -113,16 +122,16 @@ DATABASES = {
 
 AUTH_PASSWORD_VALIDATORS = [
     {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
 ]
 
@@ -130,9 +139,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = "UTC"
 
 USE_I18N = True
 
@@ -143,11 +152,11 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_ROOT = BASE_DIR / "static"
-STATIC_URL = '/static/'
+STATIC_URL = "/static/"
 
 # Custom User Model
-AUTH_USER_MODEL = 'maps.CustomUser'
+AUTH_USER_MODEL = "maps.CustomUser"
 
 # Media files (User uploads)
-MEDIA_URL = 'media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
