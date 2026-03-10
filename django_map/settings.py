@@ -89,8 +89,8 @@ WSGI_APPLICATION = "django_map.wsgi.application"
 
 # Get the environment name (set this in the EB Console for each environment)
 APP_ENV = os.environ.get("APP_ENV", "")
-DB_NAME = os.environ.get("RDS_DB_NAME", "amenities")
-DB_USER = os.environ.get("RDS_USERNAME", "")
+DB_NAME = os.environ.get("RDS_DB_NAME", os.environ.get("DB_NAME", "amenities"))
+DB_USER = os.environ.get("RDS_USERNAME", os.environ.get("DB_USER", ""))
 
 # dynamically determine DB_USER if not provided
 if not DB_USER:
