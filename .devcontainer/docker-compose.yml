@@ -9,7 +9,7 @@ services:
     environment:
       - DB_HOST=db
       - DB_NAME=amenities
-      - DB_USER=postgres
+      - DB_USER=amenities_dev
       - DB_PASSWORD=postgres
       - APP_ENV=dev
     network_mode: service:db # Simplifies networking for dev
