@@ -17,6 +17,7 @@ services:
   db:
     image: postgis/postgis:16-3.4
     environment:
+      - POSTGRES_USER=amenities_dev
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=amenities
       # This maps the internal Postgres data folder to a persistent volume
