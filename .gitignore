@@ -209,3 +209,6 @@ __marimo__/
 
 # don't commit /static files since aws will generate
 /static/
+
+# don't commit .zip files
+*.zip
