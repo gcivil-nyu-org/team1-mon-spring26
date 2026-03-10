@@ -41,7 +41,7 @@ class Command(BaseCommand):
             return None, None
 
     def _coord_key(self, lat_decimal, lon_decimal):
-        # 5 decimal places (~1.1m) keeps near-identical points deduped across both feeds.
+        # 5 decimal places (~1.1m) keeps near-identical points deduped.
         return f"{lat_decimal:.5f}|{lon_decimal:.5f}"
 
     def _normalize_status_row(self, kiosk):
@@ -310,7 +310,8 @@ class Command(BaseCommand):
 
             self.stdout.write(
                 f"Prepared {len(merged_by_primary_key)} unique LinkNYC records "
-                f"(status used: {status_used}, wifi used: {wifi_used}, merged duplicates: {dedupe_merges})"
+                f"(status used: {status_used}, wifi used: {wifi_used}, \
+                    merged duplicates: {dedupe_merges})"
             )
 
             created_count = 0
