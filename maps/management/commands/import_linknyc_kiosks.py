@@ -330,3 +330,4 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(str(e)))
         except Exception as e:
             self.stdout.write(self.style.ERROR(f'An unexpected error occurred: {e}'))
+
