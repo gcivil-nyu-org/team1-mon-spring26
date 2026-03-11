@@ -76,7 +76,7 @@ deploy:
     app: "nyc-now"
     env: "nyc-now-env"
     # below needs updating to match your elasticbeanstalk s3 bucket!
-    bucket_name: "elasticbeanstalk-us-east-2-793314585931"
+    bucket_name: "elasticbeanstalk-us-east-2-735067023623"
     zip_file: "django_map.zip"
     on:
       branch: develop
