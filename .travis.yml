@@ -18,7 +18,7 @@ script:
   #- pytest --cov=./ --cov-report=xml
   - coverage report  # This prints the table in your Travis log
   - coverage xml     # This creates the file for Codecov
-  
+  - coveralls -v --service=travis-pro
 
 deploy:
   - provider: elasticbeanstalk
@@ -45,12 +45,74 @@ deploy:
     app: "nycnow"
     env: "Nycnow-feature"
     bucket_name: "elasticbeanstalk-us-east-2-793314585930"
-    #bucket_path: "/"
     zip_file: "django_map.zip"
     on:
       branch: develop
-      condition: "repo != gcivil-nyu-org/team1-mon-spring26"
-      #repo: ajslezak/team1-mon-spring26
+      repo: ajslezak/team1-mon-spring26
+
+  # this is per-user develop deployment
+  # (add your repo + my env vars AWS_ACCESS/SECRET_KEY in travis)
+  - provider: elasticbeanstalk
+    edge: true
+    access_key_id: $AWS_ACCESS_KEY
+    secret_access_key: $AWS_SECRET_KEY
+    region: "us-east-1"
+    app: "nycnow"
+    env: "nycnow-env"
+    # below needs updating to match your elasticbeanstalk s3 bucket!
+    bucket_name: "elasticbeanstalk-us-east-1-004276707923"
+    zip_file: "django_map.zip"
+    on:
+      branch: develop
+      repo: siyajain1/team1-mon-spring26
+
+  # this is per-user develop deployment
+  # (add your repo + my env vars AWS_ACCESS/SECRET_KEY in travis)
+  - provider: elasticbeanstalk
+    edge: true
+    access_key_id: $AWS_ACCESS_KEY
+    secret_access_key: $AWS_SECRET_KEY
+    region: "us-east-2"
+    app: "nyc-now"
+    env: "nyc-now-env"
+    # below needs updating to match your elasticbeanstalk s3 bucket!
+    bucket_name: "elasticbeanstalk-us-east-2-793314585931"
+    zip_file: "django_map.zip"
+    on:
+      branch: develop
+      repo: shichenz1999/team1-mon-spring26
+
+  # this is per-user develop deployment
+  # (add your repo + my env vars AWS_ACCESS/SECRET_KEY in travis)
+  - provider: elasticbeanstalk
+    edge: true
+    access_key_id: $AWS_ACCESS_KEY
+    secret_access_key: $AWS_SECRET_KEY
+    region: "us-east-2"
+    app: "django"
+    env: "django-env"
+    # below needs updating to match your elasticbeanstalk s3 bucket!
+    bucket_name: "elasticbeanstalk-us-east-2-793314585932"
+    zip_file: "django_map.zip"
+    on:
+      branch: develop
+      repo: slurpysalmon/team1-mon-spring26
+
+  # this is per-user develop deployment
+  # (add your repo + my env vars AWS_ACCESS/SECRET_KEY in travis)
+  - provider: elasticbeanstalk
+    edge: true
+    access_key_id: $AWS_ACCESS_KEY
+    secret_access_key: $AWS_SECRET_KEY
+    region: "us-east-2"
+    app: "nycnow"
+    env: "Nycnow-feature"
+    # below needs updating to match your elasticbeanstalk s3 bucket!
+    bucket_name: "elasticbeanstalk-us-east-2-793314585933"
+    zip_file: "django_map.zip"
+    on:
+      branch: develop
+      repo: Riddhi3092002/team1-mon-spring26                  
 
 after_success:
   - bash <(curl -s https://codecov.io/bash)
