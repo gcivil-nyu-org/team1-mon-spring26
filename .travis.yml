@@ -1,0 +1,56 @@
+language: python
+python:
+  - "3.14"
+
+before_install:
+  - sudo apt-get update
+  - sudo apt-get install -y gdal-bin libgdal-dev
+
+install:
+  - pip install -r requirements-dev.txt
+
+script:
+  # --check: doesn't reformat, just exits with error if code isn't "blackened"
+  - black --check .
+  # Runs the linter using the rules in your .flake8 file
+  - flake8 .
+  - coverage run -m pytest
+  #- pytest --cov=./ --cov-report=xml
+  - coverage report  # This prints the table in your Travis log
+  - coverage xml     # This creates the file for Codecov
+  
+
+deploy:
+  - provider: elasticbeanstalk
+    edge: true
+    access_key_id: $AWS_ACCESS_KEY
+    secret_access_key: $AWS_SECRET_KEY
+    region: "us-east-2"
+    app: "nycnow"
+    env: "Nycnow-staging"
+    bucket_name: "elasticbeanstalk-us-east-2-793314585930"
+    #bucket_path: "/"
+    zip_file: "django_map.zip"
+    on:
+      branch: develop
+      repo: gcivil-nyu-org/team1-mon-spring26
+
+  # this is per-user develop deployment
+  # (add your repo + my env vars AWS_ACCESS/SECRET_KEY in travis)
+  - provider: elasticbeanstalk
+    edge: true
+    access_key_id: $AWS_ACCESS_KEY
+    secret_access_key: $AWS_SECRET_KEY
+    region: "us-east-2"
+    app: "nycnow"
+    env: "Nycnow-feature"
+    bucket_name: "elasticbeanstalk-us-east-2-793314585930"
+    #bucket_path: "/"
+    zip_file: "django_map.zip"
+    on:
+      branch: develop
+      condition: "repo != gcivil-nyu-org/team1-mon-spring26"
+      #repo: ajslezak/team1-mon-spring26
+
+after_success:
+  - bash <(curl -s https://codecov.io/bash)

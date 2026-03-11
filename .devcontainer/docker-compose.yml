@@ -9,7 +9,7 @@ services:
     environment:
       - DB_HOST=db
       - DB_NAME=amenities
-      - DB_USER=postgres
+      - DB_USER=amenities_dev
       - DB_PASSWORD=postgres
       - APP_ENV=dev
     network_mode: service:db # Simplifies networking for dev
@@ -17,6 +17,7 @@ services:
   db:
     image: postgis/postgis:16-3.4
     environment:
+      - POSTGRES_USER=amenities_dev
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=amenities
       # This maps the internal Postgres data folder to a persistent volume

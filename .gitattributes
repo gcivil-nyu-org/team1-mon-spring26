@@ -1,0 +1,2 @@
+# Force LF for shell scripts, otherwise we get \r no such file or directory when executing
+*.sh text eol=lf
