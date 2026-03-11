@@ -3,5 +3,6 @@ from .import views
 
 urlpatterns = [
     path('', views.map_view, name = 'map'),
-    path('api/amenities/', views.amenities_api, name='amenities_api')
+    path('api/amenities/', views.amenities_api, name='amenities_api'),
+    path('api/amenity-types/', views.amenity_types_api, name='amenity_types_api'),
 ]

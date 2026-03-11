@@ -5,23 +5,36 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Essentials Now NYC - Map</title>
-
-    <!-- Leaflet CSS -->
-    <link
-        rel="stylesheet"
-        href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
-    />
-
-    <!-- CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
     <link rel="stylesheet" href="{% static 'maps/css/style.css' %}">
 </head>
 <body>
     <div id="map"></div>
 
-    <!-- Leaflet JS -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <div class="map-toolbar">
+        <div class="search-block">
+            <label for="search-input">Search Address</label>
+            <div class="search-row">
+                <input id="search-input" type="text" placeholder="e.g. Times Square, NYC">
+                <button id="search-button" type="button">Search</button>
+            </div>
+            <ul id="search-results"></ul>
+        </div>
 
-    <!-- JS -->
+        <div class="filter-block">
+            <label for="type-filter">Filter by Amenity Type</label>
+            <select id="type-filter">
+                <option value="">All</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="location-control">
+        <button id="location-button" type="button">Get Current Location</button>
+        <span id="location-status"></span>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
     <script src="{% static 'maps/js/map.js' %}"></script>
 </body>
 </html>
