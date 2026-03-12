@@ -2,7 +2,8 @@ from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-from django.contrib.auth import authenticate
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_required
 from django.contrib.gis.geos import Polygon, GEOSGeometry
 from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser
 from django.db.models import Avg, Count, Subquery, OuterRef
@@ -324,10 +325,22 @@ def register_api(request):
         return JsonResponse({"error": str(e)}, status=500)
 
 
+def serialize_auth_user(user):
+    return {
+        "id": user.id,
+        "email": user.email,
+        "username": user.username,
+        "bio": user.bio,
+        "is_authenticated": True,
+    }
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def login_api(request):
-    """API endpoint for user login."""
+    """
+    API endpoint for user login.
+    """
     try:
         data = json.loads(request.body)
         email = data.get("email", "").strip()
@@ -342,15 +355,69 @@ def login_api(request):
         if user is None:
             return JsonResponse({"error": "Invalid email or password"}, status=401)
 
-        return JsonResponse(
-            {"id": user.id, "email": user.email, "message": "Login successful"},
-            status=200,
-        )
+        #create the session
+        login(request, user)
+
+        response_data = serialize_auth_user(user)
+        response_data["message"] = "Login successful"
+        return JsonResponse(response_data, status=200)
 
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def logout_api(request):
+    """
+    Logout endpoint: clear the current session.
+    """
+    logout(request)
+    return JsonResponse(
+        {
+            "message": "Logout successful",
+            "is_authenticated": False,
+        },
+        status=200,
+    )
+
+
+@require_http_methods(["GET"])
+def current_user_api(request):
+    """
+    Return the user tied to the current session.
+    The frontend uses this endpoint after refresh to restore auth state.
+    """
+    if not request.user.is_authenticated:
+        return JsonResponse(
+            {
+                "id": None,
+                "email": "",
+                "username": "",
+                "bio": "",
+                "is_authenticated": False,
+            },
+            status=200,
+        )
+
+    return JsonResponse(serialize_auth_user(request.user), status=200)
+
+
+@login_required(login_url="/?auth_required=1")
+def profile_view(request):
+    """
+    Profile page.
+    Anonymous users are redirected back to the map page.
+    """
+    return render(
+        request,
+        "maps/profile.html",
+        {
+            "profile_user": request.user,
+        },
+    )
 
 
 @csrf_exempt
