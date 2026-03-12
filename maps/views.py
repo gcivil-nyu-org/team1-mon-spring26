@@ -355,7 +355,7 @@ def login_api(request):
         if user is None:
             return JsonResponse({"error": "Invalid email or password"}, status=401)
 
-        #create the session
+        # create the session
         login(request, user)
 
         response_data = serialize_auth_user(user)
