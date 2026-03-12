@@ -88,11 +88,11 @@ deploy:
     edge: true
     access_key_id: $AWS_ACCESS_KEY
     secret_access_key: $AWS_SECRET_KEY
-    region: "us-east-2"
+    region: "us-east-1"
     app: "django"
     env: "django-env"
     # below needs updating to match your elasticbeanstalk s3 bucket!
-    bucket_name: "elasticbeanstalk-us-east-2-793314585932"
+    bucket_name: "elasticbeanstalk-us-east-1-853536782152"
     zip_file: "django_map.zip"
     on:
       branch: develop
