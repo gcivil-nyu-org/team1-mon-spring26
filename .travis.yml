@@ -28,7 +28,7 @@ deploy:
     region: "us-east-2"
     app: "nycnow"
     env: "Nycnow-staging"
-    bucket_name: "elasticbeanstalk-us-east-2-793314585930"
+    bucket_name: $AWS_BUCKET
     #bucket_path: "/"
     zip_file: "django_map.zip"
     on:
@@ -44,7 +44,7 @@ deploy:
     region: "us-east-2"
     app: "nycnow"
     env: "Nycnow-feature"
-    bucket_name: "elasticbeanstalk-us-east-2-793314585930"
+    bucket_name: $AWS_BUCKET
     #bucket_path: "/"
     zip_file: "django_map.zip"
     on:
