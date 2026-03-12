@@ -941,14 +941,21 @@ function handleLogin(email, password) {
 
 function setCurrentUser(userData) {
     currentUser = { id: userData.id, email: userData.email };
-    sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
     updateUserUI();
 }
 
 function logoutUser() {
-    currentUser = null;
-    sessionStorage.removeItem('currentUser');
-    updateUserUI();
+    fetch('/api/auth/logout/', {
+        method: 'POST',
+        credentials: 'same-origin',
+    })
+    .catch(error => {
+        console.error('Logout request failed:', error);
+    })
+    .finally(() => {
+        currentUser = null;
+        updateUserUI();
+    });
 }
 
 function updateUserUI() {
@@ -968,16 +975,24 @@ function updateUserUI() {
 }
 
 function checkLoggedInUser() {
-    try {
-        const storedUser = sessionStorage.getItem('currentUser');
-        if (storedUser) {
-            currentUser = JSON.parse(storedUser);
-            updateUserUI();
+    fetch('api/auth/me/', {
+        method: 'GET',
+        credentials: 'same-origin',
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (!data || !data.is_authenticated) {
+            currentUser = null;
+        } else {
+            currentUser = { id: data.id, email: data.email };
         }
-    } catch (e) {
-        console.error('Could not parse user from session storage', e);
-        sessionStorage.removeItem('currentUser');
-    }
+        updateUserUI();
+    })
+    .catch(e => {
+        console.error('Failed to check current user', e);
+        currentUser = null;
+        updateUserUI();
+    });
 }
 
 function setupAuth() {

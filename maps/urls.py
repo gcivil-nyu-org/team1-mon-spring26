@@ -9,5 +9,7 @@ urlpatterns = [
     path("api/amenity-types/", views.amenity_types_api, name="amenity_types_api"),
     path("api/auth/register/", views.register_api, name="register_api"),
     path("api/auth/login/", views.login_api, name="login_api"),
+    path("api/auth/logout/", views.logout_api, name="logout_api"),
+    path("api/auth/me/", views.current_user_api, name="current_user_api"),
     path("api/reviews/", views.create_review_api, name="create_review_api"),
 ]
