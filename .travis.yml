@@ -115,4 +115,4 @@ deploy:
       repo: Riddhi3092002/team1-mon-spring26                  
 
 after_success:
-  - bash <(curl -s https://codecov.io/bash)
+  #- bash <(curl -s https://codecov.io/bash)
