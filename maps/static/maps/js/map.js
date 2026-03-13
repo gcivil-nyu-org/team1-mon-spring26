@@ -765,6 +765,7 @@ function positionSearchResults() {
 }
 function hideSearchResults() { const c = document.getElementById('search-results'); c.classList.remove('active'); c.innerHTML = ''; }
 
+/** Auth Modal UI */
 function showAuthModal()  { document.getElementById('auth-modal').style.display = 'flex'; }
 function closeAuthModal() {
     document.getElementById('auth-modal').style.display = 'none';
@@ -777,41 +778,174 @@ function switchAuthTab(name) {
     document.querySelector(`.auth-tab-link[data-tab="${name}"]`).classList.add('active');
     document.getElementById('auth-modal-title').textContent = name === 'login-tab' ? 'Welcome back' : 'Create account';
 }
+
+/** Auth Helpers */
+//normalize backend auth payload into one frontend shape.
+function normalizeAuthUser(data) {
+    if (!data || !data.is_authenticated) return null;
+    return {
+        id: data.id,
+        email: data.email || '',
+        username: data.username || '',
+        bio: data.bio || '',
+        is_authenticated: true,
+    };
+}
+
+//show an inline auth error message in the modal.
+function showAuthError(errId, message) {
+    const el = document.getElementById(errId);
+    if (!el) return;
+    el.textContent = message;
+    el.style.display = 'block';
+}
+
+//clear any previous inline auth error message.
+function clearAuthError(errId) {
+    const el = document.getElementById(errId);
+    if (!el) return;
+    el.textContent = '';
+    el.style.display = 'none';
+}
+
+//ask the server who is logged in for the current session.
+function fetchCurrentUser() {
+    return fetch('/api/auth/me/', {
+        method: 'GET',
+        credentials: 'same-origin',
+    })
+    .then(response => response.json())
+    .then(data => {
+        currentUser = normalizeAuthUser(data);
+        updateUserUI();
+        return currentUser;
+    })
+    .catch(error => {
+        console.error('Failed to fetch current user:', error);
+        currentUser = null;
+        updateUserUI();
+        return null;
+    });
+}
+
+/** Auth Actions */
+// update in-memory user state and refresh auth UI.
+function setCurrentUser(data) {
+    currentUser = normalizeAuthUser(data);
+    updateUserUI();
+}
+
+// submit login/register form data and handle auth errors.
 function setupAuthForm(formId, url, errId, isReg = false) {
     document.getElementById(formId).addEventListener('submit', e => {
         e.preventDefault();
-        const email = e.target.querySelector('input[type="email"]').value;
-        const pass  = e.target.querySelector('input[type="password"]').value;
-        fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: pass }) })
-            .then(r => r.json().then(d => ({ s: r.status, b: d })))
+        clearAuthError(errId);
+
+        const email = e.target.querySelector('input[type="email"]').value.trim();
+        const pass = e.target.querySelector('input[type="password"]').value;
+
+        fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ email, password: pass }),
+        })
+            .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
             .then(({ s, b }) => {
-                if (s >= 400) { const el = document.getElementById(errId); el.textContent = b.error || 'Error'; el.style.display = 'block'; return; }
-                isReg ? handleLogin(email, pass) : (setCurrentUser(b), closeAuthModal());
+                if (s >= 400) {
+                    showAuthError(errId, b.error || 'Request failed');
+                    return;
+                }
+
+                if (isReg) {
+                    handleLogin(email, pass, errId);
+                    return;
+                }
+
+                setCurrentUser(b);
+                closeAuthModal();
             })
-            .catch(() => { const el = document.getElementById(errId); el.textContent = 'Network error'; el.style.display = 'block'; });
+            .catch(() => {
+                showAuthError(errId, 'Network error');
+                return;
+            });
     });
 }
-function handleLogin(email, pass) {
-    fetch('/api/auth/login/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: pass }) })
-        .then(r => r.json().then(d => ({ s: r.status, b: d })))
-        .then(({ s, b }) => { if (s < 400) { setCurrentUser(b); closeAuthModal(); } });
+
+// perform email/password login and store returned user state.
+function handleLogin(email, pass, errId = 'login-error') {
+    clearAuthError(errId);
+
+    return fetch('/api/auth/login/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ email, password: pass }),
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400) {
+                showAuthError(errId, b.error || 'Login failed');
+                return null;
+            }
+
+            setCurrentUser(b);
+            closeAuthModal();
+            return b;
+        })
+        .catch(() => {
+            showAuthError(errId, 'Network error');
+            return null;
+        });
 }
-function setCurrentUser(d) { currentUser = { id: d.id, email: d.email }; sessionStorage.setItem('currentUser', JSON.stringify(currentUser)); updateUserUI(); }
-function logoutUser()      { currentUser = null; sessionStorage.removeItem('currentUser'); updateUserUI(); }
+
+// call logout API and clear local in-memory auth state.
+function logoutUser() {
+    return fetch('/api/auth/logout/', {
+        method: 'POST',
+        credentials: 'same-origin',
+    })
+        .then(r => {
+            if (r.status >= 400) {
+                return fetchCurrentUser();
+            }
+
+            currentUser = null;
+            updateUserUI();
+            return null;
+        })
+        .catch(() => {
+            return fetchCurrentUser();
+        });
+}
+
+// render login/logout button and current user label.
 function updateUserUI() {
-    const btn = document.getElementById('auth-button'), disp = document.getElementById('user-display');
-    if (currentUser) { disp.textContent = currentUser.email; disp.style.display = ''; btn.textContent = 'Logout'; }
-    else             { disp.textContent = ''; disp.style.display = 'none'; btn.textContent = 'Login'; }
+    const btn = document.getElementById('auth-button');
+    const disp = document.getElementById('user-display');
+
+    if (!btn || !disp) return;
+
+    if (currentUser && currentUser.is_authenticated) {
+        disp.textContent = currentUser.username || currentUser.email;
+        disp.style.display = '';
+        btn.textContent = 'Logout';
+    } else {
+        disp.textContent = '';
+        disp.style.display = 'none';
+        btn.textContent = 'Login';
+    }
 }
-function checkLoggedInUser() { try { const u = sessionStorage.getItem('currentUser'); if (u) { currentUser = JSON.parse(u); updateUserUI(); } } catch {} }
+
+/** Auth Wiring */
 function setupAuth() {
-    document.getElementById('auth-button').addEventListener('click', () => currentUser ? logoutUser() : showAuthModal());
+    document.getElementById('auth-button').addEventListener('click', () => currentUser && currentUser.is_authenticated ? logoutUser() : showAuthModal());
     document.getElementById('auth-modal-close').addEventListener('click', closeAuthModal);
     document.getElementById('auth-modal').addEventListener('click', e => { if (e.target.id === 'auth-modal') closeAuthModal(); });
     document.querySelectorAll('.auth-tab-link').forEach(l => l.addEventListener('click', () => switchAuthTab(l.dataset.tab)));
     setupAuthForm('login-form',    '/api/auth/login/',    'login-error');
     setupAuthForm('register-form', '/api/auth/register/', 'register-error', true);
-    checkLoggedInUser();
+    fetchCurrentUser();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
