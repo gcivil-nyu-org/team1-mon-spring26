@@ -1,415 +1,447 @@
-import requests
-from dateparser import parse as dateparse
 import re
+import json
+import datetime
+import requests
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.contrib.gis.geos import GEOSGeometry
 from maps.models import AmenityType, Amenity
-import json
+
+# ---------------------------------------------------------------------------
+# Hours parsing
+# All 146 unique values reduce to 6 structural patterns:
+#   P1. Special/terminal: empty, N/A, 24 Hours, Temp Closed, URL, etc.
+#   P2. Multi-line: "Monday\t10am-5pm\n..." or "Sunday: Closed\n..."
+#   P3. Semicolon-segments: "Mon-Fri: 8am-10pm; Sat & Sun: 9am-10pm"
+#   P4. Comma-day-segments: "Friday 4pm-10pm, Saturday 12pm-10pm"
+#   P5. Inline day-ranges: "Mon-Fri 7am-12am Sat-Sun 7am-10pm"
+#   P6. Single time range: "10:30am-10:30pm"
+# ---------------------------------------------------------------------------
+
+DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+_DAY_MAP = {
+    'monday': 'Monday', 'tuesday': 'Tuesday', 'wednesday': 'Wednesday',
+    'thursday': 'Thursday', 'friday': 'Friday', 'saturday': 'Saturday', 'sunday': 'Sunday',
+    'thurs': 'Thursday', 'tues': 'Tuesday', 'wed': 'Wednesday',
+    'mon': 'Monday', 'tue': 'Tuesday', 'thu': 'Thursday',
+    'fri': 'Friday', 'sat': 'Saturday', 'sun': 'Sunday',
+    'th': 'Thursday', 'su': 'Sunday',
+    'm': 'Monday', 't': 'Tuesday', 'w': 'Wednesday', 'f': 'Friday', 's': 'Saturday',
+    'weekday': 'Weekday', 'weekend': 'Weekend', 'daily': 'Daily',
+}
+
+# Any single day token (longest alternatives first)
+_D = (
+    r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday'
+    r'|Thurs|Tues|Wed|Mon|Tue|Thu|Fri|Sat|Sun|Th|Su'
+    r'|Weekdays?|Weekends?|Daily|Everyday|[MTWFS])'
+)
+
+# Like _D but also accepts plural forms: "Sundays", "Mondays"
+_DS = (
+    r'(?:Mondays?|Tuesdays?|Wednesdays?|Thursdays?|Fridays?|Saturdays?|Sundays?'
+    r'|Thurs|Tues|Wed|Mon|Tue|Thu|Fri|Sat|Sun|Th|Su'
+    r'|Weekdays?|Weekends?|Daily|Everyday|[MTWFS])'
+)
+
+# Matches a time range like "8am-4pm", "10:30 am - 6:00 pm", "6am - dusk"
+_TIME_RE = re.compile(
+    r'(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)'
+    r'\s*[-\u2013]\s*'
+    r'(\d{1,2}(?::\d{2})?\s*(?:am|pm)|dusk|dawn|midnight|noon)',
+    re.IGNORECASE,
+)
+
+# Matches "DayRange <sep> time-range" inline
+_INLINE_RE = re.compile(
+    r'(' + _D + r'(?:-' + _D + r')?)'
+    r'[\s]*[-\u2013:]?[\s]+'
+    r'(\d{1,2}(?::\d{2})?\s*(?:am|pm)?'
+    r'\s*[-\u2013]\s*'
+    r'(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)|dusk|dawn|midnight|noon))',
+    re.IGNORECASE,
+)
+
+# Matches a segment header like "Monday to Friday:" or "Sat & Sun:" or "Sundays:"
+_SEG_RE = re.compile(
+    r'^(' + _DS + r'(?:\s*[-\u2013to&and,\s]+\s*' + _DS + r')*)'
+    r'\s*[-:]\s*(.+)$',
+    re.IGNORECASE,
+)
 
 
-def _parse_time(time_string):
-    """
-    Parses a single time string (e.g., "8am", "9:00 pm", "dusk") into HH:MM format.
-    """
-    if not time_string:
-        return None
-    # Handle special, non-time strings
-    if time_string.lower() in ["dusk", "dawn"]:
-        return time_string.capitalize()
-    try:
-        # The dateparser library is good at guessing formats
-        dt = dateparse(time_string)
-        if dt:
-            return dt.strftime("%H:%M")
-    except (ValueError, TypeError):
-        return None
+def _resolve(tok: str):
+    """Resolve a day abbreviation to its canonical full name."""
+    t = tok.strip().lower()
+    return _DAY_MAP.get(t) or _DAY_MAP.get(t.rstrip('s'))
+
+
+def _range(start: str, end: str):
+    s, e = DAYS.index(start), DAYS.index(end)
+    return DAYS[s:e + 1] if e >= s else DAYS[s:] + DAYS[:e + 1]
+
+
+def _expand(token: str):
+    """Expand a day expression to a list of full day names."""
+    token = token.strip()
+    t = token.lower().rstrip('s')
+    if t == 'weekday':              return DAYS[:5]
+    if t == 'weekend':              return DAYS[5:]
+    if t in ('daily', 'everyday'):  return DAYS[:]
+
+    # "Day-Day" or "Day to Day" range
+    m = re.match(r'^(.+?)\s*(?:to|-)\s*([A-Za-z]+)$', token, re.IGNORECASE)
+    if m:
+        d1, d2 = _resolve(m.group(1)), _resolve(m.group(2))
+        if d1 and d2:
+            if d1 == d2 == 'Saturday':  # S-S edge case → Sat-Sun
+                d2 = 'Sunday'
+            return _range(d1, d2)
+        if d1:
+            return [d1]
+
+    # "Day & Day" list
+    parts = re.split(r'\s*(?:&|and)\s*', token, flags=re.IGNORECASE)
+    if len(parts) > 1:
+        days = [_resolve(p) for p in parts if _resolve(p)]
+        if days:
+            return days
+
+    d = _resolve(token)
+    return [d] if d else []
+
+
+def _parse_time(raw: str):
+    raw = raw.strip().lower().replace(' ', '').replace('.', '')
+    if raw in ('dusk', 'dawn'):               return raw
+    if raw in ('midnight', '12am', '12:00am'): return '00:00'
+    if raw in ('noon', '12pm', '12:00pm'):     return '12:00'
+    for fmt in ('%I:%M%p', '%I%p', '%H:%M'):
+        try:
+            return datetime.datetime.strptime(raw, fmt).strftime('%H:%M')
+        except ValueError:
+            pass
     return None
 
 
-def parse_hours(hours_string):
+def _time_range(s: str):
+    """Return (open_str, close_str) from first time range in s, or None."""
+    m = _TIME_RE.search(s)
+    if not m:
+        return None
+    raw_o, raw_c = m.group(1).strip(), m.group(2).strip()
+    # Inherit am/pm from close time if open lacks it (e.g. "4:00-10:00pm")
+    if not re.search(r'am|pm', raw_o, re.IGNORECASE):
+        sf = re.search(r'am|pm', raw_c, re.IGNORECASE)
+        if sf:
+            raw_o += sf.group(0)
+    o, c = _parse_time(raw_o), _parse_time(raw_c)
+    return (o, c) if (o and c) else None
+
+
+def _parse_seg(chunk: str):
+    """Parse 'DayGroup: time-range' or 'Day time-range'. Returns (days, tr) or None."""
+    chunk = chunk.strip()
+    m = _SEG_RE.match(chunk)
+    if m:
+        days = _expand(m.group(1))
+        tr = _time_range(m.group(2))
+        if days and tr:
+            return days, tr
+    # No colon: "Friday 4pm-10pm"
+    m2 = re.match(r'^(' + _D + r')\s+(.+)$', chunk, re.IGNORECASE)
+    if m2:
+        days = _expand(m2.group(1))
+        tr = _time_range(m2.group(2))
+        if days and tr:
+            return days, tr
+    return None
+
+
+def parse_hours(raw: str) -> dict:
     """
-    Parses a human-readable hours string into dict w/24-hour times.
+    Parse a human-readable hours string into a structured dict.
+    Keys: 'Monday'..'Sunday': ["HH:MM","HH:MM"] or None (=closed),
+          'default': ["HH:MM","HH:MM"] (no specific day),
+          'is_24hrs': True,
+          'notes': str
     """
-    if (
-        not hours_string
-        or not isinstance(hours_string, str)
-        or hours_string.strip().lower() in ["n/a", "not operational", "temp closed"]
-    ):
-        return {"default": ["00:00", "24:00"], "notes": "Assumed to be open 24/7"}
+    if not raw or not isinstance(raw, str):
+        return {'notes': ''}
 
-    hours_string = hours_string.strip()
-    if "24 hours" in hours_string.lower() or "24/7" in hours_string:
-        return {"default": ["00:00", "24:00"]}
+    s, sl = raw.strip(), raw.strip().lower()
 
-    hours_dict = {}
-    notes = []
+    # P1: Special / terminal
+    if sl in ('', 'empty', 'n/a', 'not operational', 'temp closed', 'closed',
+              'park hours', 'concession operating hours'):
+        return {'notes': s}
+    if sl.startswith('http') or 'see website' in sl: return {'notes': s}
+    if 'by permit' in sl:                            return {'notes': s}
+    if '24 hours' in sl or '24/7' in sl:             return {'is_24hrs': True}
 
-    # Handle cases like "Open by permit" or URLs
-    if (
-        "by permit" in hours_string.lower()
-        or hours_string.lower().startswith("http")
-        or "see website" in hours_string.lower()
-    ):
-        notes.append(hours_string)
-        return {"notes": ". ".join(notes)}
-
-    # --- Main Parsing Logic ---
-    # This regex is designed to find blocks of day(s) followed by their times.
-    # It handles single days, day ranges, and keywords like "Weekdays".
-    day_time_regex = re.compile(
-        r"\b(Mon|Tues|Wed|Thurs|Fri|Sat|Sun|Weekdays|Weekends|Daily)s?\b"  # Day(s)
-        r"(?:\s*(-|–|to)\s*\b(Mon|Tues|Wed|Thurs|Fri|Sat|Sun)\b)?"  # Optional day range
-        r"\s*[:\-]?\s*"  # Separator
-        r"([\w\s:./\-,&]+?(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|dusk|closed|dawn))",
-        # ^Time string
-        re.IGNORECASE,
+    # P2: Multi-line (≥2 lines of "DayName: time")
+    lines = [l.strip() for l in re.split(r'[\n;]', s) if l.strip()]
+    day_line_re = re.compile(
+        r'^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)'
+        r'\s*[:\-\t]\s*(.+)$', re.IGNORECASE,
     )
+    lm = [day_line_re.match(l) for l in lines]
+    if sum(1 for m in lm if m) >= 2:
+        result, notes = {}, []
+        for m, line in zip(lm, lines):
+            if not m:
+                notes.append(line)
+                continue
+            day = _resolve(m.group(1))
+            tp = re.sub(r'[^\w\s:.\-apmAP]', '-', m.group(2).strip())
+            if tp.lower() in ('closed', 'close'):
+                result[day] = None
+            else:
+                tr = _time_range(tp)
+                result[day] = list(tr) if tr else None
+                if not tr:
+                    notes.append(f'{day}: {tp}')
+        if notes:
+            result['notes'] = '. '.join(notes)
+        return result
 
-    # Regex to find day ranges or single days, including single-letter abbreviations
-    day_time_regex = re.compile(
-        r"\b(M|T|W|Th|F|S|Su|Mon|Tues|Wed|Thurs|Fri|Sat|Sun|Weekdays|Weekends|Daily)s?\b"  # noqa: E501 line too long
-        # ^Day(s)
-        r"(?:\s*(-|–|to)\s*\b(M|T|W|Th|F|S|Su|Mon|Tues|Wed|Thurs|Fri|Sat|Sun)\b)?"
-        # ^Optional day range
-        r"\s*[:\-]?\s*"
-        r"((?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|dusk|closed|dawn)(?:\s*(-|–|to)\s*(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|dusk|dawn))?)",  # noqa: E501 line too long
-        re.IGNORECASE,
-    )
+    flat = re.sub(r'[\t\n]+', ' ', s).strip()
 
-    day_map_full = {
-        "M": "Monday",
-        "T": "Tuesday",
-        "W": "Wednesday",
-        "Th": "Thursday",
-        "F": "Friday",
-        "S": "Saturday",
-        "Su": "Sunday",
-        "Mon": "Monday",
-        "Tues": "Tuesday",
-        "Wed": "Wednesday",
-        "Thurs": "Thursday",
-        "Fri": "Friday",
-        "Sat": "Saturday",
-        "Sun": "Sunday",
-    }
-    day_order = ["M", "T", "W", "Th", "F", "S", "Su"]
-    all_week_days = [
-        "Monday",
-        "Tuesday",
-        "Wednesday",
-        "Thursday",
-        "Friday",
-        "Saturday",
-        "Sunday",
-    ]
+    # P2b: "Everyday …" or "… Daily"
+    m = re.match(r'^(?:every\s*day|daily)\s+(.+)$', flat, re.IGNORECASE)
+    if not m:
+        m = re.match(r'^(.+?)\s+(?:daily|every\s*day)$', flat, re.IGNORECASE)
+    if m:
+        tp, *extra = re.split(r',(?=\s*[A-Za-z])', m.group(1), 1)
+        tr = _time_range(tp)
+        if tr:
+            result = {d: list(tr) for d in DAYS}
+            if extra:
+                result['notes'] = extra[0].strip()
+            return result
 
-    # Handle multi-line formats first (like for libraries)
-    lines = [line.strip() for line in hours_string.split("\n") if line.strip()]
-    processed_string = " ".join(lines)
+    # Pre-process: "DayToken-DayToken-digit" → insert space before digit
+    # Fixes "Mon-Thurs-4:00pm-10pm" → "Mon-Thurs 4:00pm-10pm"
+    flat = re.sub(r'(' + _D + r')-(' + _D + r')-(\d)', r'\1-\2 \3', flat, flags=re.IGNORECASE)
 
-    # --- Logic for single-line formats (inc. "M-T ... W-S ...") ---
-    matches = list(day_time_regex.finditer(processed_string))
-    unparsed_parts = []
+    # P3: Semicolon-separated segments
+    semi = [c.strip() for c in flat.split(';') if c.strip()]
+    if len(semi) > 1:
+        result, notes, hit = {}, [], 0
+        for chunk in semi:
+            parsed = _parse_seg(chunk)
+            if parsed:
+                hit += 1
+                for d in parsed[0]:
+                    result[d] = list(parsed[1])
+            else:
+                notes.append(chunk)
+        if hit:
+            if notes:
+                result['notes'] = '. '.join(notes)
+            return result
 
+    # P4: Comma-separated day segments
+    comma_chunks = re.split(r',\s*(?=' + _D + r'\b)', flat, flags=re.IGNORECASE)
+    if len(comma_chunks) > 1:
+        result, notes, hit = {}, [], 0
+        for chunk in comma_chunks:
+            parsed = _parse_seg(chunk.strip())
+            if parsed:
+                hit += 1
+                for d in parsed[0]:
+                    result[d] = list(parsed[1])
+            else:
+                notes.append(chunk.strip())
+        if hit:
+            if notes:
+                result['notes'] = '. '.join(notes)
+            return result
+
+    # P5: Inline "DayRange time-range DayRange time-range …"
+    matches = list(_INLINE_RE.finditer(flat))
     if matches:
-        last_end = 0
-        for match in matches:
-            if match.start() > last_end:
-                unparsed_parts.append(
-                    processed_string[last_end : match.start()].strip(",. ")
-                )
-            last_end = match.end()
+        result = {}
+        for m in matches:
+            days = _expand(m.group(1))
+            tr = _time_range(m.group(2))
+            for d in days:
+                if tr:
+                    result[d] = list(tr)
+        if result:
+            return result
 
-            start_day_abbr, _, end_day_abbr, time_str, _ = match.groups()
-            time_str = time_str.strip()
+    # P6: Single time range fallback
+    main, *rest = re.split(r',(?=\s*[A-Za-z])', flat, 1)
+    main = re.sub(r'^[^0-9]*(from\s+)?', '', main, flags=re.IGNORECASE)
+    tr = _time_range(main)
+    if tr:
+        result = {'default': list(tr)}
+        if rest:
+            result['notes'] = rest[0].strip()
+        return result
 
-            # Normalize day abbreviations (M -> Mon, T -> Tues, etc.)
-            start_day_key = start_day_abbr.capitalize()
-            end_day_key = end_day_abbr.capitalize() if end_day_abbr else None
+    return {'notes': s}
 
-            days_to_process = []
-            start_day_lower = start_day_abbr.lower()
 
-            if start_day_lower == "weekdays":
-                days_to_process = all_week_days[:5]
-            elif start_day_lower == "weekends":
-                days_to_process = all_week_days[5:]
-            elif start_day_lower == "daily":
-                days_to_process = all_week_days
-            elif end_day_key:
-                # Handle ranges like M-T
-                try:
-                    # Use a consistent order for single-letter abbreviations
-                    start_idx = day_order.index(start_day_key)
-                    # Special case for 'S-S' meaning Saturday-Sunday
-                    if start_day_key == "S" and end_day_key == "S":
-                        end_day_key = "Su"
-                    end_idx = day_order.index(end_day_key)
-                    # ranges that wrap around, e.g., S-Su (Sat-Sun) or F-M (Fri-Mon)
-                    if end_idx < start_idx:
-                        selected_days = day_order[start_idx:] + day_order[: end_idx + 1]
-                    else:
-                        selected_days = day_order[start_idx : end_idx + 1]
-                    days_to_process = [day_map_full[d] for d in selected_days]
-                except (ValueError, KeyError):
-                    unparsed_parts.append(match.group(0))
-                    continue
-            else:
-                if start_day_key.capitalize() in day_map_full:
-                    days_to_process = [day_map_full[start_day_key.capitalize()]]
-                else:
-                    unparsed_parts.append(match.group(0))
-                    continue
+# ---------------------------------------------------------------------------
+# Populate per-day model fields from parsed hours
+# ---------------------------------------------------------------------------
 
-            # Parse the time string for this block
-            if "closed" in time_str.lower():
-                parsed_time = None
-            else:
-                # Clean up time string by removing extra dots
-                cleaned_time_str = time_str.replace(".", "")
-                time_matches = re.findall(
-                    r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|dusk|dawn)",
-                    cleaned_time_str,
-                    re.IGNORECASE,
-                )
-                if len(time_matches) >= 2:
-                    open_time, close_time = _parse_time(time_matches[0]), _parse_time(
-                        time_matches[1]
-                    )
-                    if open_time and close_time:
-                        parsed_time = [open_time, close_time]
-                    else:  # Handle dusk/dawn
-                        parsed_time = [time_matches[0], time_matches[1]]
-                else:
-                    parsed_time = None
-                    unparsed_parts.append(match.group(0))
+def hours_to_day_fields(hours: dict) -> dict:
+    """Convert parse_hours() output → per-day TimeField values for the Amenity model."""
+    fields = {f'{d.lower()}_open': None for d in DAYS}
+    fields.update({f'{d.lower()}_close': None for d in DAYS})
+    fields['is_open_24hrs'] = bool(hours.get('is_24hrs'))
 
-            if parsed_time is not None:
-                for day in days_to_process:
-                    hours_dict[day] = parsed_time
+    if hours.get('is_24hrs'):
+        midnight = datetime.time(0, 0)
+        for day in DAYS:
+            fields[f'{day.lower()}_open'] = midnight
+            fields[f'{day.lower()}_close'] = midnight
+        return fields
 
-        if last_end < len(processed_string):
-            unparsed_parts.append(processed_string[last_end:].strip(",. "))
+    def to_time(val):
+        if not val or not isinstance(val, str) or ':' not in val:
+            return None
+        try:
+            h, m = val.split(':')
+            return datetime.time(int(h) % 24, int(m))
+        except (ValueError, AttributeError):
+            return None
 
-    else:
-        # Fallback for simple formats like "8am-4pm, Open later seasonally"
-        main_part, *note_parts = re.split(r",(?=\s*[A-Z])", processed_string, 1)
-        notes.extend(note_parts)
-        time_matches = re.findall(
-            r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|dusk|dawn)", main_part, re.IGNORECASE
-        )
-        if len(time_matches) == 2:
-            open_time, close_time = _parse_time(time_matches[0]), _parse_time(
-                time_matches[1]
-            )
-            if open_time and close_time:
-                hours_dict["default"] = [open_time, close_time]
-        else:
-            unparsed_parts.append(processed_string)
+    for day in DAYS:
+        val = hours.get(day)
+        if isinstance(val, list) and len(val) == 2:
+            fields[f'{day.lower()}_open'] = to_time(val[0])
+            fields[f'{day.lower()}_close'] = to_time(val[1])
 
-    # Consolidate all notes
-    all_notes = notes + [part for part in unparsed_parts if part]
-    if all_notes:
-        hours_dict["notes"] = ". ".join(all_notes)
+    default = hours.get('default')
+    if isinstance(default, list) and len(default) == 2:
+        for day in DAYS:
+            if fields[f'{day.lower()}_open'] is None:
+                fields[f'{day.lower()}_open'] = to_time(default[0])
+                fields[f'{day.lower()}_close'] = to_time(default[1])
 
-    if not hours_dict and not all_notes:
-        return {"notes": hours_string}
+    return fields
 
-    return hours_dict
 
+# ---------------------------------------------------------------------------
+# Management command
+# ---------------------------------------------------------------------------
 
 class Command(BaseCommand):
-    help = "Import NYC public restrooms from NYC Open Data"
+    help = 'Import NYC public restrooms from NYC Open Data'
 
     def handle(self, *args, **options):
-        self.stdout.write("Starting NYC public restrooms import...")
+        self.stdout.write('Starting NYC public restrooms import...')
 
-        # Create or get the Public Restroom amenity type
         amenity_type, created = AmenityType.objects.get_or_create(
-            name="Restroom", defaults={"color": "#9C27B0", "icon": "restroom"}
+            name='Restroom',
+            defaults={'color': '#9C27B0', 'icon': 'restroom'},
         )
-
         if created:
-            self.stdout.write(
-                self.style.SUCCESS(f"Created amenity type: {amenity_type.name}")
-            )
+            self.stdout.write(self.style.SUCCESS(f'Created amenity type: {amenity_type.name}'))
 
-        # NYC Open Data OData v4 endpoint for public restrooms
-        url = "https://data.cityofnewyork.us/api/odata/v4/i7jb-7jku"
+        url = 'https://data.cityofnewyork.us/api/odata/v4/i7jb-7jku'
 
         try:
-            self.stdout.write(f"Fetching data from: {url}")
-
-            # Define your query parameters
-            query_params = {
-                "$top": 10000,  # Limit to 10k rows
-                "$skip": 0,  # Start at the beginning
-                "$count": "true",  # Get total record count
-            }
-
-            response = requests.get(url, params=query_params, timeout=60)
+            self.stdout.write(f'Fetching data from: {url}')
+            response = requests.get(
+                url, params={'$top': 10000, '$skip': 0, '$count': 'true'}, timeout=60
+            )
             response.raise_for_status()
-
             data = response.json()
 
-            # OData v4 format has results in 'value' key
-            if "value" not in data:
-                self.stdout.write(self.style.ERROR("Invalid OData response format"))
+            if 'value' not in data:
+                self.stdout.write(self.style.ERROR('Invalid OData response format'))
                 return
 
-            restrooms = data["value"]
-            self.stdout.write(f"Found {len(restrooms)} public restrooms")
+            restrooms = data['value']
+            self.stdout.write(f'Found {len(restrooms)} restrooms')
 
-            # Debug: Show sample of available fields
-            if restrooms:
-                self.stdout.write(f"Sample record fields: {list(restrooms[0].keys())}")
-                first_record = restrooms[0]
-                self.stdout.write(f'Sample ID fields: id={first_record.get("__id")}, \
-                          _id={first_record.get("__id")}, \
-                          location_zip={first_record.get("location_zip")}')
-
-            created_count = 0
-            updated_count = 0
-            skipped_count = 0
+            created_count = updated_count = skipped_count = 0
 
             with transaction.atomic():
                 for restroom in restrooms:
                     try:
-                        # OData format
                         if not isinstance(restroom, dict):
                             skipped_count += 1
                             continue
 
-                        # use location_1 (GeoJSON Point)
-                        geom = restroom.get("location_1")
+                        geom = restroom.get('location_1')
+                        if not geom:
+                            skipped_count += 1
+                            continue
 
-                        # Now extract ID - use the __id field (double underscore)
                         external_id = (
-                            restroom.get("__id")
-                            or f"restroom_{geom.coordinates[1]}_{geom.coordinates[0]}"
+                            restroom.get('__id')
+                            or f"restroom_{geom['coordinates'][1]}_{geom['coordinates'][0]}"
                         )
+                        name = restroom.get('facility_name') or 'Public Restroom'
 
-                        # Location name - use facility_name
-                        name = restroom.get("facility_name") or "Public Restroom"
+                        description_parts = [p for p in [
+                            f"Type: {restroom.get('restroom_type')}" if restroom.get('restroom_type') else '',
+                            restroom.get('location_type') or '',
+                            restroom.get('additional_notes') or '',
+                        ] if p]
+                        description = ' | '.join(description_parts)
 
-                        # Location type (additional description)
-                        location_type = (
-                            restroom.get("location_type") or restroom.get("Type") or ""
-                        )
+                        operator = restroom.get('operator') or ''
 
-                        # Restroom type (e.g., single stall, multiple stalls)
-                        restroom_type = (
-                            restroom.get("restroom_type")
-                            or restroom.get("Restroom_Type")
-                            or ""
-                        )
+                        raw_hours = restroom.get('hours_of_operation') or ''
+                        hours_dict = parse_hours(raw_hours)
+                        day_fields = hours_to_day_fields(hours_dict)
 
-                        # Additional notes
-                        additional_notes = (
-                            restroom.get("additional_notes")
-                            or restroom.get("Additional_Notes")
-                            or ""
-                        )
+                        seasonal = str(restroom.get('open_year_round', '')).strip().lower() == 'seasonal'
 
-                        # Build description from available text fields
-                        description_parts = []
-                        if restroom_type:
-                            description_parts.append(f"Type: {restroom_type}")
-                        if location_type:
-                            description_parts.append(location_type)
-                        if additional_notes:
-                            description_parts.append(additional_notes)
-                        description = " | ".join(description_parts)
+                        cs_raw = str(restroom.get('changing_stations', '')).strip().lower()
+                        changing_stations = cs_raw.startswith('yes')
 
-                        # Operator/owner info
-                        operator = (
-                            restroom.get("operator") or restroom.get("Operator") or ""
-                        )
+                        accessibility = ''
+                        acc = str(restroom.get('accessibility', '')).strip().lower()
+                        if 'fully' in acc:         accessibility = 'Fully Accessible'
+                        elif 'partial' in acc:     accessibility = 'Partially Accessible'
+                        elif 'limited' in acc:     accessibility = 'Limited Accessibility'
+                        elif 'not' in acc or acc == 'no': accessibility = 'Not Accessible'
 
-                        # Hours of operation
-                        raw_hours = (
-                            restroom.get("hours_of_operation")
-                            or restroom.get("Hours_of_Operation")
-                            or ""
-                        )
-                        hours_of_operation = parse_hours(raw_hours) or {}
+                        active = str(restroom.get('status', '')).strip().lower() == 'operational'
 
-                        # Seasonal status
-                        seasonal = (
-                            str(restroom.get("open_year_round", "")).strip().lower()
-                            == "seasonal"
-                        )
-
-                        # Changing stations
-                        changing_stations = False
-                        if "changing_stations" in restroom:
-                            cs_str = str(restroom.get("changing_stations", "")).lower()
-                            changing_stations = cs_str in [
-                                "true",
-                                "yes",
-                                "1",
-                                "y",
-                                "available",
-                            ]
-
-                        # Accessibility (ADA accessible) - capture the actual text value
-                        accessibility = ""
-                        if "accessibility" in restroom:
-                            acc_value = str(restroom.get("accessibility", "")).strip()
-                            # Normalize the value
-                            if "fully" in acc_value.lower():
-                                accessibility = "Fully Accessible"
-                            elif "partial" in acc_value.lower():
-                                accessibility = "Partially Accessible"
-                            elif (
-                                "not" in acc_value.lower() or "no" in acc_value.lower()
-                            ):
-                                accessibility = "Not Accessible"
-                            elif acc_value and acc_value.lower() not in ["", "unknown"]:
-                                # Preserve other values as-is if they're meaningful
-                                accessibility = acc_value[:50]
-
-                        # Check available status using 'status' field
-                        status_str = str(restroom.get("status", "")).strip().lower()
-                        active = status_str == "operational"
-
-                        obj, created = Amenity.objects.update_or_create(
+                        _, was_created = Amenity.objects.update_or_create(
                             amenity_type=amenity_type,
                             external_id=str(external_id),
                             defaults={
-                                "name": str(name)[:200],
-                                "location": GEOSGeometry(json.dumps(geom)),
-                                "description": str(description)[:1000],
-                                "operator": str(operator)[:200],
-                                "hours_of_operation": hours_of_operation,
-                                "changing_stations": changing_stations,
-                                "accessibility": accessibility,
-                                "seasonal": seasonal,
-                                "active": active,
+                                'name':               str(name)[:200],
+                                'location':           GEOSGeometry(json.dumps(geom)),
+                                'description':        str(description)[:1000],
+                                'operator':           str(operator)[:200],
+                                'hours_of_operation': hours_dict,
+                                **day_fields,
+                                'changing_stations':  changing_stations,
+                                'accessibility':      accessibility,
+                                'seasonal':           seasonal,
+                                'active':             active,
                             },
                         )
 
-                        if created:
-                            created_count += 1
-                        else:
-                            updated_count += 1
+                        if was_created: created_count += 1
+                        else:           updated_count += 1
 
                     except (ValueError, IndexError, TypeError, KeyError) as e:
-                        self.stdout.write(self.style.WARNING(f"Skipped entry: {e}"))
+                        self.stdout.write(self.style.WARNING(f'Skipped entry: {e}'))
                         skipped_count += 1
                         continue
 
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"\nImport complete!\n"
-                    f"Created: {created_count}\n"
-                    f"Updated: {updated_count}\n"
-                    f"Skipped: {skipped_count}"
-                )
-            )
+            self.stdout.write(self.style.SUCCESS(
+                f'\nImport complete!\n'
+                f'Created: {created_count}\n'
+                f'Updated: {updated_count}\n'
+                f'Skipped: {skipped_count}'
+            ))
 
         except requests.exceptions.RequestException as e:
-            self.stdout.write(self.style.ERROR(f"Failed to fetch data: {e}"))
+            self.stdout.write(self.style.ERROR(f'Failed to fetch data: {e}'))
         except Exception as e:
-            self.stdout.write(self.style.ERROR(f"An unexpected error occurred: {e}"))
+            self.stdout.write(self.style.ERROR(f'Unexpected error: {e}'))
+            raise
