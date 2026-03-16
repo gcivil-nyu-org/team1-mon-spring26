@@ -430,6 +430,26 @@ aside.detail-panel.open { width: var(--detail-w) !important; }
 .review-login-prompt  { padding: 14px 16px; font-size: 13px; color: var(--text-3); background: var(--surface2); border-bottom: 1px solid var(--border); }
 .review-login-prompt a { color: var(--accent); cursor: pointer; text-decoration: none; font-weight: 500; }
 
+/* ── REVIEWS TAB ── */
+.rv-hero { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px 16px 24px; gap: 8px; border-bottom: 1px solid var(--border); }
+.rv-hero-emoji { font-size: 56px; line-height: 1; }
+.rv-hero-type  { font-size: 11px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: var(--text-3); }
+.rv-description { font-size: 13px; color: var(--text-2); line-height: 1.6; margin-top: 4px; }
+.rv-rating-row  { display: flex; align-items: center; gap: 14px; margin-top: 8px; }
+.rv-rating-big  { font-size: 38px; font-weight: 700; color: var(--text-1); line-height: 1; }
+.rv-rating-right { display: flex; flex-direction: column; gap: 3px; }
+.rv-stars  { font-size: 17px; color: #f59e0b; letter-spacing: 1px; }
+.rv-count  { font-size: 12px; color: var(--text-3); }
+.rv-review-card   { margin-top: 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+.rv-review-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.rv-avatar        { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; flex-shrink: 0; }
+.rv-review-meta   { flex: 1; min-width: 0; }
+.rv-reviewer      { font-size: 13px; font-weight: 600; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-review-stars  { font-size: 12px; color: #f59e0b; letter-spacing: 1px; margin-top: 1px; }
+.rv-review-date   { font-size: 11px; color: var(--text-3); white-space: nowrap; flex-shrink: 0; align-self: flex-start; }
+.rv-review-text   { font-size: 13px; color: var(--text-2); line-height: 1.55; }
+.rv-empty         { font-size: 13px; color: var(--text-3); line-height: 1.6; text-align: center; padding: 20px 0; }
+
 /* ── NEARBY ── */
 .nearby-header { padding: 10px 16px 6px; font-size: 11px; font-weight: 600; letter-spacing: .3px; color: var(--text-3); border-bottom: 1px solid var(--border); }
 .nearby-list { display: flex; flex-direction: column; }

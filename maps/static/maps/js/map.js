@@ -513,6 +513,7 @@ function showDetailPanel(amenity, activeTab = 'overview') {
     document.getElementById('detail-name').textContent       = amenity.prop_name || amenity.name;
     document.getElementById('detail-type-badge').textContent = amenity.type;
     renderOverviewTab(amenity);
+    renderReviewsTab(amenity);
     renderNearbyTab(amenity);
     switchDetailTab(activeTab);
     document.getElementById('detail-panel').classList.add('open');
@@ -622,6 +623,82 @@ function renderNearbyTab(a) {
             if (found) { map.flyTo([found.latitude, found.longitude], 17); showDetailPanel(found, 'nearby'); }
         });
     });
+}
+
+function renderReviewsTab(amenity) {
+    const pane = document.getElementById('tab-reviews');
+
+    const typeEmojis = {
+        restroom:  '🚻',
+        droplet:   '💧',
+        bicycle:   '🚲',
+        snowflake: '❄️',
+        wifi:      '📶',
+    };
+    const emoji = typeEmojis[amenity.icon] || '📍';
+
+    const typeDescriptions = {
+        'Restroom':        'Public restrooms are toilet facilities available for public use throughout New York City parks, plazas, and buildings.',
+        'Water Fountain':  'Drinking water fountains provide free access to clean, potable water for all New Yorkers and visitors across the city.',
+        'Bike Rack':       'Bike racks offer secure parking spots for bicycles, making cycling a convenient option for getting around the city.',
+        'Cooling Center':  'Cooling centers provide a free, air-conditioned refuge during heat emergencies, helping New Yorkers stay safe in extreme heat.',
+        'LinkNYC Kiosk':   'LinkNYC kiosks offer free ultrafast public Wi-Fi, free domestic calls, device charging, and access to city services — all at no cost.',
+    };
+    const description = typeDescriptions[amenity.type]
+        || `A public ${amenity.type.toLowerCase()} available to all New York City residents and visitors.`;
+
+    const heroColor = (amenity.color || '#1a6ef5') + '22';
+    let html = `
+        <div class="rv-hero" style="background:${heroColor}">
+            <div class="rv-hero-emoji">${emoji}</div>
+            <div class="rv-hero-type">${amenity.type}</div>
+        </div>`;
+
+    html += `<div class="dp-section">
+        <div class="dp-field-label">About this amenity</div>
+        <div class="rv-description">${description}</div>
+    </div>`;
+
+    if (amenity.rating) {
+        const filled = Math.round(amenity.rating);
+        const stars  = '★'.repeat(filled) + '☆'.repeat(5 - filled);
+        html += `<div class="dp-section">
+            <div class="dp-field-label">Community Rating</div>
+            <div class="rv-rating-row">
+                <span class="rv-rating-big">${(+amenity.rating).toFixed(1)}</span>
+                <div class="rv-rating-right">
+                    <div class="rv-stars">${stars}</div>
+                    <div class="rv-count">${amenity.review_count} review${amenity.review_count !== 1 ? 's' : ''}</div>
+                </div>
+            </div>
+        </div>`;
+    }
+
+    const reviews = amenity.reviews || [];
+    if (reviews.length) {
+        const top  = [...reviews].sort((a, b) => b.rating - a.rating)[0];
+        const stars = '★'.repeat(top.rating) + '☆'.repeat(5 - top.rating);
+        const date  = new Date(top.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        const initial = (top.user_name || '?').charAt(0).toUpperCase();
+        html += `<div class="dp-section">
+            <div class="dp-field-label">Most Popular Review</div>
+            <div class="rv-review-card">
+                <div class="rv-review-header">
+                    <div class="rv-avatar">${initial}</div>
+                    <div class="rv-review-meta">
+                        <div class="rv-reviewer">${top.user_name}</div>
+                        <div class="rv-review-stars">${stars}</div>
+                    </div>
+                    <div class="rv-review-date">${date}</div>
+                </div>
+                <div class="rv-review-text">${top.review_text}</div>
+            </div>
+        </div>`;
+    } else {
+        html += `<div class="dp-section"><div class="rv-empty">No reviews yet for this location.<br>Be the first to share your experience!</div></div>`;
+    }
+
+    pane.innerHTML = html;
 }
 
 function buildHoursGrid(hours, todayIdx) {
