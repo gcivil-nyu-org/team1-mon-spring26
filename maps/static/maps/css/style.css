@@ -422,6 +422,7 @@ aside.detail-panel.open { width: var(--detail-w) !important; }
 .review-date  { font-size: 11px; color: var(--text-3); }
 .review-stars { color: #f59e0b; font-size: 13px; margin-bottom: 5px; }
 .review-text  { font-size: 13px; color: var(--text-2); line-height: 1.5; }
+.review-photo { margin-top: 8px; width: 100%; max-height: 220px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; }
 .review-empty { padding: 40px 16px; text-align: center; color: var(--text-3); font-size: 13px; }
 .review-rating-summary { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 14px; }
 .review-rating-big    { font-size: 36px; font-weight: 700; color: var(--text-1); line-height: 1; }
@@ -448,6 +449,7 @@ aside.detail-panel.open { width: var(--detail-w) !important; }
 .rv-review-stars  { font-size: 12px; color: #f59e0b; letter-spacing: 1px; margin-top: 1px; }
 .rv-review-date   { font-size: 11px; color: var(--text-3); white-space: nowrap; flex-shrink: 0; align-self: flex-start; }
 .rv-review-text   { font-size: 13px; color: var(--text-2); line-height: 1.55; }
+.rv-review-photo  { margin-top: 10px; width: 100%; max-height: 240px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; }
 .rv-empty         { font-size: 13px; color: var(--text-3); line-height: 1.6; text-align: center; padding: 20px 0; }
 
 /* ── NEARBY ── */

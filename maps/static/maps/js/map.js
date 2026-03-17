@@ -659,24 +659,58 @@ function renderReviewsTab(amenity) {
         <div class="rv-description">${description}</div>
     </div>`;
 
-    if (amenity.rating) {
-        const filled = Math.round(amenity.rating);
+    const hasRating = amenity.rating !== null && amenity.rating !== undefined && Number(amenity.review_count || 0) > 0;
+    html += `<div class="dp-section">
+        <div class="dp-field-label">Community Rating</div>
+        <div class="rv-rating-row">`;
+    if (hasRating) {
+        const avg = +amenity.rating;
+        const filled = Math.round(avg);
         const stars  = '★'.repeat(filled) + '☆'.repeat(5 - filled);
-        html += `<div class="dp-section">
-            <div class="dp-field-label">Community Rating</div>
-            <div class="rv-rating-row">
-                <span class="rv-rating-big">${(+amenity.rating).toFixed(1)}</span>
-                <div class="rv-rating-right">
-                    <div class="rv-stars">${stars}</div>
-                    <div class="rv-count">${amenity.review_count} review${amenity.review_count !== 1 ? 's' : ''}</div>
-                </div>
+        html += `<span class="rv-rating-big">${avg.toFixed(1)}</span>
+            <div class="rv-rating-right">
+                <div class="rv-stars">${stars}</div>
+                <div class="rv-count">${amenity.review_count} review${amenity.review_count !== 1 ? 's' : ''}</div>
+            </div>`;
+    } else {
+        html += `<span class="rv-rating-big" style="font-size:26px">-</span>
+            <div class="rv-rating-right">
+                <div class="rv-stars">☆☆☆☆☆</div>
+                <div class="rv-count">No ratings yet</div>
+            </div>`;
+    }
+    html += `</div></div>`;
+
+    const reviews = amenity.reviews || [];
+    const loggedIn = currentUser && currentUser.is_authenticated;
+    const currentEmail = (currentUser?.email || '').toLowerCase();
+    const alreadyReviewed = loggedIn && reviews.some(r => (r.user_name || '').toLowerCase() === currentEmail);
+
+    if (!loggedIn) {
+        html += `<div class="review-login-prompt">Please <a href="#" class="js-open-auth">sign in</a> to add a review.</div>`;
+    } else if (alreadyReviewed) {
+        html += `<div class="review-login-prompt">You have already reviewed this location.</div>`;
+    } else {
+        html += `<div class="review-write">
+            <div class="review-write-title">Write a Review</div>
+            <div class="star-picker js-star-picker" data-rating="5">
+                <button type="button" class="star-btn lit" data-value="1" aria-label="Rate 1 star">★</button>
+                <button type="button" class="star-btn lit" data-value="2" aria-label="Rate 2 stars">★</button>
+                <button type="button" class="star-btn lit" data-value="3" aria-label="Rate 3 stars">★</button>
+                <button type="button" class="star-btn lit" data-value="4" aria-label="Rate 4 stars">★</button>
+                <button type="button" class="star-btn lit" data-value="5" aria-label="Rate 5 stars">★</button>
+            </div>
+            <textarea class="review-textarea js-review-text" rows="3" maxlength="600" placeholder="Share your experience at this location (optional)..."></textarea>
+            <input type="file" class="js-review-photo" accept="image/*" style="margin-top:8px;font-size:12px;color:var(--text-2)">
+            <div style="display:flex;justify-content:flex-end">
+                <button type="button" class="review-submit js-review-submit">Submit Review</button>
             </div>
         </div>`;
     }
 
-    const reviews = amenity.reviews || [];
     if (reviews.length) {
-        const top  = [...reviews].sort((a, b) => b.rating - a.rating)[0];
+        const byRecent = [...reviews].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        const top  = [...reviews].sort((a, b) => (b.rating - a.rating) || (new Date(b.created_at) - new Date(a.created_at)))[0];
         const stars = '★'.repeat(top.rating) + '☆'.repeat(5 - top.rating);
         const date  = new Date(top.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
         const initial = (top.user_name || '?').charAt(0).toUpperCase();
@@ -691,14 +725,131 @@ function renderReviewsTab(amenity) {
                     </div>
                     <div class="rv-review-date">${date}</div>
                 </div>
-                <div class="rv-review-text">${top.review_text}</div>
+                <div class="rv-review-text">${top.review_text || 'No written comment.'}</div>
+                ${top.photo_url ? `<img class="rv-review-photo" src="${top.photo_url}" alt="Review photo">` : ''}
             </div>
         </div>`;
+
+        const otherReviews = byRecent.filter(r => r !== top);
+        if (otherReviews.length) {
+            html += `<div class="dp-section">
+                <div class="dp-field-label">Recent Reviews</div>
+                <div class="review-list">${otherReviews.map(r => {
+                    const rStars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
+                    const rDate = new Date(r.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                    return `<div class="review-card">
+                        <div class="review-card-top">
+                            <div class="review-user">${r.user_name}</div>
+                            <div class="review-date">${rDate}</div>
+                        </div>
+                        <div class="review-stars">${rStars}</div>
+                        <div class="review-text">${r.review_text || 'No written comment.'}</div>
+                        ${r.photo_url ? `<img class="review-photo" src="${r.photo_url}" alt="Review photo">` : ''}
+                    </div>`;
+                }).join('')}</div>
+            </div>`;
+        }
     } else {
         html += `<div class="dp-section"><div class="rv-empty">No reviews yet for this location.<br>Be the first to share your experience!</div></div>`;
     }
 
     pane.innerHTML = html;
+
+    const loginLink = pane.querySelector('.js-open-auth');
+    if (loginLink) {
+        loginLink.addEventListener('click', e => {
+            e.preventDefault();
+            switchAuthTab('login-tab');
+            showAuthModal();
+        });
+    }
+
+    const submitBtn = pane.querySelector('.js-review-submit');
+    if (submitBtn) {
+        submitBtn.addEventListener('click', () => submitReview(amenity, pane));
+    }
+
+    const starPicker = pane.querySelector('.js-star-picker');
+    if (starPicker) {
+        const stars = starPicker.querySelectorAll('.star-btn');
+        stars.forEach(star => {
+            star.addEventListener('click', () => {
+                const selected = parseInt(star.dataset.value, 10);
+                starPicker.dataset.rating = String(selected);
+                stars.forEach(s => s.classList.toggle('lit', parseInt(s.dataset.value, 10) <= selected));
+            });
+        });
+    }
+}
+
+function submitReview(amenity, pane) {
+    if (!currentUser || !currentUser.is_authenticated) {
+        showToast('Please sign in to add a review.', 'warn');
+        return;
+    }
+
+    const textEl = pane.querySelector('.js-review-text');
+    const starPicker = pane.querySelector('.js-star-picker');
+    const photoEl = pane.querySelector('.js-review-photo');
+    const btn = pane.querySelector('.js-review-submit');
+    if (!textEl || !btn || !starPicker) return;
+
+    const rating = Math.min(5, Math.max(1, parseInt(starPicker.dataset.rating || '5', 10) || 5));
+
+    const reviewText = textEl.value.trim();
+
+    btn.disabled = true;
+    btn.textContent = 'Submitting...';
+
+    const formData = new FormData();
+    formData.append('amenity_id', String(amenity.id));
+    formData.append('rating', String(rating));
+    formData.append('review_text', reviewText);
+    if (photoEl && photoEl.files && photoEl.files[0]) formData.append('photo', photoEl.files[0]);
+
+    fetch('/api/reviews/', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: formData,
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400) {
+                showToast(b.error || 'Unable to submit review.', 'error');
+                btn.disabled = false;
+                btn.textContent = 'Submit Review';
+                return;
+            }
+
+            const newReview = {
+                user_name: b.user_name || currentUser.email || currentUser.username || 'You',
+                rating: b.rating || rating,
+                review_text: b.review_text || reviewText,
+                photo_url: b.photo_url || null,
+                created_at: b.created_at || new Date().toISOString(),
+            };
+
+            if (!Array.isArray(amenity.reviews)) amenity.reviews = [];
+            amenity.reviews.unshift(newReview);
+            amenity.reviews = amenity.reviews.slice(0, 5);
+
+            const prevCount = Number(amenity.review_count || 0);
+            const prevAvg = Number(amenity.rating || 0);
+            amenity.review_count = prevCount + 1;
+            amenity.rating = prevCount > 0
+                ? ((prevAvg * prevCount) + newReview.rating) / amenity.review_count
+                : newReview.rating;
+
+            renderOverviewTab(amenity);
+            renderReviewsTab(amenity);
+            switchDetailTab('reviews');
+            showToast('Review added. Thanks for sharing!', 'success');
+        })
+        .catch(() => {
+            showToast('Network error while submitting review.', 'error');
+            btn.disabled = false;
+            btn.textContent = 'Submit Review';
+        });
 }
 
 function buildHoursGrid(hours, todayIdx) {
@@ -1012,6 +1163,8 @@ function updateUserUI() {
         disp.style.display = 'none';
         btn.textContent = 'Login';
     }
+
+    if (currentDetailAmenity) renderReviewsTab(currentDetailAmenity);
 }
 
 /** Auth Wiring */
