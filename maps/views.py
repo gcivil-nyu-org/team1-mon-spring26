@@ -150,7 +150,7 @@ def amenities_api(request):
 
     # 3. Apply select_related and prefetch_related BEFORE the union.
     amenities = amenities.select_related("amenity_type").prefetch_related(
-        "reviews__user"
+        "reviews__user", "photos"
     )
 
     # --- Backend Clustering Logic ---
@@ -224,6 +224,11 @@ def amenities_api(request):
 
     # Serialize the individual amenities
     for a in amenities:
+        photo_by_user = {}
+        for p in a.photos.all():
+            if p.uploaded_by_id not in photo_by_user:
+                photo_by_user[p.uploaded_by_id] = p.photo.url
+
         final_amenities_list.append(
             {
                 "id": a.id,
@@ -244,6 +249,7 @@ def amenities_api(request):
                         "user_name": r.user.email,
                         "rating": r.rating,
                         "review_text": r.review_text,
+                        "photo_url": photo_by_user.get(r.user_id),
                         "created_at": r.created_at.isoformat(),
                     }
                     for r in a.reviews.all()[:5]  # Get last 5 reviews
@@ -425,32 +431,48 @@ def profile_view(request):
 def create_review_api(request):
     """API endpoint for submitting reviews."""
     try:
-        # For now, require email since we don't have session/token auth yet
-        data = json.loads(request.body)
-        amenity_id = data.get("amenity_id")
-        email = data.get("email", "").strip()
-        rating = data.get("rating")
-        review_text = data.get("review_text", "").strip()
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
 
-        if not all([amenity_id, email, rating]):
-            return JsonResponse(
-                {"error": "amenity_id, email, and rating required"}, status=400
-            )
+        content_type = request.content_type or ""
+        if content_type.startswith("multipart/form-data"):
+            amenity_id = request.POST.get("amenity_id")
+            rating = request.POST.get("rating", 5)
+            review_text = request.POST.get("review_text", "").strip()
+            photo_file = request.FILES.get("photo")
+        else:
+            data = json.loads(request.body)
+            amenity_id = data.get("amenity_id")
+            rating = data.get("rating", 5)
+            review_text = data.get("review_text", "").strip()
+            photo_file = None
+
+        if not amenity_id:
+            return JsonResponse({"error": "amenity_id required"}, status=400)
+
+        try:
+            rating = int(rating)
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Rating must be an integer"}, status=400)
 
         if not (1 <= rating <= 5):
             return JsonResponse({"error": "Rating must be between 1 and 5"}, status=400)
+
+        if photo_file:
+            content_type = photo_file.content_type or ""
+            if not content_type.startswith("image/"):
+                return JsonResponse({"error": "Photo must be an image"}, status=400)
+            if photo_file.size > 5 * 1024 * 1024:
+                return JsonResponse(
+                    {"error": "Photo must be 5MB or smaller"}, status=400
+                )
 
         try:
             amenity = Amenity.objects.get(id=amenity_id)
         except Amenity.DoesNotExist:
             return JsonResponse({"error": "Amenity not found"}, status=404)
 
-        try:
-            user = CustomUser.objects.get(email=email)
-        except CustomUser.DoesNotExist:
-            return JsonResponse(
-                {"error": "User not found. Please register first."}, status=404
-            )
+        user = request.user
 
         # Check if user already has a review for this amenity
         if Review.objects.filter(amenity=amenity, user=user).exists():
@@ -462,12 +484,24 @@ def create_review_api(request):
             amenity=amenity, user=user, rating=rating, review_text=review_text
         )
 
+        review_photo = None
+        if photo_file:
+            review_photo = AmenityPhoto.objects.create(
+                amenity=amenity,
+                photo=photo_file,
+                uploaded_by=user,
+                is_primary=not AmenityPhoto.objects.filter(amenity=amenity).exists(),
+                caption=f"Review photo by {user.email}",
+            )
+
         return JsonResponse(
             {
                 "id": review.id,
                 "amenity_id": amenity.id,
+                "user_name": user.email,
                 "rating": review.rating,
                 "review_text": review.review_text,
+                "photo_url": review_photo.photo.url if review_photo else None,
                 "created_at": review.created_at.isoformat(),
                 "message": "Review created successfully",
             },
