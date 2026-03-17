@@ -1,11 +1,11 @@
-# from django.db import models
 from django.contrib.gis.db import models
 from django.contrib.postgres.indexes import GistIndex
 from django.contrib.auth.models import AbstractUser
+import datetime
 
 
 class CustomUser(AbstractUser):
-    """Custom user model with email as unique identifier"""
+    """Custom user model with email as unique identifier."""
 
     email = models.EmailField(unique=True)
     bio = models.TextField(blank=True)
@@ -13,7 +13,7 @@ class CustomUser(AbstractUser):
     updated_at = models.DateTimeField(auto_now=True)
 
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = ["username"]  # Required for createsuperuser
+    REQUIRED_FIELDS = ["username"]
 
     class Meta:
         ordering = ["-created_at"]
@@ -23,13 +23,9 @@ class CustomUser(AbstractUser):
 
 
 class AmenityType(models.Model):
-    """Model to store different types of amenities (e.g., water fountains, restrooms)"""
-
     name = models.CharField(max_length=100, unique=True)
-    icon = models.CharField(max_length=50, blank=True)  # For storing icon identifiers
-    color = models.CharField(
-        max_length=7, default="#3388ff"
-    )  # Hex color for map markers
+    icon = models.CharField(max_length=50, blank=True)
+    color = models.CharField(max_length=7, default="#3388ff")
     parent = models.ForeignKey(
         "self",
         null=True,
@@ -49,42 +45,58 @@ class AmenityType(models.Model):
 class Amenity(models.Model):
     """Model to store amenity locations."""
 
+    ACCESSIBILITY_CHOICES = [
+        ("", "Unknown"),
+        ("Not Accessible", "Not Accessible"),
+        ("Limited Accessibility", "Limited Accessibility"),
+        ("Partially Accessible", "Partially Accessible"),
+        ("Fully Accessible", "Fully Accessible"),
+    ]
+
+    # Core fields
     amenity_type = models.ForeignKey(
         AmenityType, on_delete=models.CASCADE, related_name="amenities"
     )
     name = models.CharField(max_length=200)
     location = models.PointField(srid=4326, null=False)
     address = models.CharField(max_length=300, blank=True, null=True)
-    # position = Text description for location
-    prop_name = models.CharField(
-        max_length=200, blank=True
-    )  # Property name (e.g., park name)
+    prop_name = models.CharField(max_length=200, blank=True)
     description = models.TextField(blank=True)
-    operator = models.CharField(
-        max_length=200, blank=True
-    )  # Owner/operator (e.g., parks dept, business)
-    hours_of_operation = models.JSONField(
-        default=dict, blank=True
-    )  # Structured hours (e.g., {"Monday": "10am-6pm"})
-    changing_stations = models.BooleanField(
-        default=False
-    )  # Whether facility has changing stations
+    operator = models.CharField(max_length=200, blank=True)
+
+    # Hours: raw parsed JSON
+    # Stores the full parse_hours() output for display / notes / dusk values.
+    hours_of_operation = models.JSONField(default=dict, blank=True)
+
+    # Hours: structured per-day fields (for filtering)
+    # Null = day not specified (or unknown).
+    # Convention for 24-hour days: monday_open = 00:00, monday_close = 00:00
+    is_open_24hrs = models.BooleanField(default=False)
+
+    monday_open = models.TimeField(null=True, blank=True)
+    monday_close = models.TimeField(null=True, blank=True)
+    tuesday_open = models.TimeField(null=True, blank=True)
+    tuesday_close = models.TimeField(null=True, blank=True)
+    wednesday_open = models.TimeField(null=True, blank=True)
+    wednesday_close = models.TimeField(null=True, blank=True)
+    thursday_open = models.TimeField(null=True, blank=True)
+    thursday_close = models.TimeField(null=True, blank=True)
+    friday_open = models.TimeField(null=True, blank=True)
+    friday_close = models.TimeField(null=True, blank=True)
+    saturday_open = models.TimeField(null=True, blank=True)
+    saturday_close = models.TimeField(null=True, blank=True)
+    sunday_open = models.TimeField(null=True, blank=True)
+    sunday_close = models.TimeField(null=True, blank=True)
+
+    # Facility attributes
+    changing_stations = models.BooleanField(default=False)
     accessibility = models.CharField(
-        max_length=50,
-        blank=True,
-        choices=[
-            ("", "Unknown"),
-            ("Not Accessible", "Not Accessible"),
-            ("Partially Accessible", "Partially Accessible"),
-            ("Fully Accessible", "Fully Accessible"),
-        ],
-        default="",
-    )  # ADA accessibility status
-    active = models.BooleanField(default=True)  # Whether the amenity is operational
-    seasonal = models.BooleanField(default=False)  # Whether the amenity is seasonal
-    external_id = models.CharField(
-        max_length=100, blank=True
-    )  # For referencing external datasets (keyed by amenity_type)
+        max_length=50, blank=True, choices=ACCESSIBILITY_CHOICES, default=""
+    )
+    active = models.BooleanField(default=True)
+    seasonal = models.BooleanField(default=False)
+    external_id = models.CharField(max_length=100, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -95,14 +107,107 @@ class Amenity(models.Model):
             GistIndex(fields=["location"], name="amenity_location_gist_idx"),
             models.Index(fields=["active"]),
             models.Index(fields=["amenity_type", "active"]),
+            models.Index(fields=["is_open_24hrs"]),
+            models.Index(fields=["monday_open", "monday_close"]),
+            models.Index(fields=["tuesday_open", "tuesday_close"]),
+            models.Index(fields=["wednesday_open", "wednesday_close"]),
+            models.Index(fields=["thursday_open", "thursday_close"]),
+            models.Index(fields=["friday_open", "friday_close"]),
+            models.Index(fields=["saturday_open", "saturday_close"]),
+            models.Index(fields=["sunday_open", "sunday_close"]),
         ]
 
     def __str__(self):
         status = " (Inactive)" if not self.active else ""
         return f"{self.name} ({self.amenity_type.name}){status}"
 
+    # Hours helpers
+
+    DAY_FIELD_MAP = {
+        0: ("monday_open", "monday_close"),
+        1: ("tuesday_open", "tuesday_close"),
+        2: ("wednesday_open", "wednesday_close"),
+        3: ("thursday_open", "thursday_close"),
+        4: ("friday_open", "friday_close"),
+        5: ("saturday_open", "saturday_close"),
+        6: ("sunday_open", "sunday_close"),
+    }
+
+    def get_todays_hours(self, now: datetime.datetime = None):
+        """
+        Returns (open_time, close_time) for today, or (None, None) if unknown/closed.
+        Pass a datetime for testing; defaults to current local time.
+        """
+        if self.is_open_24hrs:
+            return (datetime.time(0, 0), datetime.time(0, 0))
+        now = now or datetime.datetime.now()
+        open_field, close_field = self.DAY_FIELD_MAP[now.weekday()]
+        return (getattr(self, open_field), getattr(self, close_field))
+
+    def is_open_now(self, now: datetime.datetime = None) -> bool | None:
+        """
+        Returns True if currently open, False if currently closed, None if unknown.
+        Handles overnight hours (e.g. 18:00 - 02:00).
+        """
+        if not self.active:
+            return False
+        if self.is_open_24hrs:
+            return True
+
+        now = now or datetime.datetime.now()
+        open_t, close_t = self.get_todays_hours(now)
+
+        if open_t is None or close_t is None:
+            yesterday_idx = (now.weekday() - 1) % 7
+            y_open_field, y_close_field = self.DAY_FIELD_MAP[yesterday_idx]
+            y_open = getattr(self, y_open_field)
+            y_close = getattr(self, y_close_field)
+            if y_open and y_close and y_close < y_open:
+                if now.time() < y_close:
+                    return True
+            return None
+
+        current = now.time()
+
+        if close_t <= open_t:
+            return current >= open_t or current < close_t
+        else:
+            return open_t <= current < close_t
+
+    def hours_display(self) -> dict:
+        """
+        Returns a human-friendly dict of
+        {day_name: 'HH:MM - HH:MM' or 'Closed' or 'Unknown'}.
+        Useful for templates.
+        """
+        result = {}
+        day_names = [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
+        ]
+        for idx, (open_field, close_field) in self.DAY_FIELD_MAP.items():
+            day_name = day_names[idx]
+            o = getattr(self, open_field)
+            c = getattr(self, close_field)
+            if self.is_open_24hrs:
+                result[day_name] = "24 Hours"
+            elif o and c:
+                result[day_name] = (
+                    f'{o.strftime("%I:%M %p").lstrip("0")} '
+                    f'- {c.strftime("%I:%M %p").lstrip("0")}'
+                )
+            else:
+                result[day_name] = "Unknown"
+        return result
+
+    # Review helpers
+
     def get_average_rating(self):
-        """Calculate average rating from all reviews"""
         reviews = self.reviews.all()
         if not reviews.exists():
             return None
@@ -111,12 +216,11 @@ class Amenity(models.Model):
         return reviews.aggregate(Avg("rating"))["rating__avg"]
 
     def get_review_count(self):
-        """Get total number of reviews"""
         return self.reviews.count()
 
 
 class Review(models.Model):
-    """User review for an amenity"""
+    """User review for an amenity."""
 
     amenity = models.ForeignKey(
         Amenity, on_delete=models.CASCADE, related_name="reviews"
@@ -138,7 +242,7 @@ class Review(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        unique_together = [("amenity", "user")]  # One review per user per amenity
+        unique_together = [("amenity", "user")]
         indexes = [
             models.Index(fields=["amenity", "-created_at"]),
             models.Index(fields=["user", "-created_at"]),
@@ -150,7 +254,7 @@ class Review(models.Model):
 
 
 class AmenityPhoto(models.Model):
-    """Photos for amenities uploaded by users"""
+    """Photos for amenities uploaded by users."""
 
     amenity = models.ForeignKey(
         Amenity, on_delete=models.CASCADE, related_name="photos"
@@ -160,9 +264,7 @@ class AmenityPhoto(models.Model):
     uploaded_by = models.ForeignKey(
         CustomUser, on_delete=models.CASCADE, related_name="amenity_photos"
     )
-    is_primary = models.BooleanField(
-        default=False
-    )  # Mark one photo as the primary/featured photo
+    is_primary = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
