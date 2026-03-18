@@ -1,5 +1,8 @@
 const map = L.map('map', { renderer: L.canvas(), zoomControl: false }).setView([40.73, -73.99], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+
+const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const tileUrl = isLocalhost ? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' : '/tiles/{z}/{x}/{y}.png';
+L.tileLayer(tileUrl, {
     maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 }).addTo(map);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
