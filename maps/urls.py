@@ -1,4 +1,5 @@
 from django.urls import path
+from django.conf import settings
 from . import views
 
 app_name = "maps"
@@ -13,3 +14,8 @@ urlpatterns = [
     path("api/auth/me/", views.current_user_api, name="current_user_api"),
     path("api/reviews/", views.create_review_api, name="create_review_api"),
 ]
+
+if settings.DEBUG:
+    urlpatterns += [
+        path('tiles/<int:z>/<int:x>/<int:y>.png', views.proxy_osm_tiles, name='proxy_osm_tiles'),
+    ]
