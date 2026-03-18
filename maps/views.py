@@ -1,5 +1,5 @@
 from django.shortcuts import render
-from django.http import JsonResponse, HttpResponse
+from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import authenticate, login, logout
@@ -25,24 +25,6 @@ def map_view(request):
     """Render the main map view."""
     amenity_types = AmenityType.objects.all()
     return render(request, "maps/map.html", {"amenity_types": amenity_types})
-
-
-def proxy_osm_tiles(request, z, x, y):
-    """
-    Local development proxy for OpenStreetMap tiles.
-    In production (AWS), this is handled directly by Nginx.
-    """
-    url = f"https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-    headers = {
-        # Match the Nginx User-Agent to respect OSM policies
-        "User-Agent": "AmenityHelpMap/1.0 (contact@amenity.help)"
-    }
-    try:
-        r = requests.get(url, headers=headers, timeout=5)
-        r.raise_for_status()
-        return HttpResponse(r.content, content_type=r.headers.get("content-type", "image/png"))
-    except requests.RequestException:
-        return HttpResponse(status=502)
 
 
 def get_cluster_grid_size(zoom):
