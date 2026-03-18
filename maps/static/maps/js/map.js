@@ -22,6 +22,9 @@ let allAmenitiesData       = {};
 let searchTimeout          = null;
 let searchAbortController  = null;
 let currentDetailAmenity   = null;
+let nearbyHoverMarker      = null;
+let pinnedHoverAmenity     = null;
+let blockNearbyHover       = false;
 let currentUser            = null;
 let hoverTooltipTimer      = null;
 
@@ -296,7 +299,8 @@ function resetTimeFilter() {
 }
 
 function updateResetBtn() {
-    const has = hoursFilter.openNow || hoursFilter.selectedDays.size > 0 || hoursFilter.fromMinutes !== 0 || hoursFilter.toMinutes !== 1439;
+    const isDefaultDays = hoursFilter.selectedDays.size === 1 && hoursFilter.selectedDays.has(new Date().getDay());
+    const has = hoursFilter.openNow || !isDefaultDays || hoursFilter.fromMinutes !== 0 || hoursFilter.toMinutes !== 1439;
     document.getElementById('reset-filters-btn').classList.toggle('has-filters', has);
 }
 
@@ -344,13 +348,34 @@ function makeChip(label, cls, onClick) {
 }
 
 function setupSidebarToggle() {
-    const sidebar  = document.getElementById('sidebar');
-    const openBtn  = document.getElementById('sidebar-open-btn');
-    function collapse() { sidebar.classList.add('collapsed'); openBtn.style.display = 'flex'; }
-    function expand()   { sidebar.classList.remove('collapsed'); openBtn.style.display = 'none'; }
+    const sidebar = document.getElementById('sidebar');
+    const openBtn = document.getElementById('sidebar-open-btn');
+    const body = document.body;
+
+    function collapse() {
+        sidebar.classList.add('collapsed');
+        openBtn.style.display = 'flex';
+        body.classList.remove('sidebar-open');
+    }
+
+    function expand() {
+        sidebar.classList.remove('collapsed');
+        openBtn.style.display = 'none';
+        body.classList.add('sidebar-open');
+        if (window.innerWidth <= 768) {
+            closeDetailPanel();
+        }
+    }
+
     document.getElementById('sidebar-toggle').addEventListener('click', collapse);
     openBtn.addEventListener('click', expand);
-    openBtn.style.display = 'none';
+
+    // Default state based on screen size
+    if (window.innerWidth <= 768) {
+        collapse();
+    } else {
+        expand();
+    }
 }
 
 const hoverTooltip = (() => {
@@ -368,9 +393,15 @@ const hoverTooltip = (() => {
     function pos(mx, my) {
         const pad = 16, w = el.offsetWidth || 250, h = el.offsetHeight || 160;
         let x = mx + 18, y = my - 20;
+        
+        // Check right and left edges
         if (x + w + pad > window.innerWidth) x = mx - w - 18;
-        if (y + h + pad > window.innerHeight) y = my - h + 20;
+        if (x < pad) x = pad;
+        
+        // Check bottom and top edges
+        if (y + h + pad > window.innerHeight) y = window.innerHeight - h - pad;
         if (y < pad) y = pad;
+        
         el.style.left = x + 'px'; el.style.top = y + 'px';
     }
 
@@ -487,14 +518,21 @@ function addAmenityMarker(amenity) {
                 <defs><style>.p${amenity.id}{fill:${amenity.color};stroke:rgba(0,0,0,.22);stroke-width:.5}</style></defs>
                 <g class="p${amenity.id}">${svgPaths[amenity.icon] || svgPaths.default}</g>
             </svg></div>`,
-        iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -32], className: 'leaflet-div-icon-custom',
+        iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -32], className: 'leaflet-div-icon-custom amenity-marker-icon',
     });
 
     const marker = L.marker([amenity.latitude, amenity.longitude], { icon, amenityData: amenity });
     marker.on('mouseover', e => { clearTimeout(hoverTooltipTimer); hoverTooltip.show(amenity, e.originalEvent.clientX, e.originalEvent.clientY); });
     marker.on('mousemove', e => hoverTooltip.move(e.originalEvent.clientX, e.originalEvent.clientY));
     marker.on('mouseout',  () => { hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); });
-    marker.on('click', e => { L.DomEvent.stopPropagation(e); hoverTooltip.hide(); showDetailPanel(amenity); });
+    marker.on('click', e => {
+        if (nearbyHoverMarker) {
+            map.removeLayer(nearbyHoverMarker);
+            nearbyHoverMarker = null;
+        }
+        pinnedHoverAmenity = null;
+        showDetailPanel(amenity); 
+    });
 
     if (amenity.type === 'Bike Rack' || amenity.type.includes('Bike Rack')) bikeRackMarkers.addLayer(marker);
     else otherAmenityMarkers.addLayer(marker);
@@ -519,17 +557,39 @@ function showDetailPanel(amenity, activeTab = 'overview') {
     renderReviewsTab(amenity);
     renderNearbyTab(amenity);
     switchDetailTab(activeTab);
-    document.getElementById('detail-panel').classList.add('open');
+    const panel = document.getElementById('detail-panel');
+    panel.classList.add('open');
+    document.body.classList.add('detail-open');
+
+    if (window.innerWidth <= 768) {
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar && !sidebar.classList.contains('collapsed')) {
+            sidebar.classList.add('collapsed');
+            const openBtn = document.getElementById('sidebar-open-btn');
+            if (openBtn) openBtn.style.display = 'flex';
+            document.body.classList.remove('sidebar-open');
+        }
+    }
 }
 
 function switchDetailTab(name) {
     document.querySelectorAll('.dp-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
     document.querySelectorAll('.dp-tab-pane').forEach(p => p.classList.toggle('active', p.id === `tab-${name}`));
+    const panel = document.getElementById('detail-panel');
+    if (panel) {
+        panel.classList.toggle('nearby-active', name === 'nearby');
+    }
 }
 
 function closeDetailPanel() {
     document.getElementById('detail-panel').classList.remove('open');
+    document.body.classList.remove('detail-open');
     currentDetailAmenity = null;
+    if (nearbyHoverMarker) {
+        map.removeLayer(nearbyHoverMarker);
+        nearbyHoverMarker = null;
+    }
+    pinnedHoverAmenity = null;
 }
 
 function renderOverviewTab(amenity) {
@@ -590,6 +650,7 @@ function renderNearbyTab(a) {
 
     const candidates = [];
     Object.values(allAmenitiesData).flat().forEach(x => {
+        if (x.is_cluster) return;
         if (x.id === a.id || x.type !== a.type) return;
         if (!evaluateHoursFilter(x).pass) return;
         const km = haversineKm(a.latitude, a.longitude, x.latitude, x.longitude);
@@ -621,9 +682,58 @@ function renderNearbyTab(a) {
 
     pane.innerHTML = `<div class="nearby-header">${fromLabel}</div><div class="nearby-list">${rows}</div>`;
     pane.querySelectorAll('.nearby-card').forEach(card => {
+        const found = Object.values(allAmenitiesData).flat().find(x => String(x.id) === String(card.dataset.id));
+        if (!found) return;
+
+        card.addEventListener('mouseenter', () => {
+            if (blockNearbyHover) return;
+
+            if (!nearbyHoverMarker) {
+                nearbyHoverMarker = L.marker([found.latitude, found.longitude], {
+                    zIndexOffset: 1000, interactive: false,
+                    icon: L.icon({
+                        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-yellow.png',
+                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                        iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+                        className: 'hover-pin-bright'
+                    })
+                }).addTo(map);
+            } else {
+                nearbyHoverMarker.setLatLng([found.latitude, found.longitude]);
+                if (!map.hasLayer(nearbyHoverMarker)) nearbyHoverMarker.addTo(map);
+            }
+        });
+        card.addEventListener('mouseleave', () => {
+            if (blockNearbyHover) return;
+            
+            if (pinnedHoverAmenity) {
+                nearbyHoverMarker.setLatLng([pinnedHoverAmenity.latitude, pinnedHoverAmenity.longitude]);
+                if (!map.hasLayer(nearbyHoverMarker)) nearbyHoverMarker.addTo(map);
+            } else {
+                if (nearbyHoverMarker) { map.removeLayer(nearbyHoverMarker); nearbyHoverMarker = null; }
+            }
+        });
         card.addEventListener('click', () => {
-            const found = Object.values(allAmenitiesData).flat().find(x => x.id === parseInt(card.dataset.id));
-            if (found) { map.flyTo([found.latitude, found.longitude], 17); showDetailPanel(found, 'nearby'); }
+            blockNearbyHover = true;
+            document.addEventListener('mousemove', () => { blockNearbyHover = false; }, { once: true });
+            pinnedHoverAmenity = found;
+
+            if (!nearbyHoverMarker) {
+                nearbyHoverMarker = L.marker([found.latitude, found.longitude], {
+                    zIndexOffset: 1000, interactive: false,
+                    icon: L.icon({
+                        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-yellow.png',
+                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                        iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+                        className: 'hover-pin-bright'
+                    })
+                }).addTo(map);
+            } else {
+                nearbyHoverMarker.setLatLng([found.latitude, found.longitude]);
+                if (!map.hasLayer(nearbyHoverMarker)) nearbyHoverMarker.addTo(map);
+            }
+            
+            map.flyTo([found.latitude, found.longitude], 17); showDetailPanel(found, 'nearby');
         });
     });
 }
@@ -1197,7 +1307,24 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('reset-filters-btn').addEventListener('click', resetAllFilters);
     document.getElementById('location-button').addEventListener('click', retryGeolocation);
     document.getElementById('detail-close-btn').addEventListener('click', closeDetailPanel);
-    map.on('click', () => { closeDetailPanel(); hoverTooltip.hide(); });
+    map.on('click', (e) => {
+        // If the click is on a marker, do nothing.
+        if (e.originalEvent.target.closest('.amenity-marker-icon')) {
+            return;
+        }
+
+        closeDetailPanel();
+        hoverTooltip.hide();
+
+        if (window.innerWidth <= 768) {
+            const sidebar = document.getElementById('sidebar');
+            if (!sidebar.classList.contains('collapsed')) {
+                sidebar.classList.add('collapsed');
+                document.getElementById('sidebar-open-btn').style.display = 'flex';
+                document.body.classList.remove('sidebar-open');
+            }
+        }
+    });
 
     document.getElementById('include-inactive').addEventListener('change', loadAmenities);
     document.getElementById('only-accessible').addEventListener('change', loadAmenities);
