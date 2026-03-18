@@ -9,7 +9,6 @@ from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser
 from django.db.models import Avg, Count, Subquery, OuterRef
 from decimal import Decimal
 import json
-import requests
 
 
 def normalize_longitude(lon):
