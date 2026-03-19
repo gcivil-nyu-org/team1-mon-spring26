@@ -1,4 +1,4 @@
-const map = L.map('map', { renderer: L.canvas(), zoomControl: false }).setView([40.73, -73.99], 13);
+const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0 }).setView([40.73, -73.99], 13);
 
 const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const tileUrl = isLocalhost ? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' : '/tiles/{z}/{x}/{y}.png';
@@ -1358,6 +1358,66 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('reset-filters-btn').addEventListener('click', resetAllFilters);
     document.getElementById('location-button').addEventListener('click', retryGeolocation);
     document.getElementById('detail-close-btn').addEventListener('click', () => closeDetailPanel());
+
+    // --- 2-Finger Pinch/Pan on Detail Panel ---
+    const dp = document.getElementById('detail-panel');
+    let pinchStartDist = 0;
+    let pinchStartZoom = 0;
+    let pinchCenter = null;
+    let pinchStartTouchCenter = null;
+
+    dp.addEventListener('touchstart', e => {
+        if (e.touches.length === 2 && dp.classList.contains('nearby-active')) {
+            e.preventDefault();
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            pinchStartDist = Math.sqrt(dx * dx + dy * dy);
+            pinchStartZoom = map.getZoom();
+            
+            pinchStartTouchCenter = L.point(
+                (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                (e.touches[0].clientY + e.touches[1].clientY) / 2
+            );
+            
+            const mapRect = document.getElementById('map').getBoundingClientRect();
+            pinchCenter = map.containerPointToLatLng([
+                pinchStartTouchCenter.x - mapRect.left, 
+                pinchStartTouchCenter.y - mapRect.top
+            ]);
+        }
+    }, { passive: false });
+
+    dp.addEventListener('touchmove', e => {
+        if (e.touches.length === 2 && dp.classList.contains('nearby-active') && pinchStartDist > 0) {
+            e.preventDefault();
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            
+            const zoomDelta = Math.log2(dist / pinchStartDist);
+            map.setZoomAround(pinchCenter, pinchStartZoom + zoomDelta, { animate: false });
+            
+            const currentTouchCenter = L.point(
+                (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                (e.touches[0].clientY + e.touches[1].clientY) / 2
+            );
+            
+            const panX = pinchStartTouchCenter.x - currentTouchCenter.x;
+            const panY = pinchStartTouchCenter.y - currentTouchCenter.y;
+            
+            if (panX !== 0 || panY !== 0) {
+                map.panBy([panX, panY], { animate: false });
+                pinchStartTouchCenter = currentTouchCenter;
+            }
+        }
+    }, { passive: false });
+
+    dp.addEventListener('touchend', e => {
+        if (e.touches.length < 2) {
+            pinchStartDist = 0;
+        }
+    });
+
     map.on('click', (e) => {
         // If the click is on a marker, do nothing.
         if (e.originalEvent.target.closest('.amenity-marker-icon')) {
