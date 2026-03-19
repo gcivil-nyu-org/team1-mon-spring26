@@ -562,11 +562,6 @@ function addAmenityMarker(amenity) {
     marker.on('mousemove', e => hoverTooltip.move(e.originalEvent.clientX, e.originalEvent.clientY));
     marker.on('mouseout',  () => { hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); });
     marker.on('click', e => {
-        if (nearbyHoverMarker) {
-            map.removeLayer(nearbyHoverMarker);
-            nearbyHoverMarker = null;
-        }
-        pinnedHoverAmenity = null;
         hoverTooltip.hide();
         showDetailPanel(amenity); 
     });
@@ -588,6 +583,23 @@ function distLabel(fromLat, fromLon, toLat, toLon) {
 
 function showDetailPanel(amenity, activeTab = 'overview') {
     currentDetailAmenity = amenity;
+    pinnedHoverAmenity = amenity;
+
+    if (!nearbyHoverMarker) {
+        nearbyHoverMarker = L.marker([amenity.latitude, amenity.longitude], {
+            zIndexOffset: 1000, interactive: false,
+            icon: L.icon({
+                iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-yellow.png',
+                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+                className: 'hover-pin-bright'
+            })
+        }).addTo(map);
+    } else {
+        nearbyHoverMarker.setLatLng([amenity.latitude, amenity.longitude]);
+        if (!map.hasLayer(nearbyHoverMarker)) nearbyHoverMarker.addTo(map);
+    }
+
     document.getElementById('detail-name').textContent       = amenity.prop_name || amenity.name;
     document.getElementById('detail-type-badge').textContent = amenity.type;
     renderOverviewTab(amenity);
@@ -764,22 +776,6 @@ function renderNearbyTab(a) {
         card.addEventListener('click', () => {
             blockNearbyHover = true;
             document.addEventListener('mousemove', () => { blockNearbyHover = false; }, { once: true });
-            pinnedHoverAmenity = found;
-
-            if (!nearbyHoverMarker) {
-                nearbyHoverMarker = L.marker([found.latitude, found.longitude], {
-                    zIndexOffset: 1000, interactive: false,
-                    icon: L.icon({
-                        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-yellow.png',
-                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-                        iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
-                        className: 'hover-pin-bright'
-                    })
-                }).addTo(map);
-            } else {
-                nearbyHoverMarker.setLatLng([found.latitude, found.longitude]);
-                if (!map.hasLayer(nearbyHoverMarker)) nearbyHoverMarker.addTo(map);
-            }
             
             if (found.is_cluster) {
                 map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
