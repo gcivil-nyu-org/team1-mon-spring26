@@ -22,6 +22,7 @@ let allAmenitiesData       = {};
 let searchTimeout          = null;
 let searchAbortController  = null;
 let currentDetailAmenity   = null;
+let amenityAbortController = null;
 let nearbyHoverMarker      = null;
 let pinnedHoverAmenity     = null;
 let blockNearbyHover       = false;
@@ -159,8 +160,15 @@ function updateHoursFilterVisibility() {
 }
 
 function loadAmenities() {
-    allAmenitiesData = {};
-    if (!activeAmenityTypes.size) { updateDisplayedAmenities(); return; }
+    if (amenityAbortController) amenityAbortController.abort();
+    amenityAbortController = new AbortController();
+
+    if (!activeAmenityTypes.size) { 
+        allAmenitiesData = {}; 
+        updateDisplayedAmenities(); 
+        return; 
+    }
+
     const b = map.getBounds();
     const params = new URLSearchParams({
         north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest(),
@@ -169,14 +177,18 @@ function loadAmenities() {
         only_accessible:  document.getElementById('only-accessible').checked,
     });
     activeAmenityTypes.forEach(id => params.append('type_id', id));
-    fetch(`/api/amenities/?${params}`).then(r => r.json()).then(data => {
+    fetch(`/api/amenities/?${params}`, { signal: amenityAbortController.signal }).then(r => r.json()).then(data => {
+        allAmenitiesData = {};
         data.amenities.forEach(a => {
             if (!allAmenitiesData[a.type_id]) allAmenitiesData[a.type_id] = [];
             if (!allAmenitiesData[a.type_id].some(x => x.id === a.id)) allAmenitiesData[a.type_id].push(a);
         });
         updateDisplayedAmenities();
         updateHoursFilterVisibility();
-    }).catch(e => console.error('Error loading amenities:', e));
+        if (currentDetailAmenity) {
+            renderNearbyTab(currentDetailAmenity);
+        }
+    }).catch(e => { if (e.name !== 'AbortError') console.error('Error loading amenities:', e); });
 }
 
 function evaluateHoursFilter(amenity) {
@@ -382,13 +394,25 @@ const hoverTooltip = (() => {
     const el = document.createElement('div');
     el.id = 'amenity-hover-tooltip';
     Object.assign(el.style, {
-        position: 'fixed', zIndex: '9000', pointerEvents: 'none',
+        position: 'fixed', zIndex: '9000', pointerEvents: 'auto', cursor: 'pointer',
         background: 'var(--surface,#fff)', border: '1px solid var(--border,#e8e8e5)',
         borderRadius: '12px', boxShadow: '0 8px 32px rgba(0,0,0,.16),0 2px 8px rgba(0,0,0,.08)',
         minWidth: '220px', maxWidth: '280px', display: 'none', opacity: '0',
         transition: 'opacity .15s ease', fontFamily: "'DM Sans',system-ui,sans-serif", overflow: 'hidden',
     });
     document.body.appendChild(el);
+
+    let currentA = null;
+
+    el.addEventListener('click', () => {
+        if (currentA) {
+            showDetailPanel(currentA);
+            hoverTooltip.hide();
+        }
+    });
+
+    el.addEventListener('mouseenter', () => clearTimeout(hoverTooltipTimer));
+    el.addEventListener('mouseleave', () => { hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); });
 
     function pos(mx, my) {
         const pad = 16, w = el.offsetWidth || 250, h = el.offsetHeight || 160;
@@ -406,7 +430,7 @@ const hoverTooltip = (() => {
     }
 
     return {
-        show(a, mx, my) { el.innerHTML = buildTooltipHtml(a); el.style.display = 'block'; pos(mx, my); requestAnimationFrame(() => el.style.opacity = '1'); },
+        show(a, mx, my) { currentA = a; el.innerHTML = buildTooltipHtml(a); el.style.display = 'block'; pos(mx, my); requestAnimationFrame(() => el.style.opacity = '1'); },
         move(mx, my)    { if (el.style.display !== 'none') pos(mx, my); },
         hide()          { el.style.opacity = '0'; setTimeout(() => { if (el.style.opacity === '0') el.style.display = 'none'; }, 150); },
     };
@@ -531,6 +555,7 @@ function addAmenityMarker(amenity) {
             nearbyHoverMarker = null;
         }
         pinnedHoverAmenity = null;
+        hoverTooltip.hide();
         showDetailPanel(amenity); 
     });
 
@@ -581,15 +606,17 @@ function switchDetailTab(name) {
     }
 }
 
-function closeDetailPanel() {
+function closeDetailPanel(keepPinned = false) {
     document.getElementById('detail-panel').classList.remove('open');
     document.body.classList.remove('detail-open');
     currentDetailAmenity = null;
-    if (nearbyHoverMarker) {
-        map.removeLayer(nearbyHoverMarker);
-        nearbyHoverMarker = null;
+    if (!keepPinned) {
+        if (nearbyHoverMarker) {
+            map.removeLayer(nearbyHoverMarker);
+            nearbyHoverMarker = null;
+        }
+        pinnedHoverAmenity = null;
     }
-    pinnedHoverAmenity = null;
 }
 
 function renderOverviewTab(amenity) {
@@ -650,9 +677,8 @@ function renderNearbyTab(a) {
 
     const candidates = [];
     Object.values(allAmenitiesData).flat().forEach(x => {
-        if (x.is_cluster) return;
         if (x.id === a.id || x.type !== a.type) return;
-        if (!evaluateHoursFilter(x).pass) return;
+        if (!x.is_cluster && !evaluateHoursFilter(x).pass) return;
         const km = haversineKm(a.latitude, a.longitude, x.latitude, x.longitude);
         candidates.push({ x, km });
     });
@@ -669,6 +695,16 @@ function renderNearbyTab(a) {
     const rows = nearby.map(({ x, km }) => {
         const mi   = km * 0.621371;
         const dist = mi < 0.1 ? `${Math.round(mi * 5280)} ft` : `${mi.toFixed(2)} mi`;
+        if (x.is_cluster) {
+            return `<div class="nearby-card" data-id="${x.id}">
+                <div class="nearby-icon">${icon}</div>
+                <div class="nearby-info">
+                    <div class="nearby-name">${x.point_count} ${x.type}s</div>
+                    <div class="nearby-meta"><span style="color:var(--text-3);font-size:10px">●</span> Cluster</div>
+                </div>
+                <div class="nearby-dist">${dist}</div>
+            </div>`;
+        }
         const dot  = x.active ? '<span style="color:var(--green);font-size:10px">●</span>' : '<span style="color:var(--text-3);font-size:10px">●</span>';
         return `<div class="nearby-card" data-id="${x.id}">
             <div class="nearby-icon">${icon}</div>
@@ -733,7 +769,12 @@ function renderNearbyTab(a) {
                 if (!map.hasLayer(nearbyHoverMarker)) nearbyHoverMarker.addTo(map);
             }
             
-            map.flyTo([found.latitude, found.longitude], 17); showDetailPanel(found, 'nearby');
+            if (found.is_cluster) {
+                map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
+                closeDetailPanel();
+            } else {
+                map.flyTo([found.latitude, found.longitude], map.getZoom()); showDetailPanel(found, 'nearby');
+            }
         });
     });
 }
@@ -1303,18 +1344,31 @@ document.addEventListener('DOMContentLoaded', () => {
     map.addLayer(bikeRackMarkers);
     map.addLayer(otherAmenityMarkers);
     map.on('moveend', loadAmenities);
+    map.on('dragstart', () => hoverTooltip.hide());
+    map.on('zoomstart', () => hoverTooltip.hide());
 
     document.getElementById('reset-filters-btn').addEventListener('click', resetAllFilters);
     document.getElementById('location-button').addEventListener('click', retryGeolocation);
-    document.getElementById('detail-close-btn').addEventListener('click', closeDetailPanel);
+    document.getElementById('detail-close-btn').addEventListener('click', () => closeDetailPanel());
     map.on('click', (e) => {
         // If the click is on a marker, do nothing.
         if (e.originalEvent.target.closest('.amenity-marker-icon')) {
             return;
         }
 
-        closeDetailPanel();
-        hoverTooltip.hide();
+        const isMobile = window.innerWidth <= 768;
+        const wasOpen = document.getElementById('detail-panel').classList.contains('open');
+        const lastAmenity = currentDetailAmenity;
+
+        if (isMobile && wasOpen && lastAmenity) {
+            closeDetailPanel(true);
+            const pt = map.latLngToContainerPoint([lastAmenity.latitude, lastAmenity.longitude]);
+            const rect = document.getElementById('map').getBoundingClientRect();
+            hoverTooltip.show(lastAmenity, rect.left + pt.x, rect.top + pt.y);
+        } else {
+            closeDetailPanel();
+            hoverTooltip.hide();
+        }
 
         if (window.innerWidth <= 768) {
             const sidebar = document.getElementById('sidebar');
