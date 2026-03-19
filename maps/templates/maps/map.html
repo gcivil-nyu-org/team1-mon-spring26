@@ -14,6 +14,12 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
     <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+    <link rel="manifest" href="{% static 'maps/manifest.json' %}">
+    <meta name="theme-color" content="#ffffff">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <link rel="apple-touch-icon" href="{% static 'maps/catering-icon.png' %}">
+    <meta name="apple-mobile-web-app-title" content="NYC Essentials">
     <link rel="stylesheet" href="{% static 'maps/css/style.css' %}">
 </head>
 <body>
@@ -184,6 +190,18 @@
                 <button type="submit" class="btn-primary">Create Account →</button>
             </form>
         </div>
+    </div>
+</div>
+
+<div id="pwa-install-prompt" class="pwa-prompt" style="display:none;">
+    <div class="pwa-prompt-content">
+        <div class="pwa-prompt-icon">🗽</div>
+        <div class="pwa-prompt-text">
+            <strong>Install NYC Essentials</strong>
+            <span>Add to your home screen for quick access</span>
+        </div>
+        <button id="pwa-install-btn" class="btn-primary" style="width:auto;margin:0;padding:6px 12px;font-size:12px;">Install</button>
+        <button id="pwa-close-btn" class="pwa-close">✕</button>
     </div>
 </div>
 

@@ -1,5 +1,8 @@
-const map = L.map('map', { renderer: L.canvas(), zoomControl: false }).setView([40.73, -73.99], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0 }).setView([40.73, -73.99], 13);
+
+const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const tileUrl = isLocalhost ? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' : '/tiles/{z}/{x}/{y}.png';
+L.tileLayer(tileUrl, {
     maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 }).addTo(map);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -19,6 +22,10 @@ let allAmenitiesData       = {};
 let searchTimeout          = null;
 let searchAbortController  = null;
 let currentDetailAmenity   = null;
+let amenityAbortController = null;
+let nearbyHoverMarker      = null;
+let pinnedHoverAmenity     = null;
+let blockNearbyHover       = false;
 let currentUser            = null;
 let hoverTooltipTimer      = null;
 
@@ -153,24 +160,35 @@ function updateHoursFilterVisibility() {
 }
 
 function loadAmenities() {
-    allAmenitiesData = {};
-    if (!activeAmenityTypes.size) { updateDisplayedAmenities(); return; }
+    if (amenityAbortController) amenityAbortController.abort();
+    amenityAbortController = new AbortController();
+
+    if (!activeAmenityTypes.size) { 
+        allAmenitiesData = {}; 
+        updateDisplayedAmenities(); 
+        return; 
+    }
+
     const b = map.getBounds();
     const params = new URLSearchParams({
         north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest(),
-        zoom: map.getZoom(),
+        zoom: Math.round(map.getZoom()),
         include_inactive: document.getElementById('include-inactive').checked,
         only_accessible:  document.getElementById('only-accessible').checked,
     });
     activeAmenityTypes.forEach(id => params.append('type_id', id));
-    fetch(`/api/amenities/?${params}`).then(r => r.json()).then(data => {
+    fetch(`/api/amenities/?${params}`, { signal: amenityAbortController.signal }).then(r => r.json()).then(data => {
+        allAmenitiesData = {};
         data.amenities.forEach(a => {
             if (!allAmenitiesData[a.type_id]) allAmenitiesData[a.type_id] = [];
             if (!allAmenitiesData[a.type_id].some(x => x.id === a.id)) allAmenitiesData[a.type_id].push(a);
         });
         updateDisplayedAmenities();
         updateHoursFilterVisibility();
-    }).catch(e => console.error('Error loading amenities:', e));
+        if (currentDetailAmenity) {
+            renderNearbyTab(currentDetailAmenity);
+        }
+    }).catch(e => { if (e.name !== 'AbortError') console.error('Error loading amenities:', e); });
 }
 
 function evaluateHoursFilter(amenity) {
@@ -281,6 +299,8 @@ function resetAllFilters() {
     hoursFilter.fromMinutes = 0; hoursFilter.toMinutes = 1439;
     document.getElementById('time-from').value = 0;
     document.getElementById('time-to').value   = 1439;
+    document.getElementById('time-from-label').textContent = minsToTime(0);
+    document.getElementById('time-to-label').textContent   = minsToTime(1439);
     updateRangeFill();
     updateDisplayedAmenities(); updateResetBtn();
 }
@@ -289,11 +309,14 @@ function resetTimeFilter() {
     hoursFilter.fromMinutes = 0; hoursFilter.toMinutes = 1439;
     document.getElementById('time-from').value = 0;
     document.getElementById('time-to').value   = 1439;
+    document.getElementById('time-from-label').textContent = minsToTime(0);
+    document.getElementById('time-to-label').textContent   = minsToTime(1439);
     updateRangeFill(); updateDisplayedAmenities(); updateResetBtn();
 }
 
 function updateResetBtn() {
-    const has = hoursFilter.openNow || hoursFilter.selectedDays.size > 0 || hoursFilter.fromMinutes !== 0 || hoursFilter.toMinutes !== 1439;
+    const isDefaultDays = hoursFilter.selectedDays.size === 1 && hoursFilter.selectedDays.has(new Date().getDay());
+    const has = hoursFilter.openNow || !isDefaultDays || hoursFilter.fromMinutes !== 0 || hoursFilter.toMinutes !== 1439;
     document.getElementById('reset-filters-btn').classList.toggle('has-filters', has);
 }
 
@@ -341,20 +364,41 @@ function makeChip(label, cls, onClick) {
 }
 
 function setupSidebarToggle() {
-    const sidebar  = document.getElementById('sidebar');
-    const openBtn  = document.getElementById('sidebar-open-btn');
-    function collapse() { sidebar.classList.add('collapsed'); openBtn.style.display = 'flex'; }
-    function expand()   { sidebar.classList.remove('collapsed'); openBtn.style.display = 'none'; }
+    const sidebar = document.getElementById('sidebar');
+    const openBtn = document.getElementById('sidebar-open-btn');
+    const body = document.body;
+
+    function collapse() {
+        sidebar.classList.add('collapsed');
+        openBtn.style.display = 'flex';
+        body.classList.remove('sidebar-open');
+    }
+
+    function expand() {
+        sidebar.classList.remove('collapsed');
+        openBtn.style.display = 'none';
+        body.classList.add('sidebar-open');
+        if (window.innerWidth <= 768) {
+            closeDetailPanel();
+        }
+    }
+
     document.getElementById('sidebar-toggle').addEventListener('click', collapse);
     openBtn.addEventListener('click', expand);
-    openBtn.style.display = 'none';
+
+    // Default state based on screen size
+    if (window.innerWidth <= 768) {
+        collapse();
+    } else {
+        expand();
+    }
 }
 
 const hoverTooltip = (() => {
     const el = document.createElement('div');
     el.id = 'amenity-hover-tooltip';
     Object.assign(el.style, {
-        position: 'fixed', zIndex: '9000', pointerEvents: 'none',
+        position: 'fixed', zIndex: '9000', pointerEvents: 'auto', cursor: 'pointer',
         background: 'var(--surface,#fff)', border: '1px solid var(--border,#e8e8e5)',
         borderRadius: '12px', boxShadow: '0 8px 32px rgba(0,0,0,.16),0 2px 8px rgba(0,0,0,.08)',
         minWidth: '220px', maxWidth: '280px', display: 'none', opacity: '0',
@@ -362,19 +406,49 @@ const hoverTooltip = (() => {
     });
     document.body.appendChild(el);
 
+    let currentA = null;
+    let showFrameId = null;
+
+    el.addEventListener('click', () => {
+        if (currentA) {
+            showDetailPanel(currentA);
+            hoverTooltip.hide();
+        }
+    });
+
+    el.addEventListener('mouseenter', () => clearTimeout(hoverTooltipTimer));
+    el.addEventListener('mouseleave', () => { hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); });
+
     function pos(mx, my) {
         const pad = 16, w = el.offsetWidth || 250, h = el.offsetHeight || 160;
         let x = mx + 18, y = my - 20;
+        
+        // Check right and left edges
         if (x + w + pad > window.innerWidth) x = mx - w - 18;
-        if (y + h + pad > window.innerHeight) y = my - h + 20;
+        if (x < pad) x = pad;
+        
+        // Check bottom and top edges
+        if (y + h + pad > window.innerHeight) y = window.innerHeight - h - pad;
         if (y < pad) y = pad;
+        
         el.style.left = x + 'px'; el.style.top = y + 'px';
     }
 
     return {
-        show(a, mx, my) { el.innerHTML = buildTooltipHtml(a); el.style.display = 'block'; pos(mx, my); requestAnimationFrame(() => el.style.opacity = '1'); },
+        show(a, mx, my) { 
+            currentA = a; 
+            el.innerHTML = buildTooltipHtml(a); 
+            el.style.display = 'block'; 
+            pos(mx, my); 
+            if (showFrameId) cancelAnimationFrame(showFrameId);
+            showFrameId = requestAnimationFrame(() => el.style.opacity = '1'); 
+        },
         move(mx, my)    { if (el.style.display !== 'none') pos(mx, my); },
-        hide()          { el.style.opacity = '0'; setTimeout(() => { if (el.style.opacity === '0') el.style.display = 'none'; }, 150); },
+        hide()          { 
+            if (showFrameId) cancelAnimationFrame(showFrameId);
+            el.style.opacity = '0'; 
+            setTimeout(() => { if (el.style.opacity === '0') el.style.display = 'none'; }, 150); 
+        },
     };
 })();
 
@@ -484,14 +558,17 @@ function addAmenityMarker(amenity) {
                 <defs><style>.p${amenity.id}{fill:${amenity.color};stroke:rgba(0,0,0,.22);stroke-width:.5}</style></defs>
                 <g class="p${amenity.id}">${svgPaths[amenity.icon] || svgPaths.default}</g>
             </svg></div>`,
-        iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -32], className: 'leaflet-div-icon-custom',
+        iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -32], className: 'leaflet-div-icon-custom amenity-marker-icon',
     });
 
     const marker = L.marker([amenity.latitude, amenity.longitude], { icon, amenityData: amenity });
     marker.on('mouseover', e => { clearTimeout(hoverTooltipTimer); hoverTooltip.show(amenity, e.originalEvent.clientX, e.originalEvent.clientY); });
     marker.on('mousemove', e => hoverTooltip.move(e.originalEvent.clientX, e.originalEvent.clientY));
     marker.on('mouseout',  () => { hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); });
-    marker.on('click', e => { L.DomEvent.stopPropagation(e); hoverTooltip.hide(); showDetailPanel(amenity); });
+    marker.on('click', e => {
+        hoverTooltip.hide();
+        showDetailPanel(amenity); 
+    });
 
     if (amenity.type === 'Bike Rack' || amenity.type.includes('Bike Rack')) bikeRackMarkers.addLayer(marker);
     else otherAmenityMarkers.addLayer(marker);
@@ -510,22 +587,64 @@ function distLabel(fromLat, fromLon, toLat, toLon) {
 
 function showDetailPanel(amenity, activeTab = 'overview') {
     currentDetailAmenity = amenity;
+    pinnedHoverAmenity = amenity;
+
+    if (!nearbyHoverMarker) {
+        nearbyHoverMarker = L.marker([amenity.latitude, amenity.longitude], {
+            zIndexOffset: 1000, interactive: false,
+            icon: L.icon({
+                iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-yellow.png',
+                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+                className: 'hover-pin-bright'
+            })
+        }).addTo(map);
+    } else {
+        nearbyHoverMarker.setLatLng([amenity.latitude, amenity.longitude]);
+        if (!map.hasLayer(nearbyHoverMarker)) nearbyHoverMarker.addTo(map);
+    }
+
     document.getElementById('detail-name').textContent       = amenity.prop_name || amenity.name;
     document.getElementById('detail-type-badge').textContent = amenity.type;
     renderOverviewTab(amenity);
+    renderReviewsTab(amenity);
     renderNearbyTab(amenity);
     switchDetailTab(activeTab);
-    document.getElementById('detail-panel').classList.add('open');
+    const panel = document.getElementById('detail-panel');
+    panel.classList.add('open');
+    document.body.classList.add('detail-open');
+
+    if (window.innerWidth <= 768) {
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar && !sidebar.classList.contains('collapsed')) {
+            sidebar.classList.add('collapsed');
+            const openBtn = document.getElementById('sidebar-open-btn');
+            if (openBtn) openBtn.style.display = 'flex';
+            document.body.classList.remove('sidebar-open');
+        }
+    }
 }
 
 function switchDetailTab(name) {
     document.querySelectorAll('.dp-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
     document.querySelectorAll('.dp-tab-pane').forEach(p => p.classList.toggle('active', p.id === `tab-${name}`));
+    const panel = document.getElementById('detail-panel');
+    if (panel) {
+        panel.classList.toggle('nearby-active', name === 'nearby');
+    }
 }
 
-function closeDetailPanel() {
+function closeDetailPanel(keepPinned = false) {
     document.getElementById('detail-panel').classList.remove('open');
+    document.body.classList.remove('detail-open');
     currentDetailAmenity = null;
+    if (!keepPinned) {
+        if (nearbyHoverMarker) {
+            map.removeLayer(nearbyHoverMarker);
+            nearbyHoverMarker = null;
+        }
+        pinnedHoverAmenity = null;
+    }
 }
 
 function renderOverviewTab(amenity) {
@@ -587,7 +706,7 @@ function renderNearbyTab(a) {
     const candidates = [];
     Object.values(allAmenitiesData).flat().forEach(x => {
         if (x.id === a.id || x.type !== a.type) return;
-        if (!evaluateHoursFilter(x).pass) return;
+        if (!x.is_cluster && !evaluateHoursFilter(x).pass) return;
         const km = haversineKm(a.latitude, a.longitude, x.latitude, x.longitude);
         candidates.push({ x, km });
     });
@@ -604,6 +723,16 @@ function renderNearbyTab(a) {
     const rows = nearby.map(({ x, km }) => {
         const mi   = km * 0.621371;
         const dist = mi < 0.1 ? `${Math.round(mi * 5280)} ft` : `${mi.toFixed(2)} mi`;
+        if (x.is_cluster) {
+            return `<div class="nearby-card" data-id="${x.id}">
+                <div class="nearby-icon">${icon}</div>
+                <div class="nearby-info">
+                    <div class="nearby-name">${x.point_count} ${x.type}s</div>
+                    <div class="nearby-meta"><span style="color:var(--text-3);font-size:10px">●</span> Cluster</div>
+                </div>
+                <div class="nearby-dist">${dist}</div>
+            </div>`;
+        }
         const dot  = x.active ? '<span style="color:var(--green);font-size:10px">●</span>' : '<span style="color:var(--text-3);font-size:10px">●</span>';
         return `<div class="nearby-card" data-id="${x.id}">
             <div class="nearby-icon">${icon}</div>
@@ -617,11 +746,276 @@ function renderNearbyTab(a) {
 
     pane.innerHTML = `<div class="nearby-header">${fromLabel}</div><div class="nearby-list">${rows}</div>`;
     pane.querySelectorAll('.nearby-card').forEach(card => {
+        const found = Object.values(allAmenitiesData).flat().find(x => String(x.id) === String(card.dataset.id));
+        if (!found) return;
+
+        card.addEventListener('mouseenter', () => {
+            if (blockNearbyHover) return;
+
+            if (!nearbyHoverMarker) {
+                nearbyHoverMarker = L.marker([found.latitude, found.longitude], {
+                    zIndexOffset: 1000, interactive: false,
+                    icon: L.icon({
+                        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-yellow.png',
+                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                        iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+                        className: 'hover-pin-bright'
+                    })
+                }).addTo(map);
+            } else {
+                nearbyHoverMarker.setLatLng([found.latitude, found.longitude]);
+                if (!map.hasLayer(nearbyHoverMarker)) nearbyHoverMarker.addTo(map);
+            }
+        });
+        card.addEventListener('mouseleave', () => {
+            if (blockNearbyHover) return;
+            
+            if (pinnedHoverAmenity) {
+                nearbyHoverMarker.setLatLng([pinnedHoverAmenity.latitude, pinnedHoverAmenity.longitude]);
+                if (!map.hasLayer(nearbyHoverMarker)) nearbyHoverMarker.addTo(map);
+            } else {
+                if (nearbyHoverMarker) { map.removeLayer(nearbyHoverMarker); nearbyHoverMarker = null; }
+            }
+        });
         card.addEventListener('click', () => {
-            const found = Object.values(allAmenitiesData).flat().find(x => x.id === parseInt(card.dataset.id));
-            if (found) { map.flyTo([found.latitude, found.longitude], 17); showDetailPanel(found, 'nearby'); }
+            blockNearbyHover = true;
+            document.addEventListener('mousemove', () => { blockNearbyHover = false; }, { once: true });
+            
+            if (found.is_cluster) {
+                map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
+                closeDetailPanel();
+            } else {
+                map.flyTo([found.latitude, found.longitude], map.getZoom()); showDetailPanel(found, 'nearby');
+            }
         });
     });
+}
+
+function renderReviewsTab(amenity) {
+    const pane = document.getElementById('tab-reviews');
+
+    const typeEmojis = {
+        restroom:  '🚻',
+        droplet:   '💧',
+        bicycle:   '🚲',
+        snowflake: '❄️',
+        wifi:      '📶',
+    };
+    const emoji = typeEmojis[amenity.icon] || '📍';
+
+    const typeDescriptions = {
+        'Restroom':        'Public restrooms are toilet facilities available for public use throughout New York City parks, plazas, and buildings.',
+        'Water Fountain':  'Drinking water fountains provide free access to clean, potable water for all New Yorkers and visitors across the city.',
+        'Bike Rack':       'Bike racks offer secure parking spots for bicycles, making cycling a convenient option for getting around the city.',
+        'Cooling Center':  'Cooling centers provide a free, air-conditioned refuge during heat emergencies, helping New Yorkers stay safe in extreme heat.',
+        'LinkNYC Kiosk':   'LinkNYC kiosks offer free ultrafast public Wi-Fi, free domestic calls, device charging, and access to city services — all at no cost.',
+    };
+    const description = typeDescriptions[amenity.type]
+        || `A public ${amenity.type.toLowerCase()} available to all New York City residents and visitors.`;
+
+    const heroColor = (amenity.color || '#1a6ef5') + '22';
+    let html = `
+        <div class="rv-hero" style="background:${heroColor}">
+            <div class="rv-hero-emoji">${emoji}</div>
+            <div class="rv-hero-type">${amenity.type}</div>
+        </div>`;
+
+    html += `<div class="dp-section">
+        <div class="dp-field-label">About this amenity</div>
+        <div class="rv-description">${description}</div>
+    </div>`;
+
+    const hasRating = amenity.rating !== null && amenity.rating !== undefined && Number(amenity.review_count || 0) > 0;
+    html += `<div class="dp-section">
+        <div class="dp-field-label">Community Rating</div>
+        <div class="rv-rating-row">`;
+    if (hasRating) {
+        const avg = +amenity.rating;
+        const filled = Math.round(avg);
+        const stars  = '★'.repeat(filled) + '☆'.repeat(5 - filled);
+        html += `<span class="rv-rating-big">${avg.toFixed(1)}</span>
+            <div class="rv-rating-right">
+                <div class="rv-stars">${stars}</div>
+                <div class="rv-count">${amenity.review_count} review${amenity.review_count !== 1 ? 's' : ''}</div>
+            </div>`;
+    } else {
+        html += `<span class="rv-rating-big" style="font-size:26px">-</span>
+            <div class="rv-rating-right">
+                <div class="rv-stars">☆☆☆☆☆</div>
+                <div class="rv-count">No ratings yet</div>
+            </div>`;
+    }
+    html += `</div></div>`;
+
+    const reviews = amenity.reviews || [];
+    const loggedIn = currentUser && currentUser.is_authenticated;
+    const currentEmail = (currentUser?.email || '').toLowerCase();
+    const alreadyReviewed = loggedIn && reviews.some(r => (r.user_name || '').toLowerCase() === currentEmail);
+
+    if (!loggedIn) {
+        html += `<div class="review-login-prompt">Please <a href="#" class="js-open-auth">sign in</a> to add a review.</div>`;
+    } else if (alreadyReviewed) {
+        html += `<div class="review-login-prompt">You have already reviewed this location.</div>`;
+    } else {
+        html += `<div class="review-write">
+            <div class="review-write-title">Write a Review</div>
+            <div class="star-picker js-star-picker" data-rating="5">
+                <button type="button" class="star-btn lit" data-value="1" aria-label="Rate 1 star">★</button>
+                <button type="button" class="star-btn lit" data-value="2" aria-label="Rate 2 stars">★</button>
+                <button type="button" class="star-btn lit" data-value="3" aria-label="Rate 3 stars">★</button>
+                <button type="button" class="star-btn lit" data-value="4" aria-label="Rate 4 stars">★</button>
+                <button type="button" class="star-btn lit" data-value="5" aria-label="Rate 5 stars">★</button>
+            </div>
+            <textarea class="review-textarea js-review-text" rows="3" maxlength="600" placeholder="Share your experience at this location (optional)..."></textarea>
+            <input type="file" class="js-review-photo" accept="image/*" style="margin-top:8px;font-size:12px;color:var(--text-2)">
+            <div style="display:flex;justify-content:flex-end">
+                <button type="button" class="review-submit js-review-submit">Submit Review</button>
+            </div>
+        </div>`;
+    }
+
+    if (reviews.length) {
+        const byRecent = [...reviews].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        const top  = [...reviews].sort((a, b) => (b.rating - a.rating) || (new Date(b.created_at) - new Date(a.created_at)))[0];
+        const stars = '★'.repeat(top.rating) + '☆'.repeat(5 - top.rating);
+        const date  = new Date(top.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        const initial = (top.user_name || '?').charAt(0).toUpperCase();
+        html += `<div class="dp-section">
+            <div class="dp-field-label">Most Popular Review</div>
+            <div class="rv-review-card">
+                <div class="rv-review-header">
+                    <div class="rv-avatar">${initial}</div>
+                    <div class="rv-review-meta">
+                        <div class="rv-reviewer">${top.user_name}</div>
+                        <div class="rv-review-stars">${stars}</div>
+                    </div>
+                    <div class="rv-review-date">${date}</div>
+                </div>
+                <div class="rv-review-text">${top.review_text || 'No written comment.'}</div>
+                ${top.photo_url ? `<img class="rv-review-photo" src="${top.photo_url}" alt="Review photo">` : ''}
+            </div>
+        </div>`;
+
+        const otherReviews = byRecent.filter(r => r !== top);
+        if (otherReviews.length) {
+            html += `<div class="dp-section">
+                <div class="dp-field-label">Recent Reviews</div>
+                <div class="review-list">${otherReviews.map(r => {
+                    const rStars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
+                    const rDate = new Date(r.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                    return `<div class="review-card">
+                        <div class="review-card-top">
+                            <div class="review-user">${r.user_name}</div>
+                            <div class="review-date">${rDate}</div>
+                        </div>
+                        <div class="review-stars">${rStars}</div>
+                        <div class="review-text">${r.review_text || 'No written comment.'}</div>
+                        ${r.photo_url ? `<img class="review-photo" src="${r.photo_url}" alt="Review photo">` : ''}
+                    </div>`;
+                }).join('')}</div>
+            </div>`;
+        }
+    } else {
+        html += `<div class="dp-section"><div class="rv-empty">No reviews yet for this location.<br>Be the first to share your experience!</div></div>`;
+    }
+
+    pane.innerHTML = html;
+
+    const loginLink = pane.querySelector('.js-open-auth');
+    if (loginLink) {
+        loginLink.addEventListener('click', e => {
+            e.preventDefault();
+            switchAuthTab('login-tab');
+            showAuthModal();
+        });
+    }
+
+    const submitBtn = pane.querySelector('.js-review-submit');
+    if (submitBtn) {
+        submitBtn.addEventListener('click', () => submitReview(amenity, pane));
+    }
+
+    const starPicker = pane.querySelector('.js-star-picker');
+    if (starPicker) {
+        const stars = starPicker.querySelectorAll('.star-btn');
+        stars.forEach(star => {
+            star.addEventListener('click', () => {
+                const selected = parseInt(star.dataset.value, 10);
+                starPicker.dataset.rating = String(selected);
+                stars.forEach(s => s.classList.toggle('lit', parseInt(s.dataset.value, 10) <= selected));
+            });
+        });
+    }
+}
+
+function submitReview(amenity, pane) {
+    if (!currentUser || !currentUser.is_authenticated) {
+        showToast('Please sign in to add a review.', 'warn');
+        return;
+    }
+
+    const textEl = pane.querySelector('.js-review-text');
+    const starPicker = pane.querySelector('.js-star-picker');
+    const photoEl = pane.querySelector('.js-review-photo');
+    const btn = pane.querySelector('.js-review-submit');
+    if (!textEl || !btn || !starPicker) return;
+
+    const rating = Math.min(5, Math.max(1, parseInt(starPicker.dataset.rating || '5', 10) || 5));
+
+    const reviewText = textEl.value.trim();
+
+    btn.disabled = true;
+    btn.textContent = 'Submitting...';
+
+    const formData = new FormData();
+    formData.append('amenity_id', String(amenity.id));
+    formData.append('rating', String(rating));
+    formData.append('review_text', reviewText);
+    if (photoEl && photoEl.files && photoEl.files[0]) formData.append('photo', photoEl.files[0]);
+
+    fetch('/api/reviews/', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: formData,
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400) {
+                showToast(b.error || 'Unable to submit review.', 'error');
+                btn.disabled = false;
+                btn.textContent = 'Submit Review';
+                return;
+            }
+
+            const newReview = {
+                user_name: b.user_name || currentUser.email || currentUser.username || 'You',
+                rating: b.rating || rating,
+                review_text: b.review_text || reviewText,
+                photo_url: b.photo_url || null,
+                created_at: b.created_at || new Date().toISOString(),
+            };
+
+            if (!Array.isArray(amenity.reviews)) amenity.reviews = [];
+            amenity.reviews.unshift(newReview);
+            amenity.reviews = amenity.reviews.slice(0, 5);
+
+            const prevCount = Number(amenity.review_count || 0);
+            const prevAvg = Number(amenity.rating || 0);
+            amenity.review_count = prevCount + 1;
+            amenity.rating = prevCount > 0
+                ? ((prevAvg * prevCount) + newReview.rating) / amenity.review_count
+                : newReview.rating;
+
+            renderOverviewTab(amenity);
+            renderReviewsTab(amenity);
+            switchDetailTab('reviews');
+            showToast('Review added. Thanks for sharing!', 'success');
+        })
+        .catch(() => {
+            showToast('Network error while submitting review.', 'error');
+            btn.disabled = false;
+            btn.textContent = 'Submit Review';
+        });
 }
 
 function buildHoursGrid(hours, todayIdx) {
@@ -935,6 +1329,8 @@ function updateUserUI() {
         disp.style.display = 'none';
         btn.textContent = 'Login';
     }
+
+    if (currentDetailAmenity) renderReviewsTab(currentDetailAmenity);
 }
 
 /** Auth Wiring */
@@ -948,6 +1344,50 @@ function setupAuth() {
     fetchCurrentUser();
 }
 
+function setupPWA() {
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/static/maps/sw.js').catch(err => console.error('SW error:', err));
+    }
+
+    const promptEl = document.getElementById('pwa-install-prompt');
+    const installBtn = document.getElementById('pwa-install-btn');
+    const closeBtn = document.getElementById('pwa-close-btn');
+    let deferredPrompt;
+
+    // Handle Android/Chrome automatic prompt
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        if (promptEl) promptEl.style.display = 'block';
+    });
+
+    if (installBtn) {
+        installBtn.addEventListener('click', async () => {
+            if (!deferredPrompt) return;
+            promptEl.style.display = 'none';
+            deferredPrompt.prompt();
+            deferredPrompt = null;
+        });
+    }
+
+    // Handle iOS Manual Prompt
+    const isIos = () => /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+    const isInStandaloneMode = () => ('standalone' in window.navigator) && (window.navigator.standalone);
+
+    if (isIos() && !isInStandaloneMode()) {
+        if (promptEl) {
+            promptEl.style.display = 'block';
+            if (installBtn) installBtn.style.display = 'none'; // Hide the button since iOS doesn't support the auto-trigger
+            const textEl = promptEl.querySelector('.pwa-prompt-text span');
+            if (textEl) textEl.innerHTML = `To install, tap <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin:0 2px"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg> and <strong>Add to Home Screen</strong>`;
+        }
+    }
+
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => { if (promptEl) promptEl.style.display = 'none'; });
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     setupAuth();
     setupSidebarToggle();
@@ -956,15 +1396,106 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeGeolocation();
     loadAmenityTypes();
     loadAmenities();
+    setupPWA();
 
     map.addLayer(bikeRackMarkers);
     map.addLayer(otherAmenityMarkers);
     map.on('moveend', loadAmenities);
+    map.on('dragstart', () => hoverTooltip.hide());
+    map.on('zoomstart', () => hoverTooltip.hide());
 
     document.getElementById('reset-filters-btn').addEventListener('click', resetAllFilters);
     document.getElementById('location-button').addEventListener('click', retryGeolocation);
-    document.getElementById('detail-close-btn').addEventListener('click', closeDetailPanel);
-    map.on('click', () => { closeDetailPanel(); hoverTooltip.hide(); });
+    document.getElementById('detail-close-btn').addEventListener('click', () => closeDetailPanel());
+
+    // --- 2-Finger Pinch/Pan on Detail Panel ---
+    const dp = document.getElementById('detail-panel');
+    let pinchStartDist = 0;
+    let pinchStartZoom = 0;
+    let pinchCenter = null;
+    let pinchStartTouchCenter = null;
+
+    dp.addEventListener('touchstart', e => {
+        if (e.touches.length === 2 && dp.classList.contains('nearby-active')) {
+            e.preventDefault();
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            pinchStartDist = Math.sqrt(dx * dx + dy * dy);
+            pinchStartZoom = map.getZoom();
+            
+            pinchStartTouchCenter = L.point(
+                (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                (e.touches[0].clientY + e.touches[1].clientY) / 2
+            );
+            
+            const mapRect = document.getElementById('map').getBoundingClientRect();
+            pinchCenter = map.containerPointToLatLng([
+                pinchStartTouchCenter.x - mapRect.left, 
+                pinchStartTouchCenter.y - mapRect.top
+            ]);
+        }
+    }, { passive: false });
+
+    dp.addEventListener('touchmove', e => {
+        if (e.touches.length === 2 && dp.classList.contains('nearby-active') && pinchStartDist > 0) {
+            e.preventDefault();
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            
+            const zoomDelta = Math.log2(dist / pinchStartDist);
+            map.setZoomAround(pinchCenter, pinchStartZoom + zoomDelta, { animate: false });
+            
+            const currentTouchCenter = L.point(
+                (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                (e.touches[0].clientY + e.touches[1].clientY) / 2
+            );
+            
+            const panX = pinchStartTouchCenter.x - currentTouchCenter.x;
+            const panY = pinchStartTouchCenter.y - currentTouchCenter.y;
+            
+            if (panX !== 0 || panY !== 0) {
+                map.panBy([panX, panY], { animate: false });
+                pinchStartTouchCenter = currentTouchCenter;
+            }
+        }
+    }, { passive: false });
+
+    dp.addEventListener('touchend', e => {
+        if (e.touches.length < 2) {
+            pinchStartDist = 0;
+        }
+    });
+
+    map.on('click', (e) => {
+        // If the click is on a marker, do nothing.
+        if (e.originalEvent.target.closest('.amenity-marker-icon')) {
+            return;
+        }
+
+        const isMobile = window.innerWidth <= 768;
+        const wasOpen = document.getElementById('detail-panel').classList.contains('open');
+        const lastAmenity = currentDetailAmenity;
+
+        if (isMobile && wasOpen && lastAmenity) {
+            closeDetailPanel(true);
+            const pt = map.latLngToContainerPoint([lastAmenity.latitude, lastAmenity.longitude]);
+            const rect = document.getElementById('map').getBoundingClientRect();
+            hoverTooltip.show(lastAmenity, rect.left + pt.x, rect.top + pt.y);
+        } else {
+            closeDetailPanel();
+            hoverTooltip.hide();
+        }
+
+        if (window.innerWidth <= 768) {
+            const sidebar = document.getElementById('sidebar');
+            if (!sidebar.classList.contains('collapsed')) {
+                sidebar.classList.add('collapsed');
+                document.getElementById('sidebar-open-btn').style.display = 'flex';
+                document.body.classList.remove('sidebar-open');
+            }
+        }
+    });
 
     document.getElementById('include-inactive').addEventListener('change', loadAmenities);
     document.getElementById('only-accessible').addEventListener('change', loadAmenities);
