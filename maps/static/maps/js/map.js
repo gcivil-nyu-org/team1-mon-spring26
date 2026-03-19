@@ -299,6 +299,8 @@ function resetAllFilters() {
     hoursFilter.fromMinutes = 0; hoursFilter.toMinutes = 1439;
     document.getElementById('time-from').value = 0;
     document.getElementById('time-to').value   = 1439;
+    document.getElementById('time-from-label').textContent = minsToTime(0);
+    document.getElementById('time-to-label').textContent   = minsToTime(1439);
     updateRangeFill();
     updateDisplayedAmenities(); updateResetBtn();
 }
@@ -307,6 +309,8 @@ function resetTimeFilter() {
     hoursFilter.fromMinutes = 0; hoursFilter.toMinutes = 1439;
     document.getElementById('time-from').value = 0;
     document.getElementById('time-to').value   = 1439;
+    document.getElementById('time-from-label').textContent = minsToTime(0);
+    document.getElementById('time-to-label').textContent   = minsToTime(1439);
     updateRangeFill(); updateDisplayedAmenities(); updateResetBtn();
 }
 
