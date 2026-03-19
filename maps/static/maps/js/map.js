@@ -172,7 +172,7 @@ function loadAmenities() {
     const b = map.getBounds();
     const params = new URLSearchParams({
         north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest(),
-        zoom: map.getZoom(),
+        zoom: Math.round(map.getZoom()),
         include_inactive: document.getElementById('include-inactive').checked,
         only_accessible:  document.getElementById('only-accessible').checked,
     });
@@ -1340,6 +1340,50 @@ function setupAuth() {
     fetchCurrentUser();
 }
 
+function setupPWA() {
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/static/maps/sw.js').catch(err => console.error('SW error:', err));
+    }
+
+    const promptEl = document.getElementById('pwa-install-prompt');
+    const installBtn = document.getElementById('pwa-install-btn');
+    const closeBtn = document.getElementById('pwa-close-btn');
+    let deferredPrompt;
+
+    // Handle Android/Chrome automatic prompt
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        if (promptEl) promptEl.style.display = 'block';
+    });
+
+    if (installBtn) {
+        installBtn.addEventListener('click', async () => {
+            if (!deferredPrompt) return;
+            promptEl.style.display = 'none';
+            deferredPrompt.prompt();
+            deferredPrompt = null;
+        });
+    }
+
+    // Handle iOS Manual Prompt
+    const isIos = () => /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+    const isInStandaloneMode = () => ('standalone' in window.navigator) && (window.navigator.standalone);
+
+    if (isIos() && !isInStandaloneMode()) {
+        if (promptEl) {
+            promptEl.style.display = 'block';
+            if (installBtn) installBtn.style.display = 'none'; // Hide the button since iOS doesn't support the auto-trigger
+            const textEl = promptEl.querySelector('.pwa-prompt-text span');
+            if (textEl) textEl.innerHTML = `To install, tap <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin:0 2px"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg> and <strong>Add to Home Screen</strong>`;
+        }
+    }
+
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => { if (promptEl) promptEl.style.display = 'none'; });
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     setupAuth();
     setupSidebarToggle();
@@ -1348,6 +1392,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeGeolocation();
     loadAmenityTypes();
     loadAmenities();
+    setupPWA();
 
     map.addLayer(bikeRackMarkers);
     map.addLayer(otherAmenityMarkers);
