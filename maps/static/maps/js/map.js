@@ -403,6 +403,7 @@ const hoverTooltip = (() => {
     document.body.appendChild(el);
 
     let currentA = null;
+    let showFrameId = null;
 
     el.addEventListener('click', () => {
         if (currentA) {
@@ -430,9 +431,20 @@ const hoverTooltip = (() => {
     }
 
     return {
-        show(a, mx, my) { currentA = a; el.innerHTML = buildTooltipHtml(a); el.style.display = 'block'; pos(mx, my); requestAnimationFrame(() => el.style.opacity = '1'); },
+        show(a, mx, my) { 
+            currentA = a; 
+            el.innerHTML = buildTooltipHtml(a); 
+            el.style.display = 'block'; 
+            pos(mx, my); 
+            if (showFrameId) cancelAnimationFrame(showFrameId);
+            showFrameId = requestAnimationFrame(() => el.style.opacity = '1'); 
+        },
         move(mx, my)    { if (el.style.display !== 'none') pos(mx, my); },
-        hide()          { el.style.opacity = '0'; setTimeout(() => { if (el.style.opacity === '0') el.style.display = 'none'; }, 150); },
+        hide()          { 
+            if (showFrameId) cancelAnimationFrame(showFrameId);
+            el.style.opacity = '0'; 
+            setTimeout(() => { if (el.style.opacity === '0') el.style.display = 'none'; }, 150); 
+        },
     };
 })();
 
