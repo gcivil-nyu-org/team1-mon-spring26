@@ -790,6 +790,11 @@ function renderNearbyTab(a) {
                 if (isTouchMoved) return;
                 isLongPress = true;
                 
+                // Visual pop and Android haptic feedback
+                card.style.transform = 'scale(0.96)';
+                setTimeout(() => { card.style.transform = ''; }, 150);
+                if (navigator.vibrate) navigator.vibrate(50);
+                
                 if (found.is_cluster) {
                     map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
                     closeDetailPanel();
