@@ -1484,8 +1484,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let pinchStartTouchCenter = null;
 
     dp.addEventListener('touchstart', e => {
-        if (e.touches.length === 2 && dp.classList.contains('nearby-active')) {
+        if (e.touches.length >= 2) {
             e.preventDefault();
+            if (!dp.classList.contains('nearby-active')) return;
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             pinchStartDist = Math.sqrt(dx * dx + dy * dy);
@@ -1505,8 +1506,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }, { passive: false });
 
     dp.addEventListener('touchmove', e => {
-        if (e.touches.length === 2 && dp.classList.contains('nearby-active') && pinchStartDist > 0) {
+        if (e.touches.length >= 2) {
             e.preventDefault();
+            if (!dp.classList.contains('nearby-active') || pinchStartDist <= 0) return;
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             const dist = Math.sqrt(dx * dx + dy * dy);
@@ -1534,6 +1536,13 @@ document.addEventListener('DOMContentLoaded', () => {
             pinchStartDist = 0;
         }
     });
+
+    // --- Prevent OS Zoom on Sidebar ---
+    const sb = document.getElementById('sidebar');
+    if (sb) {
+        sb.addEventListener('touchstart', e => { if (e.touches.length >= 2) e.preventDefault(); }, { passive: false });
+        sb.addEventListener('touchmove',  e => { if (e.touches.length >= 2) e.preventDefault(); }, { passive: false });
+    }
 
     map.on('click', (e) => {
         // If the click is on a marker, do nothing.
