@@ -460,7 +460,7 @@ aside.detail-panel.open { width: var(--detail-w) !important; }
 /* ── NEARBY ── */
 .nearby-header { padding: 10px 16px 6px; font-size: 11px; font-weight: 600; letter-spacing: .3px; color: var(--text-3); border-bottom: 1px solid var(--border); }
 .nearby-list { display: flex; flex-direction: column; }
-.nearby-card { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background var(--trans); }
+.nearby-card { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background var(--trans); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .nearby-card:last-child { border-bottom: none; }
 .nearby-card:hover { background: var(--surface2); }
 .nearby-icon { font-size: 20px; line-height: 1; flex-shrink: 0; }
