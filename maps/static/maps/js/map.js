@@ -777,7 +777,70 @@ function renderNearbyTab(a) {
                 if (nearbyHoverMarker) { map.removeLayer(nearbyHoverMarker); nearbyHoverMarker = null; }
             }
         });
-        card.addEventListener('click', () => {
+
+        let pressTimer;
+        let isLongPress = false;
+        let isTouchMoved = false;
+
+        card.addEventListener('touchstart', (e) => {
+            if (window.innerWidth > 768) return;
+            isLongPress = false;
+            isTouchMoved = false;
+            pressTimer = setTimeout(() => {
+                if (isTouchMoved) return;
+                isLongPress = true;
+                
+                if (found.is_cluster) {
+                    map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
+                    closeDetailPanel();
+                } else {
+                    map.flyTo([found.latitude, found.longitude], map.getZoom()); showDetailPanel(found, 'nearby');
+                }
+            }, 500);
+        }, { passive: true });
+
+        card.addEventListener('touchmove', () => {
+            if (window.innerWidth > 768) return;
+            isTouchMoved = true;
+            clearTimeout(pressTimer);
+        }, { passive: true });
+
+        card.addEventListener('touchend', () => {
+            if (window.innerWidth > 768) return;
+            clearTimeout(pressTimer);
+        });
+
+        card.addEventListener('contextmenu', e => {
+            if (window.innerWidth <= 768) e.preventDefault();
+        });
+
+        card.addEventListener('click', (e) => {
+            if (window.innerWidth <= 768) {
+                if (isLongPress) {
+                    e.preventDefault();
+                    return;
+                }
+                
+                // Mobile Short Tap (Preview)
+                if (!nearbyHoverMarker) {
+                    nearbyHoverMarker = L.marker([found.latitude, found.longitude], {
+                        zIndexOffset: 1000, interactive: false,
+                        icon: L.icon({
+                            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-yellow.png',
+                            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                            iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+                            className: 'hover-pin-bright'
+                        })
+                    }).addTo(map);
+                } else {
+                    nearbyHoverMarker.setLatLng([found.latitude, found.longitude]);
+                    if (!map.hasLayer(nearbyHoverMarker)) nearbyHoverMarker.addTo(map);
+                }
+                pinnedHoverAmenity = found;
+                return;
+            }
+
+            // Desktop Click (Select)
             blockNearbyHover = true;
             document.addEventListener('mousemove', () => { blockNearbyHover = false; }, { once: true });
             
