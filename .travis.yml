@@ -9,6 +9,19 @@ before_install:
 install:
   - pip install -r requirements-dev.txt
 
+services:
+  - postgresql
+addons:
+  postgresql: "18"
+  apt:
+    packages:
+      - postgresql-18-postgis-3
+      - postgis
+before_script:
+  # Create the database and enable the GIS extension before Django runs
+  - psql -c 'create database amenities;' -U postgres
+  - psql -c 'create extension postgis;' -U postgres -d amenities
+
 script:
   # --check: doesn't reformat, just exits with error if code isn't "blackened"
   - black --check .
