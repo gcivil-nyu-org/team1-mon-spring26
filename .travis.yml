@@ -12,10 +12,10 @@ install:
 services:
   - postgresql
 addons:
-  postgresql: "18"
+  postgresql: "14"
   apt:
     packages:
-      - postgresql-18-postgis-3
+      - postgresql-14-postgis-3
       - postgis
 before_script:
   # Create the database and enable the GIS extension before Django runs

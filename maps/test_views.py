@@ -1,7 +1,6 @@
 from django.test import TestCase, Client, override_settings
 from django.urls import reverse
 from django.contrib.gis.geos import Point
-from unittest.mock import patch
 
 from maps.models import AmenityType, Amenity
 from maps.views import normalize_longitude, get_cluster_grid_size
@@ -139,11 +138,6 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_amenities_api_clustering(self):
-    @patch("maps.views.cluster_amenities")
-    def test_amenities_api_clustering(self, mock_cluster):
-        mock_cluster.return_value = [
-            ([self.amenity_bike_cluster1.id, self.amenity_bike_cluster2.id], 2, "POINT(-73.98015 40.74015)", None)
-        ]
         response = self.client.get(reverse("maps:amenities_api"), {
             "type_id": self.type_bike.id,
             "zoom": 10
@@ -153,14 +147,11 @@ class ViewsCoverageTest(TestCase):
         self.assertTrue(len(clusters) > 0)
 
     def test_amenities_api_clustering_single_point(self):
-    @patch("maps.views.cluster_amenities")
-    def test_amenities_api_clustering_single_point(self, mock_cluster):
         distant, _ = Amenity.objects.get_or_create(
             amenity_type=self.type_bike,
             external_id="test_distant_bike",
             defaults={"name": "Distant Rack", "location": Point(10.0, 10.0), "active": True}
         )
-        mock_cluster.return_value = [([distant.id], 1, "POINT(10.0 10.0)", None)]
         response = self.client.get(reverse("maps:amenities_api"), {
             "type_id": self.type_bike.id,
             "zoom": 10,
