@@ -9,6 +9,7 @@ omit =
     manage.py
     django_map/wsgi.py
     django_map/asgi.py
+    management/commands/import_*.py
 
 [report]
 # Show which lines are missing in the terminal output
