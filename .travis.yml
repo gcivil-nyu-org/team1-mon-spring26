@@ -13,10 +13,6 @@ services:
   - postgresql
 addons:
   postgresql: "14"
-  apt:
-    packages:
-      - postgresql-14-postgis-3
-      - postgis
 before_script:
   # Create the database and enable the GIS extension before Django runs
   - psql -c 'create database amenities;' -U postgres
