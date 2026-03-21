@@ -10,6 +10,7 @@ omit =
     django_map/wsgi.py
     django_map/asgi.py
     maps/management/commands/import_*.py
+    maps/urls.py
 
 [report]
 # Show which lines are missing in the terminal output
