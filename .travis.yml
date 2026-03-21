@@ -15,8 +15,8 @@ addons:
   postgresql: "18"
 before_script:
   # Create the database and enable the GIS extension before Django runs
-  - psql -c 'create database amenities;' -U postgres
-  - psql -c 'create extension postgis;' -U postgres -d amenities
+  - psql -h localhost -U postgres -c 'create database amenities;'
+  - psql -h localhost -U postgres -d amenities -c 'create extension postgis;'
 
 script:
   # --check: doesn't reformat, just exits with error if code isn't "blackened"
