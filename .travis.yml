@@ -14,7 +14,7 @@ services:
 addons:
   apt:
     packages:
-      - postgis
+      - postgresql-13-postgis-3
 before_script:
   # Create the database and enable the GIS extension before Django runs
   - psql -h 127.0.0.1 -p ${PGPORT:-5432} -U postgres -c 'create database amenities;'
