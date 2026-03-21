@@ -12,7 +12,7 @@ install:
 services:
   - postgresql
 addons:
-  postgresql: "14"
+  postgresql: "18"
 before_script:
   # Create the database and enable the GIS extension before Django runs
   - psql -c 'create database amenities;' -U postgres
