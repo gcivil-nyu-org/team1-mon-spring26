@@ -27,6 +27,20 @@ deploy:
     secret_access_key: $AWS_SECRET_KEY
     region: "us-east-2"
     app: "nycnow"
+    env: "Nycnow-dev"
+    bucket_name: "elasticbeanstalk-us-east-2-793314585930"
+    #bucket_path: "/"
+    zip_file: "django_map.zip"
+    on:
+      branch: main
+      repo: gcivil-nyu-org/team1-mon-spring26
+
+  - provider: elasticbeanstalk
+    edge: true
+    access_key_id: $AWS_ACCESS_KEY
+    secret_access_key: $AWS_SECRET_KEY
+    region: "us-east-2"
+    app: "nycnow"
     env: "Nycnow-staging"
     bucket_name: "elasticbeanstalk-us-east-2-793314585930"
     #bucket_path: "/"
