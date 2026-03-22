@@ -3,9 +3,13 @@ python:
   - "3.12"
 
 before_install:
-  # 1. Add the official PostgreSQL repository
-  - sudo apt install -y postgresql-common ca-certificates
-  - echo | sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh || true
+  # 1. Add the repo manually with the correct 'focal' release name
+  - sudo sh -c 'echo "deb http://apt.postgresql.org focal-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+  
+  # 2. Add the correct GPG key
+  - wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+  
+  # 3. Update and install explicitly
   - sudo apt-get update
   
   # 2. Install version 17
