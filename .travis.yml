@@ -24,7 +24,8 @@ env:
   - PGUSER=postgres
 before_script:
   # Create the database and enable the GIS extension before Django runs
-  - sudo pg_ctlcluster 17 main start
+  - sudo pg_lsclusters
+  - sudo pg_ctlcluster 17 start
   - psql -U postgres -c 'create database amenities;'
   - psql -U postgres -d amenities -c 'create extension postgis;'
   
