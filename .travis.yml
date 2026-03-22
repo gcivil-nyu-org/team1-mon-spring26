@@ -19,9 +19,9 @@ services:
   - postgresql
 addons:
   postgresql: "17"
-  apt:
-    packages:
-      - postgresql
+#  apt:
+#    packages:
+#      - postgresql
 env:
   global:
   - PGPORT=5433
