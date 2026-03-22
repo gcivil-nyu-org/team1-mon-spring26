@@ -65,6 +65,9 @@ MIDDLEWARE = [
 ROOT_URLCONF = "django_map.urls"
 
 STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
     },
