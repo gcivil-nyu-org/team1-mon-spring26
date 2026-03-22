@@ -45,7 +45,7 @@ before_script:
   - sudo service postgresql stop
   
   # 2. Create the cluster if it doesn't exist
-  - sudo pg_createcluster 17 main -p $PGPORT --start || echo "Cluster already exists"
+  - sudo pg_createcluster 17 main -p $PGPORT -o "listen_addresses='*'" --start || echo "Cluster already exists"
     
   # 4. Create your database
   - psql -c 'create database amenities;'
