@@ -15,17 +15,18 @@ services:
   - postgresql
 addons:
   postgresql: "17"
-#  apt:
-#    packages:
-#      - postgresql-17-postgis-3
+  apt:
+    packages:
+      - postgresql-17
 env:
   global:
   - PGPORT=5433
   - PGUSER=postgres
+  - PGHOST=localhost
 before_script:
   # Create the database and enable the GIS extension before Django runs
   # 1. Create the cluster manually if it doesn't exist
-  - sudo pg_createcluster 17 main --port=$PGPORT --start
+  #- sudo pg_createcluster 17 main --port=$PGPORT --start
   #- sudo pg_lsclusters
   - psql -U postgres -c 'create database amenities;'
   - psql -U postgres -d amenities -c 'create extension postgis;'
