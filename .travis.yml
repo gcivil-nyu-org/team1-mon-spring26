@@ -3,11 +3,11 @@ python:
   - "3.12"
 
 before_install:
-  # 1. Add the repo manually with the correct 'focal' release name
-  - sudo sh -c 'echo "deb http://apt.postgresql.org focal-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+  # 1. Add the correct repository URL (note the /pub/repos/apt/ path)
+  - sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt/ $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
   
-  # 2. Add the correct GPG key
-  - wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+  # 2. Add the correct GPG key file
+  - wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc
   
   # 3. Update and install explicitly
   - sudo apt-get update
