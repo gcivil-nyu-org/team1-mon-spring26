@@ -12,8 +12,8 @@ before_install:
   #- sleep 1
   #- postgres --version
 
-#  - sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-#  - wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+  # 2. Install Version 17 explicitly
+  - sudo apt-get env -y postgresql-17 postgresql-client-17
 
 install:
   - pip install -r requirements-dev.txt
@@ -22,9 +22,6 @@ services:
   - postgresql
 addons:
   postgresql: "17"
-  apt:
-    packages:
-      - postgresql-17 postgresql-client-17
 env:
   global:
   - PGPORT=5433
