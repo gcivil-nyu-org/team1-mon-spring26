@@ -41,8 +41,8 @@ env:
 before_script:
   # 3. Version 17 usually starts on 5433 if another version is present. 
   # Let's force it to start and check the port.
-  #- sudo pg_ctlcluster 17 main start
-  #- pg_lsclusters
+  - sudo pg_ctlcluster 17 main start
+  - pg_lsclusters
   
   # 4. Create your database
   - psql -c 'create database amenities;'
