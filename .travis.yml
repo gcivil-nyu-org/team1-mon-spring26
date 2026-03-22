@@ -28,8 +28,8 @@ env:
   global:
   - PGPORT=5433
   - PGUSER=postgres
-  #- PGPASSWORD=postgres
-  #- PGHOST=localhost
+  - PGPASSWORD=postgres
+  - PGHOST=localhost
 before_script:
   # 1. Add the PG 17 bins to your PATH so pg_createcluster can find initdb
   #- export PATH=/usr/lib/postgresql/17/bin:$PATH
@@ -45,9 +45,12 @@ before_script:
   - sleep 3  # 3. Check if it's running on the expected port
   - sudo pg_lsclusters
     
+  # 1. Set the password via psql (running as the postgres user)
+  - sudo -u postgres psql -c "ALTER USER postgres PASSWORD $PGPASSWORD;"
+
   # 4. Create your database
+  #- sudo -u postgres psql -c 'create database amenities;'
   - psql -c 'create database amenities;'
-  #- psql -c 'create database amenities;'
   - psql -d amenities -c 'create extension postgis;'
   
 
