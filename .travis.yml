@@ -34,7 +34,7 @@ apt:
     - postgresql-17-postgis-3
 env:
   global:
-  - PGPORT=5432
+  - PGPORT=5433
   - PGUSER=postgres
   - PGHOST=localhost
 before_script:
@@ -45,7 +45,7 @@ before_script:
   - sudo service postgresql stop
   
   # 2. Create the cluster if it doesn't exist
-  - sudo pg_createcluster 17 main --start || echo "Cluster already exists"
+  - sudo pg_createcluster 17 main -p $PGPORT --start || echo "Cluster already exists"
     
   # 4. Create your database
   - psql -c 'create database amenities;'
