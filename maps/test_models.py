@@ -11,14 +11,16 @@ User = get_user_model()
 class ModelsCoverageTest(TestCase):
     def setUp(self):
         self.user, _ = User.objects.get_or_create(
-            username="modeluser", 
-            email="model@example.com", 
-            defaults={"password": "password123"}
+            username="modeluser",
+            email="model@example.com",
+            defaults={"password": "password123"},
         )
-        
+
         self.type_parent, _ = AmenityType.objects.get_or_create(name="Parent Type")
-        self.type_child, _ = AmenityType.objects.get_or_create(name="Child Type", parent=self.type_parent)
-        
+        self.type_child, _ = AmenityType.objects.get_or_create(
+            name="Child Type", parent=self.type_parent
+        )
+
         self.amenity, _ = Amenity.objects.get_or_create(
             amenity_type=self.type_parent,
             external_id="test_model_am",
@@ -26,7 +28,7 @@ class ModelsCoverageTest(TestCase):
                 "name": "Test Amenity",
                 "location": Point(-73.0, 40.0),
                 "active": True,
-            }
+            },
         )
 
         self.amenity_inactive, _ = Amenity.objects.get_or_create(
@@ -36,7 +38,7 @@ class ModelsCoverageTest(TestCase):
                 "name": "Inactive Amenity",
                 "location": Point(-73.0, 40.0),
                 "active": False,
-            }
+            },
         )
 
     def test_custom_user_str(self):
@@ -48,7 +50,9 @@ class ModelsCoverageTest(TestCase):
 
     def test_amenity_str(self):
         self.assertEqual(str(self.amenity), "Test Amenity (Parent Type)")
-        self.assertEqual(str(self.amenity_inactive), "Inactive Amenity (Parent Type) (Inactive)")
+        self.assertEqual(
+            str(self.amenity_inactive), "Inactive Amenity (Parent Type) (Inactive)"
+        )
 
     def test_amenity_get_todays_hours(self):
         self.amenity.is_open_24hrs = True
@@ -56,29 +60,29 @@ class ModelsCoverageTest(TestCase):
         open_t, close_t = self.amenity.get_todays_hours()
         self.assertEqual(open_t, datetime.time(0, 0))
         self.assertEqual(close_t, datetime.time(0, 0))
-        
+
         self.amenity.is_open_24hrs = False
         self.amenity.monday_open = datetime.time(8, 0)
         self.amenity.monday_close = datetime.time(17, 0)
         self.amenity.save()
-        
-        dt_monday = datetime.datetime(2023, 1, 2, 12, 0) # Jan 2, 2023 is Monday
+
+        dt_monday = datetime.datetime(2023, 1, 2, 12, 0)  # Jan 2, 2023 is Monday
         open_t, close_t = self.amenity.get_todays_hours(dt_monday)
         self.assertEqual(open_t, datetime.time(8, 0))
         self.assertEqual(close_t, datetime.time(17, 0))
 
     def test_amenity_is_open_now(self):
         self.assertFalse(self.amenity_inactive.is_open_now())
-        
+
         self.amenity.is_open_24hrs = True
         self.amenity.save()
         self.assertTrue(self.amenity.is_open_now())
-        
+
         self.amenity.is_open_24hrs = False
         self.amenity.monday_open = datetime.time(8, 0)
         self.amenity.monday_close = datetime.time(17, 0)
         self.amenity.tuesday_open = datetime.time(18, 0)
-        self.amenity.tuesday_close = datetime.time(2, 0) # overnight
+        self.amenity.tuesday_close = datetime.time(2, 0)  # overnight
         self.amenity.save()
 
         dt_monday_open = datetime.datetime(2023, 1, 2, 12, 0)
@@ -106,8 +110,12 @@ class ModelsCoverageTest(TestCase):
         self.assertEqual(self.amenity.get_review_count(), 0)
 
     def test_review_str(self):
-        review1 = Review.objects.create(amenity=self.amenity, user=self.user, rating=5, review_text="Nice")
-        self.assertEqual(str(review1), f"Review by {self.user.email} for Test Amenity - 5★")
+        review1 = Review.objects.create(
+            amenity=self.amenity, user=self.user, rating=5, review_text="Nice"
+        )
+        self.assertEqual(
+            str(review1), f"Review by {self.user.email} for Test Amenity - 5★"
+        )
 
     def test_amenity_photo_str(self):
         photo = AmenityPhoto.objects.create(amenity=self.amenity, uploaded_by=self.user)
