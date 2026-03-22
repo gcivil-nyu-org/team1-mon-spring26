@@ -32,7 +32,15 @@ before_script:
   # 1. Create the cluster manually if it doesn't exist
   #- sudo pg_createcluster 17 main --port=$PGPORT --start
   #- sudo pg_lsclusters
-  - psql -c 'create database amenities;'
+  # 1. Create a data directory
+  - mkdir -p /tmp/pgdata
+  # 2. Initialize the DB (using the full path to version 17)
+  - /usr/lib/postgresql/17/bin/initdb -D /tmp/pgdata
+  # 3. Start the server on port 5432
+  - /usr/lib/postgresql/17/bin/pg_ctl -D /tmp/pgdata -l logfile start
+  # 4. Create your database
+  - /usr/lib/postgresql/17/bin/psql -c "create database amenities;"
+  #- psql -c 'create database amenities;'
   - psql -d amenities -c 'create extension postgis;'
   
 
