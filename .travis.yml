@@ -38,6 +38,9 @@ env:
   - PGUSER=postgres
   - PGHOST=localhost
 before_script:
+  # 1. Add the PG 17 bins to your PATH so pg_createcluster can find initdb
+  - export PATH=/usr/lib/postgresql/17/bin:$PATH
+
   # 3. Version 17 usually starts on 5433 if another version is present. 
   # Let's force it to start and check the port.
 
