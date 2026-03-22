@@ -4,13 +4,13 @@ python:
 
 before_install:
   # 1. Add the correct repository URL (note the /pub/repos/apt/ path)
+  #    Remove any old/broken files
+  - sudo rm -f /etc/apt/sources.list.d/pgdg.list  
   - sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt/ $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
   
   # 2. Add the correct GPG key file
   - wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc
-  
-  # 1. Remove any old/broken files
-  - sudo rm -f /etc/apt/sources.list.d/pgdg.list  
+
 
   # 3. Update and install explicitly
   - sudo apt-get update
