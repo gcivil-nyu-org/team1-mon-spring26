@@ -212,3 +212,6 @@ __marimo__/
 
 # don't commit .zip files
 *.zip
+
+# part of the test data, but we don't want to commit the actual photos
+media/amenity_photos/
