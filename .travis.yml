@@ -7,13 +7,9 @@ before_install:
   - sudo sh -c 'echo "deb http://apt.postgresql.org $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
   - wget --quiet -O - https://www.postgresql.org | sudo apt-key add -
   - sudo apt-get update
-  - sudo apt-get install -y gdal-bin
-  #- sudo service postgresql restart
-  #- sleep 1
-  #- postgres --version
-
-  # 2. Install Version 17 explicitly
-  - sudo apt-get env -y postgresql-17 postgresql-client-17
+  
+  # 2. Install version 17
+  - sudo apt-get install -y postgresql-17 postgresql-client-17 postgresql-contrib-17 postgis postgresql-17-postgis-3
 
 install:
   - pip install -r requirements-dev.txt
@@ -28,18 +24,13 @@ env:
   - PGUSER=postgres
   - PGHOST=localhost
 before_script:
-  # Create the database and enable the GIS extension before Django runs
-  # 1. Create the cluster manually if it doesn't exist
-  #- sudo pg_createcluster 17 main --port=$PGPORT --start
-  #- sudo pg_lsclusters
-  # 1. Create a data directory
-  - mkdir -p /tmp/pgdata
-  # 2. Initialize the DB (using the full path to version 17)
-  - /usr/lib/postgresql/17/bin/initdb -D /tmp/pgdata
-  # 3. Start the server on port 5432
-  - /usr/lib/postgresql/17/bin/pg_ctl -D /tmp/pgdata -l logfile start
+  # 3. Version 17 usually starts on 5433 if another version is present. 
+  # Let's force it to start and check the port.
+  - sudo pg_ctlcluster 17 main start
+  - pg_lsclusters
+  
   # 4. Create your database
-  - /usr/lib/postgresql/17/bin/psql -c "create database amenities;"
+  - psql -c 'create database amenities;'
   #- psql -c 'create database amenities;'
   - psql -d amenities -c 'create extension postgis;'
   
