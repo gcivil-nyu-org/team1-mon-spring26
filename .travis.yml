@@ -5,7 +5,7 @@ python:
 before_install:
   # 1. Add the official PostgreSQL repository
   - sudo apt install -y postgresql-common ca-certificates
-  - echo | sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh
+  - echo | sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh || true
   - sudo apt-get update
   
   # 2. Install version 17
