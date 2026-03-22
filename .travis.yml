@@ -41,17 +41,18 @@ before_script:
   - sudo service postgresql stop
   
   # 2. Create the cluster if it doesn't exist
-  - sudo pg_createcluster 17 main --auth-local trust --auth-host trust -p $PGPORT --start
+  - sudo pg_createcluster 17 main -p $PGPORT --start -- --auth-local trust --auth-host trust
   - sleep 3  # 3. Check if it's running on the expected port
   - sudo pg_lsclusters
     
-  # 1. Set the password via psql (running as the postgres user)
-  - sudo -u postgres psql -c "ALTER USER postgres PASSWORD $PGPASSWORD;"
 
   # 4. Create your database
   #- sudo -u postgres psql -c 'create database amenities;'
   - psql -c 'create database amenities;'
   - psql -d amenities -c 'create extension postgis;'
+
+  # 1. Set the password via psql (running as the postgres user)
+  - psql -c "ALTER USER postgres PASSWORD $PGPASSWORD;"
   
 
 script:
