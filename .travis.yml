@@ -52,7 +52,7 @@ before_script:
   - psql -d amenities -c 'create extension postgis;'
 
   # 1. Set the password via psql (running as the postgres user)
-  - psql -c "ALTER USER postgres PASSWORD $PGPASSWORD;"
+  - psql -c "ALTER USER postgres PASSWORD '$PGPASSWORD';"
   
 
 script:
