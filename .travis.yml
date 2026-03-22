@@ -40,9 +40,13 @@ env:
 before_script:
   # 3. Version 17 usually starts on 5433 if another version is present. 
   # Let's force it to start and check the port.
-  - sudo pg_ctlcluster 17 main start
-  - pg_lsclusters
+
+  # 1. Stop the default service to free up port 5432
+  - sudo service postgresql stop
   
+  # 2. Create the cluster if it doesn't exist
+  - sudo pg_createcluster 17 main --start || echo "Cluster already exists"
+    
   # 4. Create your database
   - psql -c 'create database amenities;'
   #- psql -c 'create database amenities;'
