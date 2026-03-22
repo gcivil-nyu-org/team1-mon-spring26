@@ -1,6 +1,6 @@
 language: python
 python:
-  - "3.14"
+  - "3.13"
 
 before_install:
   - sudo apt-get update
@@ -18,10 +18,15 @@ addons:
 #  apt:
 #    packages:
 #      - postgresql-17-postgis-3
+env:
+  global:
+  - PGPORT=5433
+  - PGUSER=postgres
 before_script:
   # Create the database and enable the GIS extension before Django runs
-  - psql -h 127.0.0.1 -p ${PGPORT:-5432} -U postgres -d amenities -c 'create extension postgis;'
-  - psql -h 127.0.0.1 -p ${PGPORT:-5432} -U postgres -c 'create database amenities;'
+  - psql -U postgres -c 'create database amenities;'
+  - psql -U postgres -d amenities -c 'create extension postgis;'
+  
 
 script:
   # --check: doesn't reformat, just exits with error if code isn't "blackened"
