@@ -5,7 +5,6 @@ dist: jammy
 
 before_install:
   # 1. Add the correct repository URL (note the /pub/repos/apt/ path)
-  #    Remove any old/broken files
   - sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt/ $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
   
   # 2. Add the correct GPG key file
@@ -14,7 +13,7 @@ before_install:
   # 3. Update and install explicitly
   - sudo apt-get update
   
-  # 2. Install version 17
+  # 4. Install version 17
   - sudo apt-get install -y postgresql-17 postgresql-client-17 postgresql-contrib-17 postgis postgresql-17-postgis-3
 
 install:
@@ -34,29 +33,18 @@ env:
   - DB_USER=postgres
   - DB_PASSWORD=$PGPASSWORD
 before_script:
-  # 1. Add the PG 17 bins to your PATH so pg_createcluster can find initdb
-  #- export PATH=/usr/lib/postgresql/17/bin:$PATH
-
-  # 3. Version 17 usually starts on 5433 if another version is present. 
-  # Let's force it to start and check the port.
-
-  # 1. Stop the default service to free up port 5432
+  # 1. Stop the default service
   - sudo service postgresql stop
   
   # 2. Create the cluster if it doesn't exist
-  - sudo pg_createcluster 17 main -p $PGPORT --start -- --auth-local trust --auth-host trust
-  - sleep 3  # 3. Check if it's running on the expected port
-  - sudo pg_lsclusters
-    
+  - sudo pg_createcluster 17 main -p $PGPORT --start -- --auth-local trust --auth-host trust  
 
-  # 4. Create your database
-  #- sudo -u postgres psql -c 'create database amenities;'
+  # 4. Create the database
   - psql -c 'create database amenities;'
   - psql -d amenities -c 'create extension postgis;'
 
   # 1. Set the password via psql (running as the postgres user)
   - psql -c "ALTER USER postgres PASSWORD '$PGPASSWORD';"
-  
 
 script:
   # --check: doesn't reformat, just exits with error if code isn't "blackened"
