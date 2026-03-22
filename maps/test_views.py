@@ -11,12 +11,10 @@ from maps.views import normalize_longitude, get_cluster_grid_size
 
 @override_settings(
     STORAGES={
-        "default": {
-            "BACKEND": "django.core.files.storage.FileSystemStorage"
-        },
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
         "staticfiles": {
             "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
-        }
+        },
     }
 )
 class ViewsCoverageTest(TestCase):
@@ -184,7 +182,12 @@ class ViewsCoverageTest(TestCase):
     @patch("maps.views.cluster_amenities")
     def test_amenities_api_clustering(self, mock_cluster):
         mock_cluster.return_value = [
-            ([self.amenity_bike_cluster1.id, self.amenity_bike_cluster2.id], 2, "POINT(-73.98015 40.74015)", None)
+            (
+                [self.amenity_bike_cluster1.id, self.amenity_bike_cluster2.id],
+                2,
+                "POINT(-73.98015 40.74015)",
+                None,
+            )
         ]
         response = self.client.get(
             reverse("maps:amenities_api"), {"type_id": self.type_bike.id, "zoom": 10}
@@ -222,26 +225,36 @@ class ViewsCoverageTest(TestCase):
         self.assertIn(distant.id, ids)
 
     def test_amenities_api_zoomed_in_bike_racks(self):
-        response = self.client.get(reverse("maps:amenities_api"), {
-            "type_id": self.type_bike.id,
-            "zoom": 19
-        })
+        response = self.client.get(
+            reverse("maps:amenities_api"), {"type_id": self.type_bike.id, "zoom": 19}
+        )
         data = response.json()
         clusters = [a for a in data["amenities"] if a.get("is_cluster")]
         self.assertEqual(len(clusters), 0)
-        
+
         AmenityType.objects.filter(name="Bike Rack").delete()
         response2 = self.client.get(reverse("maps:amenities_api"))
         self.assertEqual(response2.status_code, 200)
 
     def test_amenities_api_serialization_with_reviews_and_photos(self):
-        Review.objects.create(amenity=self.amenity_active, user=self.test_user, rating=4, review_text="Nice")
-        photo = SimpleUploadedFile("test.jpg", b"file_content", content_type="image/jpeg")
-        AmenityPhoto.objects.create(amenity=self.amenity_active, uploaded_by=self.test_user, photo=photo)
+        Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=4,
+            review_text="Nice",
+        )
+        photo = SimpleUploadedFile(
+            "test.jpg", b"file_content", content_type="image/jpeg"
+        )
+        AmenityPhoto.objects.create(
+            amenity=self.amenity_active, uploaded_by=self.test_user, photo=photo
+        )
 
         response = self.client.get(reverse("maps:amenities_api"))
         data = response.json()
-        active = next((a for a in data["amenities"] if a["id"] == self.amenity_active.id), None)
+        active = next(
+            (a for a in data["amenities"] if a["id"] == self.amenity_active.id), None
+        )
         self.assertIsNotNone(active)
         self.assertTrue(len(active["reviews"]) > 0)
         self.assertEqual(active["reviews"][0]["rating"], 4)
@@ -249,47 +262,57 @@ class ViewsCoverageTest(TestCase):
     # --- Auth API Tests ---
     def test_register_api(self):
         CustomUser.objects.filter(email="newuser@example.com").delete()
-        
+
         response = self.client.post(
             reverse("maps:register_api"),
-            data=json.dumps({"email": "newuser@example.com", "password": "newpassword123"}),
-            content_type="application/json"
+            data=json.dumps(
+                {"email": "newuser@example.com", "password": "newpassword123"}
+            ),
+            content_type="application/json",
         )
         self.assertEqual(response.status_code, 201)
 
         response2 = self.client.post(
             reverse("maps:register_api"),
-            data=json.dumps({"email": "newuser@example.com", "password": "newpassword123"}),
-            content_type="application/json"
+            data=json.dumps(
+                {"email": "newuser@example.com", "password": "newpassword123"}
+            ),
+            content_type="application/json",
         )
         self.assertEqual(response2.status_code, 400)
 
         response3 = self.client.post(
             reverse("maps:register_api"),
             data=json.dumps({"password": "newpassword123"}),
-            content_type="application/json"
+            content_type="application/json",
         )
         self.assertEqual(response3.status_code, 400)
-        
-        response4 = self.client.post(reverse("maps:register_api"), data="not json", content_type="application/json")
+
+        response4 = self.client.post(
+            reverse("maps:register_api"),
+            data="not json",
+            content_type="application/json",
+        )
         self.assertEqual(response4.status_code, 400)
 
     def test_login_api(self):
         response = self.client.post(
             reverse("maps:login_api"),
             data=json.dumps({"email": "auth@example.com", "password": "password123"}),
-            content_type="application/json"
+            content_type="application/json",
         )
         self.assertEqual(response.status_code, 200)
-        
+
         response2 = self.client.post(
             reverse("maps:login_api"),
             data=json.dumps({"email": "auth@example.com", "password": "wrong"}),
-            content_type="application/json"
+            content_type="application/json",
         )
         self.assertEqual(response2.status_code, 401)
-        
-        response3 = self.client.post(reverse("maps:login_api"), data="not json", content_type="application/json")
+
+        response3 = self.client.post(
+            reverse("maps:login_api"), data="not json", content_type="application/json"
+        )
         self.assertEqual(response3.status_code, 400)
 
     def test_logout_api(self):
@@ -301,7 +324,7 @@ class ViewsCoverageTest(TestCase):
         response = self.client.get(reverse("maps:current_user_api"))
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["is_authenticated"])
-        
+
         self.client.force_login(self.test_user)
         response2 = self.client.get(reverse("maps:current_user_api"))
         self.assertEqual(response2.status_code, 200)
@@ -311,68 +334,86 @@ class ViewsCoverageTest(TestCase):
     def test_create_review_api(self):
         response = self.client.post(reverse("maps:create_review_api"))
         self.assertEqual(response.status_code, 401)
-        
+
         self.client.force_login(self.test_user)
-        
+
         response2 = self.client.post(
             reverse("maps:create_review_api"),
             data=json.dumps({}),
-            content_type="application/json"
+            content_type="application/json",
         )
         self.assertEqual(response2.status_code, 400)
 
         response3 = self.client.post(
             reverse("maps:create_review_api"),
-            data=json.dumps({"amenity_id": self.amenity_active.id, "rating": 5, "review_text": "Good"}),
-            content_type="application/json"
+            data=json.dumps(
+                {
+                    "amenity_id": self.amenity_active.id,
+                    "rating": 5,
+                    "review_text": "Good",
+                }
+            ),
+            content_type="application/json",
         )
         self.assertEqual(response3.status_code, 201)
 
         response4 = self.client.post(
             reverse("maps:create_review_api"),
             data=json.dumps({"amenity_id": self.amenity_active.id, "rating": 4}),
-            content_type="application/json"
+            content_type="application/json",
         )
         self.assertEqual(response4.status_code, 400)
-        
+
         response_bad_rating = self.client.post(
             reverse("maps:create_review_api"),
             data=json.dumps({"amenity_id": self.amenity_inactive.id, "rating": 6}),
-            content_type="application/json"
+            content_type="application/json",
         )
         self.assertEqual(response_bad_rating.status_code, 400)
-        
+
         response_bad_json = self.client.post(
             reverse("maps:create_review_api"),
             data="not json",
-            content_type="application/json"
+            content_type="application/json",
         )
         self.assertEqual(response_bad_json.status_code, 400)
-        
-        photo = SimpleUploadedFile("test.jpg", b"file_content", content_type="image/jpeg")
+
+        photo = SimpleUploadedFile(
+            "test.jpg", b"file_content", content_type="image/jpeg"
+        )
         response_file = self.client.post(
             reverse("maps:create_review_api"),
-            data={"amenity_id": self.amenity_inactive.id, "rating": 3, "photo": photo}
+            data={"amenity_id": self.amenity_inactive.id, "rating": 3, "photo": photo},
         )
         self.assertEqual(response_file.status_code, 201)
 
-        bad_photo = SimpleUploadedFile("test.txt", b"content", content_type="text/plain")
+        bad_photo = SimpleUploadedFile(
+            "test.txt", b"content", content_type="text/plain"
+        )
         response_bad_file = self.client.post(
             reverse("maps:create_review_api"),
-            data={"amenity_id": self.amenity_bike_cluster1.id, "rating": 3, "photo": bad_photo}
+            data={
+                "amenity_id": self.amenity_bike_cluster1.id,
+                "rating": 3,
+                "photo": bad_photo,
+            },
         )
         self.assertEqual(response_bad_file.status_code, 400)
 
         bad_photo.size = 6 * 1024 * 1024
         response_big_file = self.client.post(
             reverse("maps:create_review_api"),
-            data={"amenity_id": self.amenity_bike_cluster1.id, "rating": 3, "photo": bad_photo}
+            data={
+                "amenity_id": self.amenity_bike_cluster1.id,
+                "rating": 3,
+                "photo": bad_photo,
+            },
         )
         self.assertEqual(response_big_file.status_code, 400)
 
         response_not_found = self.client.post(
             reverse("maps:create_review_api"),
             data=json.dumps({"amenity_id": 99999, "rating": 3}),
-            content_type="application/json"
+            content_type="application/json",
         )
         self.assertEqual(response_not_found.status_code, 404)
