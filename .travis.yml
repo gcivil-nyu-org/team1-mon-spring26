@@ -6,17 +6,16 @@ dist: jammy
 before_install:
   # 1. Add the correct repository URL (note the /pub/repos/apt/ path)
   #    Remove any old/broken files
-  #- sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt/ $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+  - sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt/ $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
   
   # 2. Add the correct GPG key file
-  #- wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc
-
+  - wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
 
   # 3. Update and install explicitly
   - sudo apt-get update
   
   # 2. Install version 17
-  #- sudo apt-get install -y postgresql-17 postgresql-client-17 postgresql-contrib-17 postgis postgresql-17-postgis-3
+  - sudo apt-get install -y postgresql-17 postgresql-client-17 postgresql-contrib-17 postgis postgresql-17-postgis-3
 
 install:
   - pip install -r requirements-dev.txt
@@ -25,13 +24,6 @@ services:
   - postgresql
 addons:
   postgresql: "17"
-apt:
-  packages:
-    - postgresql-17
-    - postgresql-client-17
-    - postgresql-contrib-17
-    - postgis
-    - postgresql-17-postgis-3
 env:
   global:
   - PGPORT=5433
@@ -39,7 +31,7 @@ env:
   - PGHOST=localhost
 before_script:
   # 1. Add the PG 17 bins to your PATH so pg_createcluster can find initdb
-  - export PATH=/usr/lib/postgresql/17/bin:$PATH
+  #- export PATH=/usr/lib/postgresql/17/bin:$PATH
 
   # 3. Version 17 usually starts on 5433 if another version is present. 
   # Let's force it to start and check the port.
