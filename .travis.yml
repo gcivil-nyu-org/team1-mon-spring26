@@ -32,7 +32,7 @@ env:
   - PGHOST=localhost
   - DB_NAME=postgres
   - DB_USER=postgres
-  - RDS_PASSWORD=postgres
+  - DB_PASSWORD=$PGPASSWORD
 before_script:
   # 1. Add the PG 17 bins to your PATH so pg_createcluster can find initdb
   #- export PATH=/usr/lib/postgresql/17/bin:$PATH
