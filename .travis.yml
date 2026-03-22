@@ -4,7 +4,7 @@ python:
 
 before_install:
   - sudo apt-get update
-  - sudo apt-get install -y gdal-bin libgdal-dev
+  - sudo apt-get install -y gdal310
   - sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
   - wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
 
@@ -15,13 +15,13 @@ services:
   - postgresql
 addons:
   postgresql: "17"
-  apt:
-    packages:
-      - postgresql-17-postgis-3
+#  apt:
+#    packages:
+#      - postgresql-17-postgis-3
 before_script:
   # Create the database and enable the GIS extension before Django runs
-  - psql -h 127.0.0.1 -p ${PGPORT:-5432} -U postgres -c 'create database amenities;'
   - psql -h 127.0.0.1 -p ${PGPORT:-5432} -U postgres -d amenities -c 'create extension postgis;'
+  - psql -h 127.0.0.1 -p ${PGPORT:-5432} -U postgres -c 'create database amenities;'
 
 script:
   # --check: doesn't reformat, just exits with error if code isn't "blackened"
@@ -32,6 +32,8 @@ script:
   #- pytest --cov=./ --cov-report=xml
   - coverage report  # This prints the table in your Travis log
   - coverage xml     # This creates the file for Codecov
+
+after_script:
   - coveralls --service=travis-pro
 
 deploy:
