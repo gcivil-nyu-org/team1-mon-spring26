@@ -1,0 +1,40 @@
+<nav class="topnav">
+    <div class="topnav-brand">
+        <span class="topnav-icon">🗽</span>
+        <span class="topnav-name">NYC Essentials</span>
+    </div>
+
+    <div class="topnav-links">
+        <a class="topnav-link{% if map_link_active %} active{% endif %}" href="{{ map_href|default:'/' }}">Map</a>
+    </div>
+
+    <div class="topnav-right">
+        {% if show_location %}
+            <span class="loc-indicator" id="location-dot"></span>
+            <span id="location-status" class="loc-status">Locating…</span>
+        {% endif %}
+
+        {% if show_user_display %}
+            <span id="user-display" class="user-display"{% if hide_user_display %} style="display:none"{% endif %}>{{ current_username|default:current_email|default:'' }}</span>
+        {% endif %}
+
+        {% if show_auth_button %}
+            <button class="btn-auth" id="auth-button">Login</button>
+        {% endif %}
+
+        <div id="user-menu" class="user-menu"{% if hide_user_menu %} style="display:none"{% endif %}>
+            <button id="avatar-button" class="avatar-button" type="button" aria-label="Open user menu">
+                <img id="avatar-image" class="avatar-image" src="{{ avatar_src }}" alt="User avatar">
+            </button>
+
+            <div id="user-menu-dropdown" class="user-menu-dropdown" style="display:none;">
+                <div id="user-menu-email" class="user-menu-email">{{ current_email|default:'' }}</div>
+                <div id="user-menu-divider" class="user-menu-divider"></div>
+                {% if show_profile_link %}
+                    <button id="profile-link" type="button">Profile</button>
+                {% endif %}
+                <button id="logout-link" type="button">Logout</button>
+            </div>
+        </div>
+    </div>
+</nav>

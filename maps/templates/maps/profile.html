@@ -1,0 +1,121 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="{% static 'maps/favicon.svg' %}" type="image/svg+xml">
+    <title>My Profile</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="{% static 'maps/css/style.css' %}">
+</head>
+<body class="profile-page">
+    {% include "maps/includes/topnav.html" with brand_href="/" map_href="/" show_location=0 show_user_display=1 show_auth_button=0 hide_user_menu=0 show_profile_link=0 map_link_active=0 avatar_src=profile_user.avatar_url current_username=profile_user.username current_email=profile_user.email %}
+
+    <main
+        id="profile-page-root"
+        class="profile-page-shell"
+        data-reviews-url="{% url 'maps:profile_reviews_api' %}"
+        data-logout-url="{% url 'maps:logout_api' %}"
+        data-update-review-base="/api/reviews/"
+    >
+        <div class="profile-page-container">
+            <section class="profile-hero-card">
+                <div class="profile-hero-main">
+                    <div class="profile-avatar-stack">
+                        <img
+                            id="profile-avatar-image"
+                            class="profile-avatar"
+                            src="{{ profile_user.avatar_url }}"
+                            alt="Profile avatar"
+                        >
+                    </div>
+
+                    <div class="profile-hero-copy">
+                        <h1 class="profile-hero-name">{{ profile_user.username|default:profile_user.email }}</h1>
+                        <p class="profile-hero-email">{{ profile_user.email }}</p>
+                        <p class="profile-hero-meta">
+                            Member since {{ profile_user.created_at|date:"F Y" }}
+                        </p>
+                    </div>
+
+                    <div class="profile-hero-actions">
+                        <a class="profile-edit-link" href="{% url 'maps:profile_edit' %}">
+                            Edit Profile
+                        </a>
+                    </div>
+                </div>
+            </section>
+
+            <section class="profile-tabs-card">
+                <div class="profile-tab-bar" role="tablist" aria-label="Profile sections">
+                    <button
+                        class="profile-tab active"
+                        type="button"
+                        role="tab"
+                        aria-selected="true"
+                        data-tab="info"
+                    >
+                        Info
+                    </button>
+                    <button
+                        class="profile-tab"
+                        type="button"
+                        role="tab"
+                        aria-selected="false"
+                        data-tab="reviews"
+                    >
+                        Reviews
+                    </button>
+                </div>
+
+                <div class="profile-tab-panel active" data-panel="info">
+                    <div class="profile-info-list">
+                        <div class="profile-info-row">
+                            <div class="profile-info-label">Email</div>
+                            <div class="profile-info-value">{{ profile_user.email }}</div>
+                        </div>
+
+                        <div class="profile-info-row">
+                            <div class="profile-info-label">Username</div>
+                            <div class="profile-info-value">{{ profile_user.username|default:"-" }}</div>
+                        </div>
+
+                        <div class="profile-info-row">
+                            <div class="profile-info-label">Bio</div>
+                            <div class="profile-info-value profile-info-bio">{{ profile_user.bio|default:"No bio yet." }}</div>
+                        </div>
+
+                        <div class="profile-info-row">
+                            <div class="profile-info-label">Joined</div>
+                            <div class="profile-info-value">{{ profile_user.created_at|date:"F j, Y" }}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="profile-tab-panel" data-panel="reviews">
+                    <div id="profile-reviews-state" class="profile-reviews-state">
+                        Open this tab to load your reviews.
+                    </div>
+                    <div id="profile-reviews-list" class="profile-reviews-list" hidden></div>
+                </div>
+
+                <div id="review-modal" class="profile-modal" hidden>
+                    <div id="review-modal-backdrop" class="profile-modal-backdrop"></div>
+
+                    <div class="profile-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="review-modal-title">
+                        <button id="review-modal-close" class="profile-modal-close" type="button" aria-label="Close review modal">✕</button>
+                        <div id="review-modal-body" class="profile-modal-body"></div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script src="{% static 'maps/js/profile.js' %}"></script>
+</body>
+</html>
