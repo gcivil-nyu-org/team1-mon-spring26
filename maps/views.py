@@ -245,13 +245,10 @@ def amenities_api(request):
                 "rating": a.avg_rating,
                 "review_count": a.review_count,
                 "reviews": [
-                    {
-                        "user_name": r.user.email,
-                        "rating": r.rating,
-                        "review_text": r.review_text,
-                        "photo_url": photo_by_user.get(r.user_id),
-                        "created_at": r.created_at.isoformat(),
-                    }
+                    serialize_amenity_review(
+                        r,
+                        photo_url=photo_by_user.get(r.user_id),
+                    )
                     for r in a.reviews.all()[:5]  # Get last 5 reviews
                 ],
                 "photo_url": a.primary_photo_url,
@@ -337,7 +334,22 @@ def serialize_auth_user(user):
         "email": user.email,
         "username": user.username,
         "bio": user.bio,
+        "avatar_url": user.avatar_url,
         "is_authenticated": True,
+    }
+
+
+def serialize_amenity_review(review, photo_url=None):
+    return {
+        "id": review.id,
+        "amenity_id": review.amenity_id,
+        "user_name": review.user.username or review.user.email,
+        "user_email": review.user.email,
+        "user_avatar_url": review.user.avatar_url,
+        "rating": review.rating,
+        "review_text": review.review_text,
+        "photo_url": photo_url,
+        "created_at": review.created_at.isoformat(),
     }
 
 
@@ -426,6 +438,121 @@ def profile_view(request):
     )
 
 
+@login_required(login_url="/?auth_required=1")
+def profile_edit_view(request):
+    """
+    Render the dedicated profile edit page for the current user.
+    """
+    return render(
+        request,
+        "maps/profile_edit.html",
+        {
+            "profile_user": request.user,
+        },
+    )
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST"])
+def update_profile_api(request):
+    """
+    Update the current user's profile fields from the dedicated edit page.
+    """
+    user = request.user
+
+    username = (request.POST.get("username") or "").strip()
+    bio = (request.POST.get("bio") or "").strip()
+    avatar_file = request.FILES.get("avatar")
+
+    if not username:
+        return JsonResponse({"error": "Username is required"}, status=400)
+
+    if len(username) > 30:
+        return JsonResponse(
+            {"error": "Username must be 30 characters or fewer"},
+            status=400,
+        )
+
+    if CustomUser.objects.filter(username=username).exclude(id=user.id).exists():
+        return JsonResponse({"error": "Username is already taken"}, status=400)
+
+    if len(bio) > 600:
+        return JsonResponse(
+            {"error": "Bio must be 600 characters or fewer"},
+            status=400,
+        )
+
+    if avatar_file:
+        content_type = avatar_file.content_type or ""
+        if not content_type.startswith("image/"):
+            return JsonResponse({"error": "Avatar must be an image"}, status=400)
+
+        if avatar_file.size > 2 * 1024 * 1024:
+            return JsonResponse(
+                {"error": "Avatar must be 2MB or smaller"},
+                status=400,
+            )
+
+        user.avatar = avatar_file
+
+    user.username = username
+    user.bio = bio
+    user.save()
+
+    response_data = serialize_auth_user(user)
+    response_data["message"] = "Profile updated successfully"
+    return JsonResponse(response_data, status=200)
+
+
+def serialize_profile_review(review):
+    """
+    Serialize one review for the profile page.
+    The photo is inferred from the amenity photo uploaded by the same user.
+    """
+    review_photo_url = None
+
+    # Reuse prefetched amenity photos when available.
+    # The current data model stores review photos on AmenityPhoto, not directly on Review.
+    for photo in review.amenity.photos.all():
+        if photo.uploaded_by_id == review.user_id:
+            review_photo_url = photo.photo.url
+            break
+
+    return {
+        "id": review.id,
+        "amenity_id": review.amenity_id,
+        "amenity_name": review.amenity.name,
+        "amenity_address": review.amenity.address or "",
+        "rating": review.rating,
+        "review_text": review.review_text,
+        "photo_url": review_photo_url,
+        "created_at": review.created_at.isoformat(),
+        "updated_at": review.updated_at.isoformat(),
+    }
+
+
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["GET"])
+def profile_reviews_api(request):
+    """
+    Return all reviews written by the current user for the profile page.
+    """
+    reviews = (
+        Review.objects.filter(user=request.user)
+        .select_related("amenity")
+        .prefetch_related("amenity__photos")
+        .order_by("-updated_at", "-created_at")
+    )
+
+    return JsonResponse(
+        {
+            "reviews": [serialize_profile_review(review) for review in reviews],
+        },
+        status=200,
+    )
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def create_review_api(request):
@@ -494,19 +621,77 @@ def create_review_api(request):
                 caption=f"Review photo by {user.email}",
             )
 
-        return JsonResponse(
-            {
-                "id": review.id,
-                "amenity_id": amenity.id,
-                "user_name": user.email,
-                "rating": review.rating,
-                "review_text": review.review_text,
-                "photo_url": review_photo.photo.url if review_photo else None,
-                "created_at": review.created_at.isoformat(),
-                "message": "Review created successfully",
-            },
-            status=201,
+        response_data = serialize_amenity_review(
+            review,
+            photo_url=review_photo.photo.url if review_photo else None,
         )
+        response_data["message"] = "Review created successfully"
+        return JsonResponse(response_data, status=201)
+
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["PATCH", "DELETE"])
+def review_detail_api(request, review_id):
+    """
+    Update or delete the current user's own review from the profile page.
+    """
+    try:
+        try:
+            review = (
+                Review.objects.filter(id=review_id, user=request.user)
+                .select_related("amenity")
+                .prefetch_related("amenity__photos")
+                .get()
+            )
+        except Review.DoesNotExist:
+            return JsonResponse({"error": "Review not found"}, status=404)
+
+        if request.method == "DELETE":
+            review.delete()
+            return JsonResponse(
+                {"message": "Review deleted successfully"},
+                status=200,
+            )
+
+        data = json.loads(request.body)
+        rating = data.get("rating", review.rating)
+        review_text = data.get("review_text", review.review_text)
+
+        try:
+            rating = int(rating)
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Rating must be an integer"}, status=400)
+
+        if not (1 <= rating <= 5):
+            return JsonResponse({"error": "Rating must be between 1 and 5"}, status=400)
+
+        review_text = str(review_text or "").strip()
+        if len(review_text) > 600:
+            return JsonResponse(
+                {"error": "Review text must be 600 characters or fewer"},
+                status=400,
+            )
+
+        review.rating = rating
+        review.review_text = review_text
+        review.save(update_fields=["rating", "review_text", "updated_at"])
+
+        refreshed_review = (
+            Review.objects.filter(id=review.id)
+            .select_related("amenity")
+            .prefetch_related("amenity__photos")
+            .get()
+        )
+
+        response_data = serialize_profile_review(refreshed_review)
+        response_data["message"] = "Review updated successfully"
+        return JsonResponse(response_data, status=200)
 
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)

@@ -850,7 +850,7 @@ function renderReviewsTab(amenity) {
     const reviews = amenity.reviews || [];
     const loggedIn = currentUser && currentUser.is_authenticated;
     const currentEmail = (currentUser?.email || '').toLowerCase();
-    const alreadyReviewed = loggedIn && reviews.some(r => (r.user_name || '').toLowerCase() === currentEmail);
+    const alreadyReviewed = loggedIn && reviews.some(r => (r.user_email || r.user_name || '').toLowerCase() === currentEmail);
 
     if (!loggedIn) {
         html += `<div class="review-login-prompt">Please <a href="#" class="js-open-auth">sign in</a> to add a review.</div>`;
@@ -879,14 +879,14 @@ function renderReviewsTab(amenity) {
         const top  = [...reviews].sort((a, b) => (b.rating - a.rating) || (new Date(b.created_at) - new Date(a.created_at)))[0];
         const stars = '★'.repeat(top.rating) + '☆'.repeat(5 - top.rating);
         const date  = new Date(top.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-        const initial = (top.user_name || '?').charAt(0).toUpperCase();
+        const topReviewerName = getReviewerName(top);
         html += `<div class="dp-section">
             <div class="dp-field-label">Most Popular Review</div>
             <div class="rv-review-card">
                 <div class="rv-review-header">
-                    <div class="rv-avatar">${initial}</div>
+                    ${renderReviewerAvatar(top)}
                     <div class="rv-review-meta">
-                        <div class="rv-reviewer">${top.user_name}</div>
+                        <div class="rv-reviewer">${topReviewerName}</div>
                         <div class="rv-review-stars">${stars}</div>
                     </div>
                     <div class="rv-review-date">${date}</div>
@@ -901,11 +901,15 @@ function renderReviewsTab(amenity) {
             html += `<div class="dp-section">
                 <div class="dp-field-label">Recent Reviews</div>
                 <div class="review-list">${otherReviews.map(r => {
+                    const reviewerName = getReviewerName(r);
                     const rStars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
                     const rDate = new Date(r.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
                     return `<div class="review-card">
                         <div class="review-card-top">
-                            <div class="review-user">${r.user_name}</div>
+                            <div class="review-reviewer-row">
+                                ${renderReviewerAvatar(r, 'review-avatar')}
+                                <div class="review-user">${reviewerName}</div>
+                            </div>
                             <div class="review-date">${rDate}</div>
                         </div>
                         <div class="review-stars">${rStars}</div>
@@ -988,7 +992,9 @@ function submitReview(amenity, pane) {
             }
 
             const newReview = {
-                user_name: b.user_name || currentUser.email || currentUser.username || 'You',
+                user_name: b.user_name || currentUser.username || currentUser.email || 'You',
+                user_email: b.user_email || currentUser.email || '',
+                user_avatar_url: b.user_avatar_url || currentUser.avatar_url || '',
                 rating: b.rating || rating,
                 review_text: b.review_text || reviewText,
                 photo_url: b.photo_url || null,
@@ -1053,6 +1059,15 @@ function to12(hhmm) {
     if (!hhmm || typeof hhmm !== 'string' || !hhmm.includes(':')) return hhmm || '';
     let [h, m] = hhmm.split(':').map(Number);
     return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+function getReviewerName(review) {
+    return review.user_name || review.user_email || 'Anonymous';
+}
+
+function renderReviewerAvatar(review, className = 'rv-avatar') {
+    const reviewerName = getReviewerName(review);
+    return `<div class="${className}"><img class="reviewer-avatar-image" src="${review.user_avatar_url}" alt="${reviewerName} avatar"></div>`;
 }
 
 function showToast(msg, type = 'info', duration = 2800) {
@@ -1182,6 +1197,7 @@ function normalizeAuthUser(data) {
         email: data.email || '',
         username: data.username || '',
         bio: data.bio || '',
+        avatar_url: data.avatar_url || '/static/maps/default-avatar.svg',
         is_authenticated: true,
     };
 }
@@ -1317,17 +1333,25 @@ function logoutUser() {
 function updateUserUI() {
     const btn = document.getElementById('auth-button');
     const disp = document.getElementById('user-display');
+    const userMenu = document.getElementById('user-menu');
+    const avatarImage = document.getElementById('avatar-image');
+    const userMenuEmail = document.getElementById('user-menu-email');
 
-    if (!btn || !disp) return;
+    if (!btn || !disp || !userMenu || !avatarImage || !userMenuEmail) return;
 
     if (currentUser && currentUser.is_authenticated) {
-        disp.textContent = currentUser.username || currentUser.email;
+        disp.textContent = currentUser.username || currentUser.email || '';
         disp.style.display = '';
-        btn.textContent = 'Logout';
+        btn.style.display = 'none';
+        userMenu.style.display = 'inline-flex';
+        avatarImage.src = currentUser.avatar_url || '/static/maps/default-avatar.svg';
+        userMenuEmail.textContent = currentUser.email || '';
     } else {
         disp.textContent = '';
         disp.style.display = 'none';
-        btn.textContent = 'Login';
+        btn.style.display = '';
+        userMenu.style.display = 'none';
+        userMenuEmail.textContent = '';
     }
 
     if (currentDetailAmenity) renderReviewsTab(currentDetailAmenity);
@@ -1341,6 +1365,25 @@ function setupAuth() {
     document.querySelectorAll('.auth-tab-link').forEach(l => l.addEventListener('click', () => switchAuthTab(l.dataset.tab)));
     setupAuthForm('login-form',    '/api/auth/login/',    'login-error');
     setupAuthForm('register-form', '/api/auth/register/', 'register-error', true);
+    const avatarButton = document.getElementById('avatar-button');
+    const dropdown = document.getElementById('user-menu-dropdown');
+    const profileLink = document.getElementById('profile-link');
+    const logoutLink = document.getElementById('logout-link');
+    avatarButton.addEventListener('click', () => {
+        dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+    });
+    profileLink.addEventListener('click', () => {
+        window.location.href = '/profile/';
+    });
+    logoutLink.addEventListener('click', () => {
+        dropdown.style.display = 'none';
+        logoutUser();
+    });
+    document.addEventListener('click', e => {
+        if (!dropdown.contains(e.target) && !avatarButton.contains(e.target)) {
+            dropdown.style.display = 'none';
+        }
+    });
     fetchCurrentUser();
 }
 
