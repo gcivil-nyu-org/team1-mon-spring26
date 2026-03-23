@@ -65,6 +65,9 @@ MIDDLEWARE = [
 ROOT_URLCONF = "django_map.urls"
 
 STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
     },
@@ -109,10 +112,11 @@ DATABASES = {
         "NAME": DB_NAME,
         "USER": DB_USER,
         "PASSWORD": os.environ.get(
-            "DB_PASSWORD", os.environ.get("RDS_PASSWORD", "mypassword")
+            "DB_PASSWORD",
+            os.environ.get("RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword")),
         ),
         "HOST": os.environ.get("RDS_HOSTNAME", "localhost"),
-        "PORT": os.environ.get("RDS_PORT", "5432"),
+        "PORT": os.environ.get("RDS_PORT", os.environ.get("PGPORT", "5432")),
     }
 }
 
