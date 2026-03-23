@@ -777,7 +777,75 @@ function renderNearbyTab(a) {
                 if (nearbyHoverMarker) { map.removeLayer(nearbyHoverMarker); nearbyHoverMarker = null; }
             }
         });
-        card.addEventListener('click', () => {
+
+        let pressTimer;
+        let isLongPress = false;
+        let isTouchMoved = false;
+
+        card.addEventListener('touchstart', (e) => {
+            if (window.innerWidth > 768) return;
+            isLongPress = false;
+            isTouchMoved = false;
+            pressTimer = setTimeout(() => {
+                if (isTouchMoved) return;
+                isLongPress = true;
+                
+                // Visual pop and Android haptic feedback
+                card.style.transform = 'scale(0.96)';
+                setTimeout(() => { card.style.transform = ''; }, 150);
+                if (navigator.vibrate) navigator.vibrate(50);
+                
+                if (found.is_cluster) {
+                    map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
+                    closeDetailPanel();
+                } else {
+                    map.flyTo([found.latitude, found.longitude], map.getZoom()); showDetailPanel(found, 'nearby');
+                }
+            }, 500);
+        }, { passive: true });
+
+        card.addEventListener('touchmove', () => {
+            if (window.innerWidth > 768) return;
+            isTouchMoved = true;
+            clearTimeout(pressTimer);
+        }, { passive: true });
+
+        card.addEventListener('touchend', () => {
+            if (window.innerWidth > 768) return;
+            clearTimeout(pressTimer);
+        });
+
+        card.addEventListener('contextmenu', e => {
+            if (window.innerWidth <= 768) e.preventDefault();
+        });
+
+        card.addEventListener('click', (e) => {
+            if (window.innerWidth <= 768) {
+                if (isLongPress) {
+                    e.preventDefault();
+                    return;
+                }
+                
+                // Mobile Short Tap (Preview)
+                if (!nearbyHoverMarker) {
+                    nearbyHoverMarker = L.marker([found.latitude, found.longitude], {
+                        zIndexOffset: 1000, interactive: false,
+                        icon: L.icon({
+                            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-yellow.png',
+                            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                            iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+                            className: 'hover-pin-bright'
+                        })
+                    }).addTo(map);
+                } else {
+                    nearbyHoverMarker.setLatLng([found.latitude, found.longitude]);
+                    if (!map.hasLayer(nearbyHoverMarker)) nearbyHoverMarker.addTo(map);
+                }
+                pinnedHoverAmenity = found;
+                return;
+            }
+
+            // Desktop Click (Select)
             blockNearbyHover = true;
             document.addEventListener('mousemove', () => { blockNearbyHover = false; }, { once: true });
             
@@ -1459,8 +1527,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let pinchStartTouchCenter = null;
 
     dp.addEventListener('touchstart', e => {
-        if (e.touches.length === 2 && dp.classList.contains('nearby-active')) {
+        if (e.touches.length >= 2) {
             e.preventDefault();
+            if (!dp.classList.contains('nearby-active')) return;
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             pinchStartDist = Math.sqrt(dx * dx + dy * dy);
@@ -1480,8 +1549,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }, { passive: false });
 
     dp.addEventListener('touchmove', e => {
-        if (e.touches.length === 2 && dp.classList.contains('nearby-active') && pinchStartDist > 0) {
+        if (e.touches.length >= 2) {
             e.preventDefault();
+            if (!dp.classList.contains('nearby-active') || pinchStartDist <= 0) return;
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             const dist = Math.sqrt(dx * dx + dy * dy);
@@ -1509,6 +1579,13 @@ document.addEventListener('DOMContentLoaded', () => {
             pinchStartDist = 0;
         }
     });
+
+    // --- Prevent OS Zoom on Sidebar ---
+    const sb = document.getElementById('sidebar');
+    if (sb) {
+        sb.addEventListener('touchstart', e => { if (e.touches.length >= 2) e.preventDefault(); }, { passive: false });
+        sb.addEventListener('touchmove',  e => { if (e.touches.length >= 2) e.preventDefault(); }, { passive: false });
+    }
 
     map.on('click', (e) => {
         // If the click is on a marker, do nothing.

@@ -7,7 +7,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.gis.geos import Polygon, GEOSGeometry
 from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser
 from django.db.models import Avg, Count, Subquery, OuterRef
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import json
 
 
@@ -114,7 +114,7 @@ def amenities_api(request):
 
         else:
             amenities = Amenity.objects.all()
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, InvalidOperation):
         amenities = Amenity.objects.all()
 
     # Filter by amenity type if specified
