@@ -513,7 +513,8 @@ def serialize_profile_review(review):
     review_photo_url = None
 
     # Reuse prefetched amenity photos when available.
-    # The current data model stores review photos on AmenityPhoto, not directly on Review.
+    # The current data model stores review photos on AmenityPhoto,
+    # not directly on Review.
     for photo in review.amenity.photos.all():
         if photo.uploaded_by_id == review.user_id:
             review_photo_url = photo.photo.url
