@@ -28,7 +28,6 @@ let pinnedHoverAmenity     = null;
 let blockNearbyHover       = false;
 let currentUser            = null;
 let hoverTooltipTimer      = null;
-let amenityPressTimer      = null;
 
 const hoursFilter = {
     openNow:      false,
@@ -609,29 +608,8 @@ function addAmenityMarker(amenity) {
         if (window.innerWidth > 768) hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); 
     });
 
-    // Mobile tap & long-press behavior
-    let isLongPress = false;
-
-    marker.on('mousedown', () => {
-        if (window.innerWidth > 768) return;
-        clearTimeout(amenityPressTimer);
-        isLongPress = false;
-        amenityPressTimer = setTimeout(() => {
-            isLongPress = true;
-            if (navigator.vibrate) navigator.vibrate(50);
-            hoverTooltip.hide();
-            showDetailPanel(amenity);
-        }, 500); // 500ms trigger for long press
-    });
-
-    marker.on('mouseup', () => {
-        if (window.innerWidth <= 768) clearTimeout(amenityPressTimer);
-    });
-
     marker.on('click', e => {
         if (window.innerWidth <= 768) {
-            if (isLongPress) return;
-            
             if (hoverTooltip.isVisible() && hoverTooltip.getCurrentAmenity() === amenity) {
                 hoverTooltip.hide();
                 showDetailPanel(amenity);
@@ -1567,11 +1545,9 @@ document.addEventListener('DOMContentLoaded', () => {
     map.on('moveend', loadAmenities);
     map.on('dragstart', () => {
         hoverTooltip.hide();
-        clearTimeout(amenityPressTimer);
     });
     map.on('zoomstart', () => {
         hoverTooltip.hide();
-        clearTimeout(amenityPressTimer);
     });
 
     // --- Custom Touch Timer for Mobile Long Press Fallback ---
