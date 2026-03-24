@@ -24,7 +24,7 @@
 
         <div id="user-menu" class="user-menu"{% if hide_user_menu %} style="display:none"{% endif %}>
             <button id="avatar-button" class="avatar-button" type="button" aria-label="Open user menu">
-                <img id="avatar-image" class="avatar-image" src="{{ avatar_src }}" alt="User avatar">
+                <img id="avatar-image" class="avatar-image" src="{{ avatar_src }}" alt="User avatar" onerror="this.onerror=null;this.src='/static/maps/default-avatar.svg';">
             </button>
 
             <div id="user-menu-dropdown" class="user-menu-dropdown" style="display:none;">

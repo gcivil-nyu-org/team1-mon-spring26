@@ -263,6 +263,14 @@ class ViewsCoverageTest(TestCase):
             active["reviews"][0]["user_avatar_url"], self.test_user.avatar_url
         )
 
+    def test_avatar_url_falls_back_when_avatar_file_is_missing(self):
+        self.test_user.avatar = "avatars/missing-avatar.png"
+
+        with patch.object(self.test_user.avatar.storage, "exists", return_value=False):
+            self.assertEqual(
+                self.test_user.avatar_url, "/static/maps/default-avatar.svg"
+            )
+
     def test_profile_view_requires_login(self):
         response = self.client.get(reverse("maps:profile"))
         self.assertEqual(response.status_code, 302)

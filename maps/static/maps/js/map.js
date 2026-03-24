@@ -1190,7 +1190,7 @@ function getReviewerName(review) {
 
 function renderReviewerAvatar(review, className = 'rv-avatar') {
     const reviewerName = getReviewerName(review);
-    return `<div class="${className}"><img class="reviewer-avatar-image" src="${review.user_avatar_url}" alt="${reviewerName} avatar"></div>`;
+    return `<div class="${className}"><img class="reviewer-avatar-image" src="${review.user_avatar_url}" alt="${reviewerName} avatar" onerror="this.onerror=null;this.src='/static/maps/default-avatar.svg';"></div>`;
 }
 
 function showToast(msg, type = 'info', duration = 2800) {

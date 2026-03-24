@@ -643,7 +643,7 @@ aside.detail-panel.open { width: var(--detail-w) !important; }
 .profile-display-star.is-lit { color: #f59e0b; }
 .profile-review-text { font-size: 15px; color: var(--text-1); line-height: 1.65; margin-bottom: 14px; white-space: pre-wrap; }
 .profile-review-photo { width: 100%; max-width: 280px; border-radius: 12px; display: block; margin-bottom: 14px; border: 1px solid var(--border); }
-.profile-empty-title { font-size: 18px; font-weight: 700; color: var(--text-1); margin-bottom: 8px; }
+.profile-empty-title { font-size: 16px; font-weight: 500; color: var(--text-2); margin-bottom: 8px; }
 .profile-empty-copy { font-size: 14px; color: var(--text-2); margin-bottom: 14px; }
 .profile-empty-link, .profile-edit-link, .profile-edit-cancel, .profile-edit-save, .profile-modal-secondary, .profile-modal-danger, .profile-modal-primary { display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 13px; font-weight: 600; text-decoration: none; border: none; cursor: pointer; font-family: var(--font); }
 .profile-empty-link { height: 38px; padding: 0 14px; background: var(--accent); color: #fff; }

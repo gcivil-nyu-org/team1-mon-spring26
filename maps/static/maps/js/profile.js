@@ -171,8 +171,6 @@ document.addEventListener('DOMContentLoaded', () => {
             reviewsState.hidden = false;
             reviewsState.innerHTML = `
                 <div class="profile-empty-title">You haven't written any reviews yet.</div>
-                <p class="profile-empty-copy">Go back to the map, explore a place, and leave your first review.</p>
-                <a class="profile-empty-link" href="/">Back to Map</a>
             `;
             reviewsList.hidden = true;
             reviewsList.innerHTML = '';
