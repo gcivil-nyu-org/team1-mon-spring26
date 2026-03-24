@@ -215,3 +215,4 @@ __marimo__/
 
 # part of the test data, but we don't want to commit the actual photos
 media/amenity_photos/
+media/avatars/
