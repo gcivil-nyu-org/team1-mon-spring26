@@ -597,9 +597,6 @@ function addAmenityMarker(amenity) {
     }
 
     const marker = L.marker([amenity.latitude, amenity.longitude], { icon, amenityData: amenity });
-    marker.on('mouseover', e => { clearTimeout(hoverTooltipTimer); hoverTooltip.show(amenity, e.originalEvent.clientX, e.originalEvent.clientY); });
-    marker.on('mousemove', e => hoverTooltip.move(e.originalEvent.clientX, e.originalEvent.clientY));
-    marker.on('mouseout',  () => { hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); });
     
     // Desktop hover behavior
     marker.on('mouseover', e => { 
@@ -632,8 +629,6 @@ function addAmenityMarker(amenity) {
     });
 
     marker.on('click', e => {
-        hoverTooltip.hide();
-        showDetailPanel(amenity); 
         if (window.innerWidth <= 768) {
             if (isLongPress) return;
             
@@ -1570,8 +1565,6 @@ document.addEventListener('DOMContentLoaded', () => {
     map.addLayer(bikeRackMarkers);
     map.addLayer(otherAmenityMarkers);
     map.on('moveend', loadAmenities);
-    map.on('dragstart', () => hoverTooltip.hide());
-    map.on('zoomstart', () => hoverTooltip.hide());
     map.on('dragstart', () => {
         hoverTooltip.hide();
         clearTimeout(amenityPressTimer);
