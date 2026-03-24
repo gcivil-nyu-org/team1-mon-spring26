@@ -567,8 +567,8 @@ function addAmenityMarker(amenity) {
 
     if (amenity.icon === 'restroom') {
         icon = L.divIcon({
-            // 🧻🚻🚾🚹
-            html: `<div style="font-size: 24px; text-shadow: 0 0 3px #fff, 0 0 5px #fff;">🚽</div>`,
+            // 🚽🧻🚻🚾🚹
+            html: `<div style="font-size: 24px; text-shadow: 0 0 3px #fff, 0 0 5px #fff;">🚹</div>`,
             className: 'leaflet-div-icon-custom amenity-marker-icon',
             iconSize: [24, 24],
             iconAnchor: [12, 24],
