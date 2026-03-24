@@ -28,6 +28,7 @@ let pinnedHoverAmenity     = null;
 let blockNearbyHover       = false;
 let currentUser            = null;
 let hoverTooltipTimer      = null;
+let amenityPressTimer      = null;
 
 const hoursFilter = {
     openNow:      false,
@@ -608,8 +609,29 @@ function addAmenityMarker(amenity) {
         if (window.innerWidth > 768) hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); 
     });
 
+    // Mobile tap & long-press behavior
+    let isLongPress = false;
+
+    marker.on('mousedown', () => {
+        if (window.innerWidth > 768) return;
+        clearTimeout(amenityPressTimer);
+        isLongPress = false;
+        amenityPressTimer = setTimeout(() => {
+            isLongPress = true;
+            if (navigator.vibrate) navigator.vibrate(50);
+            hoverTooltip.hide();
+            showDetailPanel(amenity);
+        }, 500); // 500ms trigger for long press
+    });
+
+    marker.on('mouseup', () => {
+        if (window.innerWidth <= 768) clearTimeout(amenityPressTimer);
+    });
+
     marker.on('click', e => {
         if (window.innerWidth <= 768) {
+            if (isLongPress) return;
+            
             if (hoverTooltip.isVisible() && hoverTooltip.getCurrentAmenity() === amenity) {
                 hoverTooltip.hide();
                 showDetailPanel(amenity);
@@ -1545,10 +1567,100 @@ document.addEventListener('DOMContentLoaded', () => {
     map.on('moveend', loadAmenities);
     map.on('dragstart', () => {
         hoverTooltip.hide();
+        clearTimeout(amenityPressTimer);
     });
     map.on('zoomstart', () => {
         hoverTooltip.hide();
+        clearTimeout(amenityPressTimer);
     });
+
+    // --- Custom Touch Timer for Mobile Long Press Fallback ---
+    let mapTouchTimer;
+    let mapTouchPos;
+
+    map.on('touchstart', (e) => {
+        if (e.originalEvent.touches && e.originalEvent.touches.length > 1) return;
+        mapTouchPos = e.latlng;
+        mapTouchTimer = setTimeout(() => {
+            map.fire('contextmenu', { latlng: mapTouchPos, originalEvent: e.originalEvent });
+        }, 800);
+    });
+
+    map.on('touchend', () => clearTimeout(mapTouchTimer));
+    map.on('touchmove', () => clearTimeout(mapTouchTimer));
+
+    let contextMenuFired = false;
+
+    // --- Right Click / Long Press to Set Location ---
+    map.on('contextmenu', (e) => {
+        clearTimeout(mapTouchTimer);
+        if (contextMenuFired) return;
+        contextMenuFired = true;
+        setTimeout(() => contextMenuFired = false, 500); // debounce to avoid double firing on some devices
+
+        if (e.originalEvent && typeof e.originalEvent.preventDefault === 'function') {
+            e.originalEvent.preventDefault();
+        }
+        
+        const lat = e.latlng.lat;
+        const lon = e.latlng.lng;
+        
+        showToast('Setting custom location...', 'info', 1000);
+        
+        fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`)
+            .then(r => r.json())
+            .then(data => {
+                let name = 'Custom Location';
+                if (data && data.display_name) {
+                    const parts = [];
+                    if (data.name) parts.push(data.name);
+
+                    if (data.address) {
+                        if (data.address.road) {
+                            const street = data.address.house_number ? `${data.address.house_number} ${data.address.road}` : data.address.road;
+                            if (street !== data.name) parts.push(street);
+                        }
+                        const city = data.address.city || data.address.town || data.address.village || data.address.borough;
+                        if (city && !parts.includes(city)) parts.push(city);
+                        if (data.address.state && !parts.includes(data.address.state)) parts.push(data.address.state);
+                    }
+
+                    if (parts.length === 0) {
+                        parts.push(data.display_name.split(',')[0]);
+                    }
+                    name = parts.join(', ');
+                }
+                
+                updateHomeLocation(lat, lon, name);
+                saveSearchHistory(name, lat, lon);
+                showToast('Location set to ' + name, 'success');
+            })
+            .catch(err => {
+                console.error('Reverse geocode failed', err);
+                updateHomeLocation(lat, lon, 'Custom Location');
+                showToast('Custom location set', 'success');
+            });
+    });
+
+    function updateHomeLocation(lat, lon, name) {
+        if (selectedLocationMarker) {
+            selectedLocationMarker.setLatLng([lat, lon]).bindPopup(name).openPopup();
+            const inp = document.getElementById('search-input');
+            if (inp) {
+                inp.value = name;
+                inp.closest('.search-box').classList.add('has-value');
+            }
+        } else {
+            userLocation = { latitude: lat, longitude: lon };
+            if (userMarker) {
+                userMarker.setLatLng([lat, lon]).bindPopup('📍 ' + name).openPopup();
+            } else {
+                userMarker = L.marker([lat, lon], { title: name, zIndexOffset: 100 }).addTo(map).bindPopup('📍 ' + name).openPopup();
+            }
+            document.getElementById('location-status').textContent = 'Custom location';
+            document.getElementById('location-dot').classList.add('found');
+        }
+    }
 
     document.getElementById('reset-filters-btn').addEventListener('click', resetAllFilters);
     document.getElementById('location-button').addEventListener('click', retryGeolocation);
