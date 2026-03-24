@@ -1,4 +1,4 @@
-const CACHE_NAME = 'nyc-essentials-v1.05';
+const CACHE_NAME = 'nyc-essentials-v1.06';
 const ASSETS = [
     '/',
     '/static/maps/css/style.css',
