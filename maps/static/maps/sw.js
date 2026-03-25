@@ -1,10 +1,10 @@
-const CACHE_NAME = 'nyc-essentials-v1.03';
+const CACHE_NAME = 'nyc-essentials-v1.07';
 const ASSETS = [
     '/',
     '/static/maps/css/style.css',
     '/static/maps/js/map.js',
-    '/static/maps/favicon.svg',
-    '/static/maps/manifest.json'
+    '/static/maps/android-chrome-192x192.png',
+    '/static/maps/android-chrome-512x512.png'
 ];
 
 self.addEventListener('install', event => {
