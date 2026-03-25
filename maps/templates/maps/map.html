@@ -23,22 +23,7 @@
     <link rel="stylesheet" href="{% static 'maps/css/style.css' %}">
 </head>
 <body>
-
-<nav class="topnav">
-    <div class="topnav-brand">
-        <span class="topnav-icon">🗽</span>
-        <span class="topnav-name">NYC Essentials</span>
-    </div>
-    <div class="topnav-links">
-        <a class="topnav-link active" href="#">Map</a>
-    </div>
-    <div class="topnav-right">
-        <span class="loc-indicator" id="location-dot"></span>
-        <span id="location-status" class="loc-status">Locating…</span>
-        <span id="user-display" class="user-display" style="display:none"></span>
-        <button class="btn-auth" id="auth-button">Login</button>
-    </div>
-</nav>
+{% include "maps/includes/topnav.html" with show_location=1 show_user_display=1 hide_user_display=1 show_auth_button=1 hide_user_menu=1 show_profile_link=1 map_link_active=1 avatar_src="/static/maps/default-avatar.svg" current_username="" current_email="" %}
 
 <div class="app">
 

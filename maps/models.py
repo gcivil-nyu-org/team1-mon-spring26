@@ -1,6 +1,7 @@
 from django.contrib.gis.db import models
 from django.contrib.postgres.indexes import GistIndex
 from django.contrib.auth.models import AbstractUser
+from django.templatetags.static import static
 import datetime
 
 
@@ -9,6 +10,7 @@ class CustomUser(AbstractUser):
 
     email = models.EmailField(unique=True)
     bio = models.TextField(blank=True)
+    avatar = models.ImageField(upload_to="avatars/%Y/%m/%d/", blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -17,6 +19,12 @@ class CustomUser(AbstractUser):
 
     class Meta:
         ordering = ["-created_at"]
+
+    @property
+    def avatar_url(self):
+        if self.avatar:
+            return self.avatar.url
+        return static("maps/default-avatar.svg")
 
     def __str__(self):
         return self.email
