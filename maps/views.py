@@ -581,6 +581,7 @@ def serialize_profile_review(review):
         "id": review.id,
         "amenity_id": review.amenity_id,
         "amenity_name": review.amenity.name,
+        "amenity_prop_name": review.amenity.prop_name,
         "amenity_type": review.amenity.amenity_type.name,
         "rating": review.rating,
         "review_text": review.review_text,

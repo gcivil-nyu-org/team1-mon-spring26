@@ -450,6 +450,10 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(reviews[0]["id"], own_review.id)
         self.assertEqual(reviews[0]["amenity_name"], self.amenity_active.name)
         self.assertEqual(
+            reviews[0]["amenity_prop_name"],
+            self.amenity_active.prop_name,
+        )
+        self.assertEqual(
             reviews[0]["amenity_type"], self.amenity_active.amenity_type.name
         )
         self.assertIsNotNone(reviews[0]["photo_url"])
