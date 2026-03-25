@@ -998,13 +998,13 @@ function renderReviewsTab(amenity) {
     }
 
     if (reviews.length) {
-        const byRecent = [...reviews].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        const top  = [...reviews].sort((a, b) => (b.rating - a.rating) || (new Date(b.created_at) - new Date(a.created_at)))[0];
+        const byVotes = [...reviews].sort(compareReviewsByVotes);
+        const top = byVotes[0];
         const stars = '★'.repeat(top.rating) + '☆'.repeat(5 - top.rating);
         const date  = new Date(top.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
         const topReviewerName = getReviewerName(top);
         html += `<div class="dp-section">
-            <div class="dp-field-label">Most Popular Review</div>
+            <div class="dp-field-label">Top Voted Review</div>
             <div class="rv-review-card">
                 <div class="rv-review-header">
                     ${renderReviewerAvatar(top)}
@@ -1016,13 +1016,14 @@ function renderReviewsTab(amenity) {
                 </div>
                 <div class="rv-review-text">${top.review_text || 'No written comment.'}</div>
                 ${top.photo_url ? `<img class="rv-review-photo" src="${top.photo_url}" alt="Review photo">` : ''}
+                ${renderVoteControls(top)}
             </div>
         </div>`;
 
-        const otherReviews = byRecent.filter(r => r !== top);
+        const otherReviews = byVotes.slice(1);
         if (otherReviews.length) {
             html += `<div class="dp-section">
-                <div class="dp-field-label">Recent Reviews</div>
+                <div class="dp-field-label">Other Reviews</div>
                 <div class="review-list">${otherReviews.map(r => {
                     const reviewerName = getReviewerName(r);
                     const rStars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
@@ -1038,6 +1039,7 @@ function renderReviewsTab(amenity) {
                         <div class="review-stars">${rStars}</div>
                         <div class="review-text">${r.review_text || 'No written comment.'}</div>
                         ${r.photo_url ? `<img class="review-photo" src="${r.photo_url}" alt="Review photo">` : ''}
+                        ${renderVoteControls(r)}
                     </div>`;
                 }).join('')}</div>
             </div>`;
@@ -1061,6 +1063,15 @@ function renderReviewsTab(amenity) {
     if (submitBtn) {
         submitBtn.addEventListener('click', () => submitReview(amenity, pane));
     }
+
+    pane.querySelectorAll('.js-vote-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const reviewId = parseInt(btn.dataset.reviewId, 10);
+            const voteValue = parseInt(btn.dataset.vote, 10);
+            if (!Number.isFinite(reviewId) || !Number.isFinite(voteValue)) return;
+            submitReviewVote(amenity, reviewId, voteValue);
+        });
+    });
 
     const starPicker = pane.querySelector('.js-star-picker');
     if (starPicker) {
@@ -1115,12 +1126,15 @@ function submitReview(amenity, pane) {
             }
 
             const newReview = {
+                id: b.id,
                 user_name: b.user_name || currentUser.username || currentUser.email || 'You',
                 user_email: b.user_email || currentUser.email || '',
                 user_avatar_url: b.user_avatar_url || currentUser.avatar_url || '',
                 rating: b.rating || rating,
                 review_text: b.review_text || reviewText,
                 photo_url: b.photo_url || null,
+                vote_score: Number(b.vote_score || 0),
+                user_vote: Number(b.user_vote || 0),
                 created_at: b.created_at || new Date().toISOString(),
             };
 
@@ -1144,6 +1158,45 @@ function submitReview(amenity, pane) {
             showToast('Network error while submitting review.', 'error');
             btn.disabled = false;
             btn.textContent = 'Submit Review';
+        });
+}
+
+function submitReviewVote(amenity, reviewId, voteValue) {
+    if (!currentUser || !currentUser.is_authenticated) {
+        showToast('Please sign in to vote on reviews.', 'warn');
+        return;
+    }
+
+    fetch(`/api/reviews/${reviewId}/vote/`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ vote: voteValue }),
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400) {
+                showToast(b.error || 'Unable to save your vote.', 'error');
+                return;
+            }
+
+            if (!Array.isArray(amenity.reviews)) return;
+            amenity.reviews = amenity.reviews.map(review => {
+                if (review.id !== reviewId) return review;
+                return {
+                    ...review,
+                    vote_score: Number(b.vote_score || 0),
+                    user_vote: Number(b.user_vote || 0),
+                };
+            });
+
+            renderReviewsTab(amenity);
+            switchDetailTab('reviews');
+        })
+        .catch(() => {
+            showToast('Network error while voting.', 'error');
         });
 }
 
@@ -1186,6 +1239,28 @@ function to12(hhmm) {
 
 function getReviewerName(review) {
     return review.user_name || review.user_email || 'Anonymous';
+}
+
+function compareReviewsByVotes(a, b) {
+    const scoreDiff = Number(b.vote_score || 0) - Number(a.vote_score || 0);
+    if (scoreDiff !== 0) return scoreDiff;
+
+    const ratingDiff = Number(b.rating || 0) - Number(a.rating || 0);
+    if (ratingDiff !== 0) return ratingDiff;
+
+    return new Date(b.created_at) - new Date(a.created_at);
+}
+
+function renderVoteControls(review) {
+    const score = Number(review.vote_score || 0);
+    const userVote = Number(review.user_vote || 0);
+    const loginRequired = !currentUser || !currentUser.is_authenticated;
+
+    return `<div class="review-vote-row">
+        <button type="button" class="review-vote-btn js-vote-btn ${userVote === 1 ? 'is-active' : ''}" data-review-id="${review.id}" data-vote="1" ${loginRequired ? 'title="Sign in to vote"' : ''} aria-label="Upvote this review">👍</button>
+        <span class="review-vote-score">${score}</span>
+        <button type="button" class="review-vote-btn js-vote-btn ${userVote === -1 ? 'is-active is-down' : ''}" data-review-id="${review.id}" data-vote="-1" ${loginRequired ? 'title="Sign in to vote"' : ''} aria-label="Downvote this review">👎</button>
+    </div>`;
 }
 
 function renderReviewerAvatar(review, className = 'rv-avatar') {

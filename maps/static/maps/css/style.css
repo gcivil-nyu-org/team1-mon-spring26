@@ -442,6 +442,22 @@ aside.detail-panel.open { width: var(--detail-w) !important; }
 .review-stars { color: #f59e0b; font-size: 13px; margin-bottom: 5px; }
 .review-text  { font-size: 13px; color: var(--text-2); line-height: 1.5; }
 .review-photo { margin-top: 8px; width: 100%; max-height: 220px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; }
+.review-vote-row { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; }
+.review-vote-btn {
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    transition: border-color var(--trans), background var(--trans), transform var(--trans);
+}
+.review-vote-btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+.review-vote-btn.is-active { background: var(--accent-lt); border-color: var(--accent); }
+.review-vote-btn.is-active.is-down { background: var(--red-lt); border-color: var(--red); }
+.review-vote-score { min-width: 20px; text-align: center; font-size: 13px; font-weight: 700; color: var(--text-1); }
 .review-empty { padding: 40px 16px; text-align: center; color: var(--text-3); font-size: 13px; }
 .review-rating-summary { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 14px; }
 .review-rating-big    { font-size: 36px; font-weight: 700; color: var(--text-1); line-height: 1; }

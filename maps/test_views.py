@@ -5,7 +5,7 @@ from django.contrib.gis.geos import Point
 from django.core.files.uploadedfile import SimpleUploadedFile
 from unittest.mock import patch
 
-from maps.models import AmenityType, Amenity, CustomUser, Review, AmenityPhoto
+from maps.models import AmenityType, Amenity, CustomUser, Review, AmenityPhoto, ReviewVote
 from maps.views import normalize_longitude, get_cluster_grid_size
 
 
@@ -262,6 +262,49 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(
             active["reviews"][0]["user_avatar_url"], self.test_user.avatar_url
         )
+
+    def test_amenities_api_reviews_ordered_by_vote_score(self):
+        reviewer_one = CustomUser.objects.create_user(
+            email="reviewer1@example.com",
+            username="reviewer1",
+            password="password123",
+        )
+        reviewer_two = CustomUser.objects.create_user(
+            email="reviewer2@example.com",
+            username="reviewer2",
+            password="password123",
+        )
+        voter = CustomUser.objects.create_user(
+            email="voter@example.com",
+            username="voter-user",
+            password="password123",
+        )
+
+        review_low = Review.objects.create(
+            amenity=self.amenity_active,
+            user=reviewer_one,
+            rating=5,
+            review_text="Great place",
+        )
+        review_top = Review.objects.create(
+            amenity=self.amenity_active,
+            user=reviewer_two,
+            rating=3,
+            review_text="Okay place",
+        )
+
+        ReviewVote.objects.create(review=review_top, user=voter, value=1)
+
+        response = self.client.get(reverse("maps:amenities_api"))
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        amenity = next(
+            (a for a in data["amenities"] if a["id"] == self.amenity_active.id), None
+        )
+        self.assertIsNotNone(amenity)
+        self.assertGreaterEqual(len(amenity["reviews"]), 2)
+        self.assertEqual(amenity["reviews"][0]["id"], review_top.id)
+        self.assertEqual(amenity["reviews"][1]["id"], review_low.id)
 
     def test_profile_view_requires_login(self):
         response = self.client.get(reverse("maps:profile"))
@@ -538,3 +581,81 @@ class ViewsCoverageTest(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response_not_found.status_code, 404)
+
+    def test_review_vote_api_requires_auth(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=4,
+            review_text="Original",
+        )
+
+        response = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "up"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 302)
+
+    def test_review_vote_api_toggle_and_switch(self):
+        reviewer = CustomUser.objects.create_user(
+            email="review-owner@example.com",
+            username="review-owner",
+            password="password123",
+        )
+        voter = CustomUser.objects.create_user(
+            email="review-voter@example.com",
+            username="review-voter",
+            password="password123",
+        )
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=reviewer,
+            rating=4,
+            review_text="Solid",
+        )
+
+        self.client.force_login(voter)
+        upvote_response = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "up"}),
+            content_type="application/json",
+        )
+        self.assertEqual(upvote_response.status_code, 200)
+        self.assertEqual(upvote_response.json()["vote_score"], 1)
+        self.assertEqual(upvote_response.json()["user_vote"], 1)
+
+        downvote_response = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "down"}),
+            content_type="application/json",
+        )
+        self.assertEqual(downvote_response.status_code, 200)
+        self.assertEqual(downvote_response.json()["vote_score"], -1)
+        self.assertEqual(downvote_response.json()["user_vote"], -1)
+
+        clear_response = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "down"}),
+            content_type="application/json",
+        )
+        self.assertEqual(clear_response.status_code, 200)
+        self.assertEqual(clear_response.json()["vote_score"], 0)
+        self.assertEqual(clear_response.json()["user_vote"], 0)
+
+    def test_review_vote_api_rejects_own_review(self):
+        own_review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=5,
+            review_text="Mine",
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:review_vote_api", args=[own_review.id]),
+            data=json.dumps({"vote": "up"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)

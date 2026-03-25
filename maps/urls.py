@@ -21,4 +21,9 @@ urlpatterns = [
         views.review_detail_api,
         name="review_detail_api",
     ),
+    path(
+        "api/reviews/<int:review_id>/vote/",
+        views.review_vote_api,
+        name="review_vote_api",
+    ),
 ]

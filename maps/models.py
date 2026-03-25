@@ -261,6 +261,36 @@ class Review(models.Model):
         return f"Review by {user_name} for {self.amenity.name} - {self.rating}★"
 
 
+class ReviewVote(models.Model):
+    """Per-user up/down vote for a review."""
+
+    VOTE_CHOICES = [
+        (1, "Upvote"),
+        (-1, "Downvote"),
+    ]
+
+    review = models.ForeignKey(Review, on_delete=models.CASCADE, related_name="votes")
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="review_votes",
+    )
+    value = models.SmallIntegerField(choices=VOTE_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("review", "user")]
+        indexes = [
+            models.Index(fields=["review", "value"], name="review_vote_score_idx"),
+            models.Index(fields=["user", "-updated_at"], name="review_vote_user_updated_idx"),
+        ]
+
+    def __str__(self):
+        vote_label = "upvote" if self.value == 1 else "downvote"
+        return f"{self.user.email} {vote_label}d review {self.review_id}"
+
+
 class AmenityPhoto(models.Model):
     """Photos for amenities uploaded by users."""
 

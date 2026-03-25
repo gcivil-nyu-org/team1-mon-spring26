@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser
+from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser, ReviewVote
 
 
 @admin.register(CustomUser)
@@ -90,3 +90,11 @@ class AmenityPhotoAdmin(admin.ModelAdmin):
         ("Caption & Attribution", {"fields": ("caption", "uploaded_by")}),
         ("Metadata", {"fields": ("created_at",), "classes": ("collapse",)}),
     )
+
+
+@admin.register(ReviewVote)
+class ReviewVoteAdmin(admin.ModelAdmin):
+    list_display = ["review", "user", "value", "updated_at"]
+    list_filter = ["value", "updated_at"]
+    search_fields = ["review__amenity__name", "user__email"]
+    readonly_fields = ("created_at", "updated_at")
