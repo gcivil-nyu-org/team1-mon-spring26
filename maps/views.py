@@ -604,8 +604,6 @@ def get_user_chats_api(request):
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
 
-        from .models import Chat, ChatParticipant
-
         # Get all chats where the user is a participant
         user_chats = (
             Chat.objects.filter(participants__user=request.user)
@@ -659,8 +657,6 @@ def get_chat_messages_api(request):
     try:
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
-
-        from .models import Chat, ChatParticipant
 
         chat_id = request.GET.get("chat_id")
         page = int(request.GET.get("page", 1))
@@ -732,8 +728,6 @@ def send_message_api(request):
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
 
-        from .models import Chat, ChatParticipant, Message
-
         data = json.loads(request.body)
         chat_id = data.get("chat_id")
         content = data.get("content", "").strip()
@@ -789,8 +783,6 @@ def create_direct_chat_api(request):
     try:
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
-
-        from .models import Chat, ChatParticipant
 
         data = json.loads(request.body)
         recipient_email = data.get("recipient_email", "").strip()
@@ -861,8 +853,6 @@ def create_group_chat_api(request):
     try:
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
-
-        from .models import Chat, ChatParticipant
 
         data = json.loads(request.body)
         chat_name = data.get("chat_name", "").strip()
