@@ -6,7 +6,14 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils.html import escape
 from unittest.mock import patch
 
-from maps.models import AmenityType, Amenity, CustomUser, Review, AmenityPhoto
+from maps.models import (
+    AmenityType,
+    Amenity,
+    CustomUser,
+    Review,
+    AmenityPhoto,
+    ReviewVote,
+)
 from maps.views import normalize_longitude, get_cluster_grid_size
 
 
@@ -648,3 +655,99 @@ class ViewsCoverageTest(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response_not_found.status_code, 404)
+
+    def test_review_vote_api_toggle_and_change(self):
+        reviewer = CustomUser.objects.create_user(
+            email="reviewer@example.com",
+            username="reviewer",
+            password="password123",
+        )
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=reviewer,
+            rating=4,
+            review_text="Solid spot",
+        )
+
+        self.client.force_login(self.test_user)
+
+        first = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "up"}),
+            content_type="application/json",
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["vote_score"], 1)
+        self.assertEqual(first.json()["user_vote"], 1)
+
+        second = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "up"}),
+            content_type="application/json",
+        )
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["vote_score"], 0)
+        self.assertEqual(second.json()["user_vote"], 0)
+
+        third = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "down"}),
+            content_type="application/json",
+        )
+        self.assertEqual(third.status_code, 200)
+        self.assertEqual(third.json()["vote_score"], -1)
+        self.assertEqual(third.json()["user_vote"], -1)
+
+    def test_amenities_api_returns_vote_score_ordering(self):
+        reviewer_one = CustomUser.objects.create_user(
+            email="reviewer1@example.com",
+            username="reviewer-one",
+            password="password123",
+        )
+        reviewer_two = CustomUser.objects.create_user(
+            email="reviewer2@example.com",
+            username="reviewer-two",
+            password="password123",
+        )
+
+        review_top = Review.objects.create(
+            amenity=self.amenity_active,
+            user=reviewer_one,
+            rating=3,
+            review_text="Top-voted",
+        )
+        review_low = Review.objects.create(
+            amenity=self.amenity_active,
+            user=reviewer_two,
+            rating=5,
+            review_text="Lower votes",
+        )
+
+        voter_a = CustomUser.objects.create_user(
+            email="votera@example.com",
+            username="voter-a",
+            password="password123",
+        )
+        voter_b = CustomUser.objects.create_user(
+            email="voterb@example.com",
+            username="voter-b",
+            password="password123",
+        )
+
+        ReviewVote.objects.create(review=review_top, user=voter_a, value=1)
+        ReviewVote.objects.create(review=review_top, user=voter_b, value=1)
+        ReviewVote.objects.create(review=review_low, user=voter_a, value=-1)
+
+        self.client.force_login(voter_b)
+        response = self.client.get(reverse("maps:amenities_api"))
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()["amenities"]
+        amenity_payload = next(
+            item for item in payload if item.get("id") == self.amenity_active.id
+        )
+
+        self.assertGreaterEqual(len(amenity_payload["reviews"]), 2)
+        first_review = amenity_payload["reviews"][0]
+        self.assertEqual(first_review["id"], review_top.id)
+        self.assertEqual(first_review["vote_score"], 2)
