@@ -465,6 +465,52 @@ aside.detail-panel.open { width: var(--detail-w) !important; }
 .review-date  { font-size: 11px; color: var(--text-3); }
 .review-stars { color: #f59e0b; font-size: 13px; margin-bottom: 5px; }
 .review-text  { font-size: 13px; color: var(--text-2); line-height: 1.5; }
+.review-vote-row {
+    margin-top: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 6px;
+}
+.review-vote-btn {
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 999px;
+    color: var(--text-2);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all var(--trans);
+}
+.review-vote-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.review-vote-btn.active.up {
+    border-color: var(--green);
+    background: var(--green-lt);
+    color: var(--green);
+}
+.review-vote-btn.active.down {
+    border-color: var(--red);
+    background: var(--red-lt);
+    color: var(--red);
+}
+.review-vote-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+.review-vote-score {
+    min-width: 24px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-1);
+}
 .review-photo { margin-top: 8px; width: 100%; max-height: 220px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; }
 .review-empty { padding: 40px 16px; text-align: center; color: var(--text-3); font-size: 13px; }
 .review-rating-summary { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 14px; }
@@ -496,6 +542,16 @@ aside.detail-panel.open { width: var(--detail-w) !important; }
 .rv-review-stars  { font-size: 12px; color: #f59e0b; letter-spacing: 1px; margin-top: 1px; }
 .rv-review-date   { font-size: 11px; color: var(--text-3); white-space: nowrap; flex-shrink: 0; align-self: flex-start; }
 .rv-review-text   { font-size: 13px; color: var(--text-2); line-height: 1.55; }
+.rv-review-vote-row {
+    margin-top: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 6px;
+}
 .rv-review-photo  { margin-top: 10px; width: 100%; max-height: 240px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; }
 .rv-empty         { font-size: 13px; color: var(--text-3); line-height: 1.6; text-align: center; padding: 20px 0; }
 
