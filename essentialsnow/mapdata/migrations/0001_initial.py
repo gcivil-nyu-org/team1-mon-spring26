@@ -8,39 +8,64 @@ class Migration(migrations.Migration):
 
     initial = True
 
-    dependencies = [
-    ]
+    dependencies = []
 
     operations = [
         migrations.CreateModel(
-            name='AmenityType',
+            name="AmenityType",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=100, unique=True)),
-                ('icon', models.CharField(blank=True, max_length=50)),
-                ('color', models.CharField(default='#3388ff', max_length=7)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("name", models.CharField(max_length=100, unique=True)),
+                ("icon", models.CharField(blank=True, max_length=50)),
+                ("color", models.CharField(default="#3388ff", max_length=7)),
             ],
         ),
         migrations.CreateModel(
-            name='Amenity',
+            name="Amenity",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=200)),
-                ('latitude', models.DecimalField(decimal_places=6, max_digits=9)),
-                ('longitude', models.DecimalField(decimal_places=6, max_digits=9)),
-                ('position', models.CharField(blank=True, max_length=500)),
-                ('prop_name', models.CharField(blank=True, max_length=200)),
-                ('description', models.TextField(blank=True)),
-                ('operator', models.CharField(blank=True, max_length=200)),
-                ('hours_of_operation', models.TextField(blank=True)),
-                ('changing_stations', models.BooleanField(default=False)),
-                ('accessibility', models.CharField(blank=True, default='', max_length=50)),
-                ('active', models.BooleanField(default=True)),
-                ('external_id', models.CharField(blank=True, max_length=100)),
-                ('amenity_type', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='amenities', to='mapdata.amenitytype')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("name", models.CharField(max_length=200)),
+                ("latitude", models.DecimalField(decimal_places=6, max_digits=9)),
+                ("longitude", models.DecimalField(decimal_places=6, max_digits=9)),
+                ("position", models.CharField(blank=True, max_length=500)),
+                ("prop_name", models.CharField(blank=True, max_length=200)),
+                ("description", models.TextField(blank=True)),
+                ("operator", models.CharField(blank=True, max_length=200)),
+                ("hours_of_operation", models.TextField(blank=True)),
+                ("changing_stations", models.BooleanField(default=False)),
+                (
+                    "accessibility",
+                    models.CharField(blank=True, default="", max_length=50),
+                ),
+                ("active", models.BooleanField(default=True)),
+                ("external_id", models.CharField(blank=True, max_length=100)),
+                (
+                    "amenity_type",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="amenities",
+                        to="mapdata.amenitytype",
+                    ),
+                ),
             ],
             options={
-                'unique_together': {('amenity_type', 'external_id')},
+                "unique_together": {("amenity_type", "external_id")},
             },
         ),
     ]

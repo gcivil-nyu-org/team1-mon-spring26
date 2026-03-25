@@ -5,7 +5,16 @@ from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.gis.geos import Polygon, GEOSGeometry
-from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser, Chat, ChatParticipant, Message
+from .models import (
+    AmenityType,
+    Amenity,
+    Review,
+    AmenityPhoto,
+    CustomUser,
+    Chat,
+    ChatParticipant,
+    Message,
+)
 from django.db.models import Avg, Count, Subquery, OuterRef
 from decimal import Decimal, InvalidOperation
 import json
@@ -537,7 +546,11 @@ def get_amenity_reviews_api(request):
             return JsonResponse({"error": "Amenity not found"}, status=404)
 
         # Get all reviews for the amenity, ordered by most recent
-        reviews = Review.objects.filter(amenity=amenity).select_related("user").order_by("-created_at")
+        reviews = (
+            Review.objects.filter(amenity=amenity)
+            .select_related("user")
+            .order_by("-created_at")
+        )
 
         # Calculate pagination
         total_count = reviews.count()
@@ -573,12 +586,15 @@ def get_amenity_reviews_api(request):
         )
 
     except (ValueError, TypeError):
-        return JsonResponse({"error": "Invalid page or page_size parameter"}, status=400)
+        return JsonResponse(
+            {"error": "Invalid page or page_size parameter"}, status=400
+        )
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
 
 # ===== Chat Functionality APIs =====
+
 
 @csrf_exempt
 @require_http_methods(["GET"])
@@ -587,41 +603,50 @@ def get_user_chats_api(request):
     try:
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
-        
+
         from .models import Chat, ChatParticipant
-        
+
         # Get all chats where the user is a participant
-        user_chats = Chat.objects.filter(
-            participants__user=request.user
-        ).select_related(
-            "created_by", "amenity"
-        ).prefetch_related(
-            "participants__user", "messages"
-        ).distinct().order_by("-last_message_at")
+        user_chats = (
+            Chat.objects.filter(participants__user=request.user)
+            .select_related("created_by", "amenity")
+            .prefetch_related("participants__user", "messages")
+            .distinct()
+            .order_by("-last_message_at")
+        )
 
         chats_data = []
         for chat in user_chats:
             # Get the last message
             last_message = chat.messages.last()
-            
-            chats_data.append({
-                "id": chat.id,
-                "chat_type": chat.chat_type,
-                "name": chat.get_display_name(request.user),
-                "amenity_id": chat.amenity_id,
-                "amenity_name": chat.amenity.name if chat.amenity else None,
-                "created_by_email": chat.created_by.email,
-                "participant_count": chat.participants.count(),
-                "last_message": last_message.content[:100] if last_message else None,
-                "last_message_sender": last_message.sender.email if last_message else None,
-                "last_message_at": chat.last_message_at.isoformat(),
-                "created_at": chat.created_at.isoformat(),
-            })
 
-        return JsonResponse({
-            "chats": chats_data,
-            "total_count": len(chats_data),
-        }, status=200)
+            chats_data.append(
+                {
+                    "id": chat.id,
+                    "chat_type": chat.chat_type,
+                    "name": chat.get_display_name(request.user),
+                    "amenity_id": chat.amenity_id,
+                    "amenity_name": chat.amenity.name if chat.amenity else None,
+                    "created_by_email": chat.created_by.email,
+                    "participant_count": chat.participants.count(),
+                    "last_message": (
+                        last_message.content[:100] if last_message else None
+                    ),
+                    "last_message_sender": (
+                        last_message.sender.email if last_message else None
+                    ),
+                    "last_message_at": chat.last_message_at.isoformat(),
+                    "created_at": chat.created_at.isoformat(),
+                }
+            )
+
+        return JsonResponse(
+            {
+                "chats": chats_data,
+                "total_count": len(chats_data),
+            },
+            status=200,
+        )
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
@@ -634,9 +659,9 @@ def get_chat_messages_api(request):
     try:
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
-        
+
         from .models import Chat, ChatParticipant
-        
+
         chat_id = request.GET.get("chat_id")
         page = int(request.GET.get("page", 1))
         page_size = int(request.GET.get("page_size", 20))
@@ -651,7 +676,9 @@ def get_chat_messages_api(request):
 
         # Check if user is a participant in this chat
         if not chat.participants.filter(user=request.user).exists():
-            return JsonResponse({"error": "You are not a participant in this chat"}, status=403)
+            return JsonResponse(
+                {"error": "You are not a participant in this chat"}, status=403
+            )
 
         # Get messages with pagination
         messages = chat.messages.select_related("sender").order_by("-created_at")
@@ -674,20 +701,25 @@ def get_chat_messages_api(request):
         # Reverse to get chronological order
         messages_data.reverse()
 
-        return JsonResponse({
-            "chat_id": chat.id,
-            "chat_type": chat.chat_type,
-            "chat_name": chat.get_display_name(request.user),
-            "amenity_id": chat.amenity_id,
-            "page": page,
-            "page_size": page_size,
-            "total_messages": total_count,
-            "total_pages": (total_count + page_size - 1) // page_size,
-            "messages": messages_data,
-        }, status=200)
+        return JsonResponse(
+            {
+                "chat_id": chat.id,
+                "chat_type": chat.chat_type,
+                "chat_name": chat.get_display_name(request.user),
+                "amenity_id": chat.amenity_id,
+                "page": page,
+                "page_size": page_size,
+                "total_messages": total_count,
+                "total_pages": (total_count + page_size - 1) // page_size,
+                "messages": messages_data,
+            },
+            status=200,
+        )
 
     except (ValueError, TypeError):
-        return JsonResponse({"error": "Invalid page or page_size parameter"}, status=400)
+        return JsonResponse(
+            {"error": "Invalid page or page_size parameter"}, status=400
+        )
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
@@ -699,9 +731,9 @@ def send_message_api(request):
     try:
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
-        
+
         from .models import Chat, ChatParticipant, Message
-        
+
         data = json.loads(request.body)
         chat_id = data.get("chat_id")
         content = data.get("content", "").strip()
@@ -719,27 +751,30 @@ def send_message_api(request):
 
         # Check if user is a participant
         if not chat.participants.filter(user=request.user).exists():
-            return JsonResponse({"error": "You are not a participant in this chat"}, status=403)
+            return JsonResponse(
+                {"error": "You are not a participant in this chat"}, status=403
+            )
 
         # Create the message
         message = Message.objects.create(
-            chat=chat,
-            sender=request.user,
-            content=content
+            chat=chat, sender=request.user, content=content
         )
 
         # Update chat's last_message_at
         chat.last_message_at = message.created_at
         chat.save(update_fields=["last_message_at"])
 
-        return JsonResponse({
-            "id": message.id,
-            "chat_id": chat.id,
-            "sender_id": message.sender.id,
-            "sender_email": message.sender.email,
-            "content": message.content,
-            "created_at": message.created_at.isoformat(),
-        }, status=201)
+        return JsonResponse(
+            {
+                "id": message.id,
+                "chat_id": chat.id,
+                "sender_id": message.sender.id,
+                "sender_email": message.sender.email,
+                "content": message.content,
+                "created_at": message.created_at.isoformat(),
+            },
+            status=201,
+        )
 
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
@@ -754,9 +789,9 @@ def create_direct_chat_api(request):
     try:
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
-        
+
         from .models import Chat, ChatParticipant
-        
+
         data = json.loads(request.body)
         recipient_email = data.get("recipient_email", "").strip()
 
@@ -769,24 +804,28 @@ def create_direct_chat_api(request):
             return JsonResponse({"error": "Recipient user not found"}, status=404)
 
         if recipient.id == request.user.id:
-            return JsonResponse({"error": "Cannot create chat with yourself"}, status=400)
+            return JsonResponse(
+                {"error": "Cannot create chat with yourself"}, status=400
+            )
 
         # Check if direct chat already exists between these two users
-        existing_chat = Chat.objects.filter(
-            chat_type="direct",
-            participants__user=request.user
-        ).filter(
-            participants__user=recipient
-        ).first()
+        existing_chat = (
+            Chat.objects.filter(chat_type="direct", participants__user=request.user)
+            .filter(participants__user=recipient)
+            .first()
+        )
 
         if existing_chat:
-            return JsonResponse({
-                "id": existing_chat.id,
-                "chat_type": existing_chat.chat_type,
-                "name": existing_chat.get_display_name(request.user),
-                "created_at": existing_chat.created_at.isoformat(),
-                "message": "Chat already exists",
-            }, status=200)
+            return JsonResponse(
+                {
+                    "id": existing_chat.id,
+                    "chat_type": existing_chat.chat_type,
+                    "name": existing_chat.get_display_name(request.user),
+                    "created_at": existing_chat.created_at.isoformat(),
+                    "message": "Chat already exists",
+                },
+                status=200,
+            )
 
         # Create new direct chat
         chat = Chat.objects.create(
@@ -798,13 +837,16 @@ def create_direct_chat_api(request):
         ChatParticipant.objects.create(chat=chat, user=request.user)
         ChatParticipant.objects.create(chat=chat, user=recipient)
 
-        return JsonResponse({
-            "id": chat.id,
-            "chat_type": chat.chat_type,
-            "name": chat.get_display_name(request.user),
-            "created_at": chat.created_at.isoformat(),
-            "message": "Chat created successfully",
-        }, status=201)
+        return JsonResponse(
+            {
+                "id": chat.id,
+                "chat_type": chat.chat_type,
+                "name": chat.get_display_name(request.user),
+                "created_at": chat.created_at.isoformat(),
+                "message": "Chat created successfully",
+            },
+            status=201,
+        )
 
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
@@ -819,9 +861,9 @@ def create_group_chat_api(request):
     try:
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
-        
+
         from .models import Chat, ChatParticipant
-        
+
         data = json.loads(request.body)
         chat_name = data.get("chat_name", "").strip()
         amenity_id = data.get("amenity_id")
@@ -836,7 +878,9 @@ def create_group_chat_api(request):
         # Get participants
         participants = CustomUser.objects.filter(email__in=participant_emails)
         if participants.count() != len(participant_emails):
-            return JsonResponse({"error": "One or more participants not found"}, status=404)
+            return JsonResponse(
+                {"error": "One or more participants not found"}, status=404
+            )
 
         # Ensure creator is in the participant list
         if request.user not in participants:
@@ -865,14 +909,17 @@ def create_group_chat_api(request):
         for participant in participants:
             ChatParticipant.objects.create(chat=chat, user=participant)
 
-        return JsonResponse({
-            "id": chat.id,
-            "chat_type": chat.chat_type,
-            "name": chat.name,
-            "participant_count": len(participants),
-            "created_at": chat.created_at.isoformat(),
-            "message": "Group chat created successfully",
-        }, status=201)
+        return JsonResponse(
+            {
+                "id": chat.id,
+                "chat_type": chat.chat_type,
+                "name": chat.name,
+                "participant_count": len(participants),
+                "created_at": chat.created_at.isoformat(),
+                "message": "Group chat created successfully",
+            },
+            status=201,
+        )
 
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
@@ -889,21 +936,25 @@ def amenity_search_api(request):
     if len(q) < 2:
         return JsonResponse({"amenities": []})
 
-    amenities = Amenity.objects.filter(
-        name__icontains=q, active=True
-    ).select_related("amenity_type").order_by("name")[:limit]
+    amenities = (
+        Amenity.objects.filter(name__icontains=q, active=True)
+        .select_related("amenity_type")
+        .order_by("name")[:limit]
+    )
 
-    return JsonResponse({
-        "amenities": [
-            {
-                "id": a.id,
-                "name": a.name,
-                "address": a.address or "",
-                "type": a.amenity_type.name,
-            }
-            for a in amenities
-        ]
-    })
+    return JsonResponse(
+        {
+            "amenities": [
+                {
+                    "id": a.id,
+                    "name": a.name,
+                    "address": a.address or "",
+                    "type": a.amenity_type.name,
+                }
+                for a in amenities
+            ]
+        }
+    )
 
 
 @require_http_methods(["GET"])
@@ -922,12 +973,11 @@ def get_amenity_reviewers_api(request):
             return JsonResponse({"error": "Amenity not found"}, status=404)
 
         # Get recent reviewers
-        reviewers = Review.objects.filter(
-            amenity=amenity,
-            user__isnull=False
-        ).select_related("user").order_by(
-            "-created_at"
-        )[:limit]
+        reviewers = (
+            Review.objects.filter(amenity=amenity, user__isnull=False)
+            .select_related("user")
+            .order_by("-created_at")[:limit]
+        )
 
         reviewers_data = [
             {
@@ -940,12 +990,15 @@ def get_amenity_reviewers_api(request):
             for r in reviewers
         ]
 
-        return JsonResponse({
-            "amenity_id": amenity.id,
-            "amenity_name": amenity.name,
-            "reviewers": reviewers_data,
-            "total_reviewers": len(reviewers_data),
-        }, status=200)
+        return JsonResponse(
+            {
+                "amenity_id": amenity.id,
+                "amenity_name": amenity.name,
+                "reviewers": reviewers_data,
+                "total_reviewers": len(reviewers_data),
+            },
+            status=200,
+        )
 
     except (ValueError, TypeError):
         return JsonResponse({"error": "Invalid limit parameter"}, status=400)

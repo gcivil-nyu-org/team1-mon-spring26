@@ -286,24 +286,22 @@ class Chat(models.Model):
         ("amenity_forum", "Amenity Forum"),
     ]
 
-    chat_type = models.CharField(max_length=20, choices=CHAT_TYPE_CHOICES, default="direct")
+    chat_type = models.CharField(
+        max_length=20, choices=CHAT_TYPE_CHOICES, default="direct"
+    )
     amenity = models.ForeignKey(
         Amenity,
         on_delete=models.CASCADE,
         related_name="chats",
         null=True,
         blank=True,
-        help_text="For amenity forum chats, reference the amenity being discussed"
+        help_text="For amenity forum chats, reference the amenity being discussed",
     )
     created_by = models.ForeignKey(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name="created_chats"
+        CustomUser, on_delete=models.CASCADE, related_name="created_chats"
     )
     name = models.CharField(
-        max_length=200,
-        blank=True,
-        help_text="Custom name for group and forum chats"
+        max_length=200, blank=True, help_text="Custom name for group and forum chats"
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -340,14 +338,10 @@ class ChatParticipant(models.Model):
     """Model to track participants in a chat."""
 
     chat = models.ForeignKey(
-        Chat,
-        on_delete=models.CASCADE,
-        related_name="participants"
+        Chat, on_delete=models.CASCADE, related_name="participants"
     )
     user = models.ForeignKey(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name="chat_participations"
+        CustomUser, on_delete=models.CASCADE, related_name="chat_participations"
     )
     joined_at = models.DateTimeField(auto_now_add=True)
     last_read_at = models.DateTimeField(null=True, blank=True)
@@ -366,15 +360,9 @@ class ChatParticipant(models.Model):
 class Message(models.Model):
     """Model for individual messages in a chat."""
 
-    chat = models.ForeignKey(
-        Chat,
-        on_delete=models.CASCADE,
-        related_name="messages"
-    )
+    chat = models.ForeignKey(Chat, on_delete=models.CASCADE, related_name="messages")
     sender = models.ForeignKey(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name="sent_messages"
+        CustomUser, on_delete=models.CASCADE, related_name="sent_messages"
     )
     content = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
