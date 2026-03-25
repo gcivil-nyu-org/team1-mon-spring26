@@ -6,8 +6,11 @@ app_name = "maps"
 urlpatterns = [
     path("", views.map_view, name="map"),
     path("profile/", views.profile_view, name="profile"),
-    path("profile/edit/", views.profile_edit_view, name="profile_edit"),
+    path("settings/", views.settings_view, name="settings"),
     path("api/profile/", views.update_profile_api, name="update_profile_api"),
+    path(
+        "api/account/password/", views.change_password_api, name="change_password_api"
+    ),
     path("api/profile/reviews/", views.profile_reviews_api, name="profile_reviews_api"),
     path("api/amenities/", views.amenities_api, name="amenities_api"),
     path("api/amenity-types/", views.amenity_types_api, name="amenity_types_api"),

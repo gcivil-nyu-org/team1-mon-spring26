@@ -3,6 +3,7 @@ from django.test import TestCase, Client, override_settings
 from django.urls import reverse
 from django.contrib.gis.geos import Point
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils.html import escape
 from unittest.mock import patch
 
 from maps.models import AmenityType, Amenity, CustomUser, Review, AmenityPhoto
@@ -263,6 +264,14 @@ class ViewsCoverageTest(TestCase):
             active["reviews"][0]["user_avatar_url"], self.test_user.avatar_url
         )
 
+    def test_avatar_url_falls_back_when_avatar_file_is_missing(self):
+        self.test_user.avatar = "avatars/missing-avatar.png"
+
+        with patch.object(self.test_user.avatar.storage, "exists", return_value=False):
+            self.assertEqual(
+                self.test_user.avatar_url, "/static/maps/default-avatar.svg"
+            )
+
     def test_profile_view_requires_login(self):
         response = self.client.get(reverse("maps:profile"))
         self.assertEqual(response.status_code, 302)
@@ -274,13 +283,50 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "maps/profile.html")
         self.assertEqual(response.context["profile_user"], self.test_user)
+        self.assertEqual(response.context["reviews_count"], 0)
+        self.assertEqual(response.context["likes_received_count"], 0)
+        self.assertContains(response, "Reviews")
+        self.assertContains(response, "Favorites")
+        self.assertContains(response, "Settings")
 
-    def test_profile_edit_view_authenticated(self):
+    def test_profile_view_renders_full_bio_text(self):
+        bio = "First line\nSecond line with <tags> & symbols"
+        self.test_user.bio = bio
+        self.test_user.save(update_fields=["bio"])
+
         self.client.force_login(self.test_user)
-        response = self.client.get(reverse("maps:profile_edit"))
+        response = self.client.get(reverse("maps:profile"))
+
         self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "maps/profile_edit.html")
+        self.assertContains(response, escape(bio), html=True)
+
+    def test_profile_view_includes_review_stats(self):
+        Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=5,
+            review_text="Helpful review",
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:profile"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["reviews_count"], 1)
+
+    def test_settings_view_requires_login(self):
+        response = self.client.get(reverse("maps:settings"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/?auth_required=1", response.url)
+
+    def test_settings_view_authenticated(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:settings"))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "maps/settings.html")
         self.assertEqual(response.context["profile_user"], self.test_user)
+        self.assertContains(response, "Profile")
+        self.assertContains(response, "Account")
 
     def test_update_profile_api_updates_profile(self):
         self.client.force_login(self.test_user)
@@ -306,6 +352,67 @@ class ViewsCoverageTest(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "Username is required")
+
+    def test_update_profile_api_rejects_bio_longer_than_150_chars(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:update_profile_api"),
+            data={"username": "updated-name", "bio": "a" * 151},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "Bio must be 150 characters or fewer",
+        )
+
+    def test_change_password_api_updates_password_and_keeps_session(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:change_password_api"),
+            data={
+                "current_password": "password123",
+                "new_password": "new-password-456",
+                "confirm_password": "new-password-456",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["message"], "Password updated successfully")
+
+        self.test_user.refresh_from_db()
+        self.assertTrue(self.test_user.check_password("new-password-456"))
+
+        current_user_response = self.client.get(reverse("maps:current_user_api"))
+        self.assertEqual(current_user_response.status_code, 200)
+        self.assertTrue(current_user_response.json()["is_authenticated"])
+
+    def test_change_password_api_rejects_wrong_current_password(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:change_password_api"),
+            data={
+                "current_password": "wrong-password",
+                "new_password": "new-password-456",
+                "confirm_password": "new-password-456",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Current password is incorrect")
+
+    def test_change_password_api_rejects_confirmation_mismatch(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:change_password_api"),
+            data={
+                "current_password": "password123",
+                "new_password": "new-password-456",
+                "confirm_password": "different-password-789",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "New password and confirmation do not match",
+        )
 
     def test_profile_reviews_api_returns_current_users_reviews(self):
         other_user = CustomUser.objects.create_user(
@@ -342,6 +449,9 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(len(reviews), 1)
         self.assertEqual(reviews[0]["id"], own_review.id)
         self.assertEqual(reviews[0]["amenity_name"], self.amenity_active.name)
+        self.assertEqual(
+            reviews[0]["amenity_type"], self.amenity_active.amenity_type.name
+        )
         self.assertIsNotNone(reviews[0]["photo_url"])
 
     def test_review_detail_api_patch_updates_own_review(self):
