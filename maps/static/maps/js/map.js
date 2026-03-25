@@ -377,11 +377,14 @@ function setupSidebarToggle() {
     const sidebar = document.getElementById('sidebar');
     const openBtn = document.getElementById('sidebar-open-btn');
     const body = document.body;
+    let isMobileViewport = window.innerWidth <= 768;
+    let viewportSwitchTimer = null;
 
     function collapse() {
         sidebar.classList.add('collapsed');
         openBtn.style.display = 'flex';
         body.classList.remove('sidebar-open');
+        requestAnimationFrame(() => map.invalidateSize());
     }
 
     function expand() {
@@ -391,17 +394,35 @@ function setupSidebarToggle() {
         if (window.innerWidth <= 768) {
             closeDetailPanel();
         }
+        requestAnimationFrame(() => map.invalidateSize());
+    }
+
+    function applyInitialSidebarState() {
+        if (window.innerWidth <= 768) {
+            collapse();
+            return;
+        }
+
+        expand();
     }
 
     document.getElementById('sidebar-toggle').addEventListener('click', collapse);
     openBtn.addEventListener('click', expand);
+    window.addEventListener('resize', () => {
+        const nextIsMobileViewport = window.innerWidth <= 768;
+        if (nextIsMobileViewport === isMobileViewport) return;
+
+        isMobileViewport = nextIsMobileViewport;
+        body.classList.add('viewport-switching');
+        clearTimeout(viewportSwitchTimer);
+        viewportSwitchTimer = setTimeout(() => {
+            body.classList.remove('viewport-switching');
+        }, 220);
+        requestAnimationFrame(() => map.invalidateSize({ pan: false }));
+    });
 
     // Default state based on screen size
-    if (window.innerWidth <= 768) {
-        collapse();
-    } else {
-        expand();
-    }
+    applyInitialSidebarState();
 }
 
 const hoverTooltip = (() => {
@@ -633,11 +654,6 @@ function haversineKm(lat1, lon1, lat2, lon2) {
     const R = 6371, dLat = (lat2 - lat1) * Math.PI / 180, dLon = (lon2 - lon1) * Math.PI / 180;
     const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function distLabel(fromLat, fromLon, toLat, toLon) {
-    const mi = haversineKm(fromLat, fromLon, toLat, toLon) * 0.621371;
-    return mi < 0.1 ? `${Math.round(mi * 5280)} ft` : `${mi.toFixed(2)} mi`;
 }
 
 function showDetailPanel(amenity, activeTab = 'overview') {
@@ -1474,23 +1490,18 @@ function logoutUser() {
 // render login/logout button and current user label.
 function updateUserUI() {
     const btn = document.getElementById('auth-button');
-    const disp = document.getElementById('user-display');
     const userMenu = document.getElementById('user-menu');
     const avatarImage = document.getElementById('avatar-image');
     const userMenuEmail = document.getElementById('user-menu-email');
 
-    if (!btn || !disp || !userMenu || !avatarImage || !userMenuEmail) return;
+    if (!btn || !userMenu || !avatarImage || !userMenuEmail) return;
 
     if (currentUser && currentUser.is_authenticated) {
-        disp.textContent = currentUser.username || currentUser.email || '';
-        disp.style.display = '';
         btn.style.display = 'none';
         userMenu.style.display = 'inline-flex';
         avatarImage.src = currentUser.avatar_url || '/static/maps/default-avatar.svg';
         userMenuEmail.textContent = currentUser.email || '';
     } else {
-        disp.textContent = '';
-        disp.style.display = 'none';
         btn.style.display = '';
         userMenu.style.display = 'none';
         userMenuEmail.textContent = '';
@@ -1509,13 +1520,9 @@ function setupAuth() {
     setupAuthForm('register-form', '/api/auth/register/', 'register-error', true);
     const avatarButton = document.getElementById('avatar-button');
     const dropdown = document.getElementById('user-menu-dropdown');
-    const profileLink = document.getElementById('profile-link');
     const logoutLink = document.getElementById('logout-link');
     avatarButton.addEventListener('click', () => {
         dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
-    });
-    profileLink.addEventListener('click', () => {
-        window.location.href = '/profile/';
     });
     logoutLink.addEventListener('click', () => {
         dropdown.style.display = 'none';

@@ -2,8 +2,15 @@ from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import (
+    authenticate,
+    login,
+    logout,
+    password_validation,
+    update_session_auth_hash,
+)
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
 from django.contrib.gis.geos import Polygon, GEOSGeometry
 from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser
 from django.db.models import Avg, Count, Subquery, OuterRef
@@ -429,23 +436,27 @@ def profile_view(request):
     Profile page.
     Anonymous users are redirected back to the map page.
     """
+    reviews_count = Review.objects.filter(user=request.user).count()
+
     return render(
         request,
         "maps/profile.html",
         {
             "profile_user": request.user,
+            "reviews_count": reviews_count,
+            "likes_received_count": 0,
         },
     )
 
 
 @login_required(login_url="/?auth_required=1")
-def profile_edit_view(request):
+def settings_view(request):
     """
-    Render the dedicated profile edit page for the current user.
+    Render the unified settings page for the current user.
     """
     return render(
         request,
-        "maps/profile_edit.html",
+        "maps/settings.html",
         {
             "profile_user": request.user,
         },
@@ -457,7 +468,7 @@ def profile_edit_view(request):
 @require_http_methods(["POST"])
 def update_profile_api(request):
     """
-    Update the current user's profile fields from the dedicated edit page.
+    Update the current user's profile fields from the settings page.
     """
     user = request.user
 
@@ -477,9 +488,9 @@ def update_profile_api(request):
     if CustomUser.objects.filter(username=username).exclude(id=user.id).exists():
         return JsonResponse({"error": "Username is already taken"}, status=400)
 
-    if len(bio) > 600:
+    if len(bio) > 150:
         return JsonResponse(
-            {"error": "Bio must be 600 characters or fewer"},
+            {"error": "Bio must be 150 characters or fewer"},
             status=400,
         )
 
@@ -505,6 +516,52 @@ def update_profile_api(request):
     return JsonResponse(response_data, status=200)
 
 
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST"])
+def change_password_api(request):
+    """
+    Update the current user's password from the settings page.
+    """
+    user = request.user
+
+    current_password = request.POST.get("current_password", "")
+    new_password = request.POST.get("new_password", "")
+    confirm_password = request.POST.get("confirm_password", "")
+
+    if not current_password:
+        return JsonResponse({"error": "Current password is required"}, status=400)
+
+    if not new_password:
+        return JsonResponse({"error": "New password is required"}, status=400)
+
+    if new_password != confirm_password:
+        return JsonResponse(
+            {"error": "New password and confirmation do not match"},
+            status=400,
+        )
+
+    if not user.check_password(current_password):
+        return JsonResponse({"error": "Current password is incorrect"}, status=400)
+
+    if current_password == new_password:
+        return JsonResponse(
+            {"error": "New password must be different from your current password"},
+            status=400,
+        )
+
+    try:
+        password_validation.validate_password(new_password, user=user)
+    except ValidationError as error:
+        return JsonResponse({"error": error.messages[0]}, status=400)
+
+    user.set_password(new_password)
+    user.save(update_fields=["password"])
+    update_session_auth_hash(request, user)
+
+    return JsonResponse({"message": "Password updated successfully"}, status=200)
+
+
 def serialize_profile_review(review):
     """
     Serialize one review for the profile page.
@@ -524,7 +581,7 @@ def serialize_profile_review(review):
         "id": review.id,
         "amenity_id": review.amenity_id,
         "amenity_name": review.amenity.name,
-        "amenity_address": review.amenity.address or "",
+        "amenity_type": review.amenity.amenity_type.name,
         "rating": review.rating,
         "review_text": review.review_text,
         "photo_url": review_photo_url,
@@ -541,7 +598,7 @@ def profile_reviews_api(request):
     """
     reviews = (
         Review.objects.filter(user=request.user)
-        .select_related("amenity")
+        .select_related("amenity", "amenity__amenity_type")
         .prefetch_related("amenity__photos")
         .order_by("-updated_at", "-created_at")
     )
@@ -685,7 +742,7 @@ def review_detail_api(request, review_id):
 
         refreshed_review = (
             Review.objects.filter(id=review.id)
-            .select_related("amenity")
+            .select_related("amenity", "amenity__amenity_type")
             .prefetch_related("amenity__photos")
             .get()
         )
