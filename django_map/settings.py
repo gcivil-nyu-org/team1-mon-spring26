@@ -205,11 +205,11 @@ else:
             "OPTIONS": {
                 "location": os.environ["APP_ENV"],
                 "signature_version": "s3v4",
-                "bucket_name": os.environ['AWS_S3_BUCKET_NAME'],
-                "region_name": os.environ['AWS_S3_REGION_NAME'],
+                "bucket_name": os.environ["AWS_S3_BUCKET_NAME"],
+                "region_name": os.environ["AWS_S3_REGION_NAME"],
                 "querystring_auth": True,
                 "default_acl": None,
-             },
+            },
         },
         "staticfiles": {
             "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
