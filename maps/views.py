@@ -315,8 +315,9 @@ def amenities_api(request):
     if request.user.is_authenticated:
         amenity_ids = list(amenities.values_list("id", flat=True))
         favorite_amenity_ids = set(
-            Favorite.objects.filter(user=request.user, amenity_id__in=amenity_ids)
-            .values_list("amenity_id", flat=True)
+            Favorite.objects.filter(
+                user=request.user, amenity_id__in=amenity_ids
+            ).values_list("amenity_id", flat=True)
         )
 
     # Serialize the individual amenities
@@ -350,7 +351,9 @@ def amenity_detail_api(request, amenity_id):
             )
             .select_related("amenity_type")
             .prefetch_related(
-                Prefetch("reviews", queryset=get_review_prefetch_queryset(request.user)),
+                Prefetch(
+                    "reviews", queryset=get_review_prefetch_queryset(request.user)
+                ),
                 "photos",
             )
             .get()
