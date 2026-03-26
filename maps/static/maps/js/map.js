@@ -89,6 +89,16 @@ function retryGeolocation() {
     userLocation = null;
     document.getElementById('location-dot').classList.remove('found', 'denied');
     if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
+    
+    if (selectedLocationMarker) {
+        map.removeLayer(selectedLocationMarker);
+        selectedLocationMarker = null;
+    }
+    const inp = document.getElementById('search-input');
+    if (inp) {
+        inp.value = '';
+        inp.closest('.search-box').classList.remove('has-value');
+    }
     initializeGeolocation();
 }
 
@@ -383,11 +393,14 @@ function setupSidebarToggle() {
     const sidebar = document.getElementById('sidebar');
     const openBtn = document.getElementById('sidebar-open-btn');
     const body = document.body;
+    let isMobileViewport = window.innerWidth <= 768;
+    let viewportSwitchTimer = null;
 
     function collapse() {
         sidebar.classList.add('collapsed');
         openBtn.style.display = 'flex';
         body.classList.remove('sidebar-open');
+        requestAnimationFrame(() => map.invalidateSize());
     }
 
     function expand() {
@@ -397,17 +410,35 @@ function setupSidebarToggle() {
         if (window.innerWidth <= 768) {
             closeDetailPanel();
         }
+        requestAnimationFrame(() => map.invalidateSize());
+    }
+
+    function applyInitialSidebarState() {
+        if (window.innerWidth <= 768) {
+            collapse();
+            return;
+        }
+
+        expand();
     }
 
     document.getElementById('sidebar-toggle').addEventListener('click', collapse);
     openBtn.addEventListener('click', expand);
+    window.addEventListener('resize', () => {
+        const nextIsMobileViewport = window.innerWidth <= 768;
+        if (nextIsMobileViewport === isMobileViewport) return;
+
+        isMobileViewport = nextIsMobileViewport;
+        body.classList.add('viewport-switching');
+        clearTimeout(viewportSwitchTimer);
+        viewportSwitchTimer = setTimeout(() => {
+            body.classList.remove('viewport-switching');
+        }, 220);
+        requestAnimationFrame(() => map.invalidateSize({ pan: false }));
+    });
 
     // Default state based on screen size
-    if (window.innerWidth <= 768) {
-        collapse();
-    } else {
-        expand();
-    }
+    applyInitialSidebarState();
 }
 
 const hoverTooltip = (() => {
@@ -465,6 +496,8 @@ const hoverTooltip = (() => {
             el.style.opacity = '0'; 
             setTimeout(() => { if (el.style.opacity === '0') el.style.display = 'none'; }, 150); 
         },
+        isVisible()         { return el.style.display !== 'none'; },
+        getCurrentAmenity() { return currentA; }
     };
 })();
 
@@ -514,11 +547,21 @@ function buildTooltipHtml(a) {
         ratingRow = `<div class="tt-row"><span class="tt-lbl">Rating</span><span class="tt-val"><span style="color:#f59e0b">${'★'.repeat(s)}${'☆'.repeat(5-s)}</span> <span class="tt-muted">${(+a.rating).toFixed(1)} (${a.review_count})</span></span></div>`;
     }
 
-    const refLat = userLocation ? userLocation.latitude  : map.getCenter().lat;
-    const refLon = userLocation ? userLocation.longitude : map.getCenter().lng;
+    let refLat, refLon, distLabel2;
+    if (selectedLocationMarker) {
+        const ll = selectedLocationMarker.getLatLng();
+        refLat = ll.lat; refLon = ll.lng;
+        distLabel2 = 'Distance';
+    } else if (userLocation) {
+        refLat = userLocation.latitude; refLon = userLocation.longitude;
+        distLabel2 = 'Distance';
+    } else {
+        refLat = map.getCenter().lat; refLon = map.getCenter().lng;
+        distLabel2 = 'From center';
+    }
+
     const mi = haversineKm(refLat, refLon, a.latitude, a.longitude) * 0.621371;
     const distStr = mi < 0.1 ? `${Math.round(mi * 5280)} ft` : `${mi.toFixed(2)} mi`;
-    const distLabel2 = userLocation ? 'Distance' : 'From center';
     const distRow = `<div class="tt-row"><span class="tt-lbl">${distLabel2}</span><span class="tt-val" style="color:var(--accent,#1a6ef5);font-weight:600">${distStr}</span></div>`;
 
     return `<style>
@@ -559,31 +602,64 @@ function addAmenityMarker(amenity) {
     }
 
     const filt = amenity.active ? '' : 'opacity(0.4)';
-    const svgPaths = {
-        droplet:   '<path d="M12 0C8 8,2 14,2 19C2 26.7,6.5 32,12 32C17.5 32,22 26.7,22 19C22 14,16 8,12 0Z"/>',
-        restroom:  '<path d="M4,8C4,6.34 5.34,5 7,5C8.66,5 10,6.34 10,8C10,9.66 8.66,11 7,11C5.34,11 4,9.66 4,8M17,5C15.34,5 14,6.34 14,8C14,9.66 15.34,11 17,11C18.66,11 20,9.66 20,8C20,6.34 18.66,5 17,5M12,13L12,30L16,30L16,20L18,20L18,30L22,30L22,13L12,13M2,13L2,30L6,30L6,20L8,20L8,30L12,30L12,13L2,13Z"/>',
-        bicycle:   '<path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>',
-        snowflake: '<path d="M12 2.5l-2.5 4.33h5L12 2.5zm0 19l-2.5-4.33h5L12 21.5zM4.33 7.5L2.5 12l1.83 4.5h4.34L4.33 7.5zm15.34 0L15.33 12l1.83 4.5h4.34L19.67 7.5zM8.67 16.5L12 10l3.33 6.5H8.67zm0-9L12 14l3.33-6.5H8.67z" transform="scale(1.2) translate(-2,-2)"/>',
-        // wifi signal bars for LinkNYC Kiosk
-        wifi:      '<path d="M12 4C7.6 4 3.6 5.8 0.7 8.7L3.5 11.5C5.7 9.3 8.7 8 12 8C15.3 8 18.3 9.3 20.5 11.5L23.3 8.7C20.4 5.8 16.4 4 12 4ZM12 12C9.8 12 7.8 12.9 6.3 14.4L9.1 17.2C9.9 16.4 11 16 12 16C13 16 14.1 16.4 14.9 17.2L17.7 14.4C16.2 12.9 14.2 12 12 12ZM12 20C10.9 20 10 20.9 10 22C10 23.1 10.9 24 12 24C13.1 24 14 23.1 14 22C14 20.9 13.1 20 12 20Z"/>',
-        default:   '<path d="M12 0C8 8,2 14,2 19C2 26.7,6.5 32,12 32C17.5 32,22 26.7,22 19C22 14,16 8,12 0Z"/>',
-    };
-    const icon = L.divIcon({
-        html: `<div style="width:24px;height:32px;filter:${filt}">
+    let icon;
+
+    if (amenity.icon === 'restroom') {
+        icon = L.divIcon({
+            // 🚽🧻🚻🚾🚹
+            html: `<div style="font-size: 24px; text-shadow: 0 0 3px #fff, 0 0 5px #fff;">🚹</div>`,
+            className: 'leaflet-div-icon-custom amenity-marker-icon',
+            iconSize: [24, 24],
+            iconAnchor: [12, 24],
+            popupAnchor: [0, -24],
+        });
+    } else {
+        const svgPaths = {
+            droplet:   '<path d="M12 0C8 8,2 14,2 19C2 26.7,6.5 32,12 32C17.5 32,22 26.7,22 19C22 14,16 8,12 0Z"/>',
+            bicycle:   '<path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>',
+            snowflake: '<path d="M12 2.5l-2.5 4.33h5L12 2.5zm0 19l-2.5-4.33h5L12 21.5zM4.33 7.5L2.5 12l1.83 4.5h4.34L4.33 7.5zm15.34 0L15.33 12l1.83 4.5h4.34L19.67 7.5zM8.67 16.5L12 10l3.33 6.5H8.67zm0-9L12 14l3.33-6.5H8.67z" transform="scale(1.2) translate(-2,-2)"/>',
+            // wifi signal bars for LinkNYC Kiosk
+            wifi:      '<path d="M12 4C7.6 4 3.6 5.8 0.7 8.7L3.5 11.5C5.7 9.3 8.7 8 12 8C15.3 8 18.3 9.3 20.5 11.5L23.3 8.7C20.4 5.8 16.4 4 12 4ZM12 12C9.8 12 7.8 12.9 6.3 14.4L9.1 17.2C9.9 16.4 11 16 12 16C13 16 14.1 16.4 14.9 17.2L17.7 14.4C16.2 12.9 14.2 12 12 12ZM12 20C10.9 20 10 20.9 10 22C10 23.1 10.9 24 12 24C13.1 24 14 23.1 14 22C14 20.9 13.1 20 12 20Z"/>',
+            default:   '<path d="M12 0C8 8,2 14,2 19C2 26.7,6.5 32,12 32C17.5 32,22 26.7,22 19C22 14,16 8,12 0Z"/>',
+        };
+        icon = L.divIcon({
+            html: `<div style="width:24px;height:32px;filter:${filt}">
             <svg viewBox="0 0 24 32" width="24" height="32" xmlns="http://www.w3.org/2000/svg">
                 <defs><style>.p${amenity.id}{fill:${amenity.color};stroke:rgba(0,0,0,.22);stroke-width:.5}</style></defs>
                 <g class="p${amenity.id}">${svgPaths[amenity.icon] || svgPaths.default}</g>
             </svg></div>`,
-        iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -32], className: 'leaflet-div-icon-custom amenity-marker-icon',
-    });
+            iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -32], className: 'leaflet-div-icon-custom amenity-marker-icon',
+        });
+    }
 
     const marker = L.marker([amenity.latitude, amenity.longitude], { icon, amenityData: amenity });
-    marker.on('mouseover', e => { clearTimeout(hoverTooltipTimer); hoverTooltip.show(amenity, e.originalEvent.clientX, e.originalEvent.clientY); });
-    marker.on('mousemove', e => hoverTooltip.move(e.originalEvent.clientX, e.originalEvent.clientY));
-    marker.on('mouseout',  () => { hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); });
+    
+    // Desktop hover behavior
+    marker.on('mouseover', e => { 
+        if (window.innerWidth > 768) { clearTimeout(hoverTooltipTimer); hoverTooltip.show(amenity, e.originalEvent.clientX, e.originalEvent.clientY); }
+    });
+    marker.on('mousemove', e => { 
+        if (window.innerWidth > 768) hoverTooltip.move(e.originalEvent.clientX, e.originalEvent.clientY); 
+    });
+    marker.on('mouseout',  () => { 
+        if (window.innerWidth > 768) hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); 
+    });
+
     marker.on('click', e => {
-        hoverTooltip.hide();
-        showDetailPanel(amenity); 
+        if (window.innerWidth <= 768) {
+            if (hoverTooltip.isVisible() && hoverTooltip.getCurrentAmenity() === amenity) {
+                hoverTooltip.hide();
+                showDetailPanel(amenity);
+            } else {
+                // Calculate position relative to the pin explicitly
+                const pt = map.latLngToContainerPoint([amenity.latitude, amenity.longitude]);
+                const rect = document.getElementById('map').getBoundingClientRect();
+                hoverTooltip.show(amenity, rect.left + pt.x, rect.top + pt.y);
+            }
+        } else {
+            hoverTooltip.hide();
+            showDetailPanel(amenity); 
+        }
     });
 
     if (amenity.type === 'Bike Rack' || amenity.type.includes('Bike Rack')) bikeRackMarkers.addLayer(marker);
@@ -594,11 +670,6 @@ function haversineKm(lat1, lon1, lat2, lon2) {
     const R = 6371, dLat = (lat2 - lat1) * Math.PI / 180, dLon = (lon2 - lon1) * Math.PI / 180;
     const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function distLabel(fromLat, fromLon, toLat, toLon) {
-    const mi = haversineKm(fromLat, fromLon, toLat, toLon) * 0.621371;
-    return mi < 0.1 ? `${Math.round(mi * 5280)} ft` : `${mi.toFixed(2)} mi`;
 }
 
 function showDetailPanel(amenity, activeTab = 'overview') {
@@ -934,7 +1005,7 @@ function renderReviewsTab(amenity) {
     const reviews = amenity.reviews || [];
     const loggedIn = currentUser && currentUser.is_authenticated;
     const currentEmail = (currentUser?.email || '').toLowerCase();
-    const alreadyReviewed = loggedIn && reviews.some(r => (r.user_name || '').toLowerCase() === currentEmail);
+    const alreadyReviewed = loggedIn && reviews.some(r => (r.user_email || r.user_name || '').toLowerCase() === currentEmail);
 
     if (!loggedIn) {
         html += `<div class="review-login-prompt">Please <a href="#" class="js-open-auth">sign in</a> to add a review.</div>`;
@@ -959,47 +1030,56 @@ function renderReviewsTab(amenity) {
     }
 
     if (reviews.length) {
-        const byRecent = [...reviews].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        const top  = [...reviews].sort((a, b) => (b.rating - a.rating) || (new Date(b.created_at) - new Date(a.created_at)))[0];
+        const byVote = [...reviews].sort(compareReviewsByVotes);
+        const top = byVote[0];
         const stars = '★'.repeat(top.rating) + '☆'.repeat(5 - top.rating);
         const date  = new Date(top.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-        const initial = (top.user_name || '?').charAt(0).toUpperCase();
-        const isTopOtherUser = currentUser && currentUser.is_authenticated && currentUser.email !== top.user_name;
-        const topUserNameClass = isTopOtherUser ? 'clickable-username' : '';
-        const topUserNameStyle = isTopOtherUser ? 'cursor:pointer;color:var(--accent);text-decoration:underline;' : 'cursor:default;';
+        const topReviewerName = getReviewerName(top);
+        const isTopOtherUser = loggedIn && currentEmail !== (top.user_email || '').toLowerCase();
         html += `<div class="dp-section">
-            <div class="dp-field-label">Most Popular Review</div>
+            <div class="dp-field-label">Top Voted Review</div>
             <div class="rv-review-card">
                 <div class="rv-review-header">
-                    <div class="rv-avatar">${initial}</div>
+                    ${renderReviewerAvatar(top)}
                     <div class="rv-review-meta">
-                        <div class="rv-reviewer ${topUserNameClass}" style="${topUserNameStyle}" data-user-email="${top.user_name}">${top.user_name}</div>
+                        <div class="rv-reviewer ${isTopOtherUser ? 'clickable-username' : ''}" 
+                            data-user-email="${top.user_email || top.user_name}">
+                            ${topReviewerName}
+                        </div>
                         <div class="rv-review-stars">${stars}</div>
                     </div>
                     <div class="rv-review-date">${date}</div>
                 </div>
                 <div class="rv-review-text">${top.review_text || 'No written comment.'}</div>
+                ${renderVoteControls(top, loggedIn, currentEmail, true)}
                 ${top.photo_url ? `<img class="rv-review-photo" src="${top.photo_url}" alt="Review photo">` : ''}
             </div>
         </div>`;
 
-        const otherReviews = byRecent.filter(r => r !== top);
+        const otherReviews = byVote.filter(r => r !== top);
         if (otherReviews.length) {
             html += `<div class="dp-section">
                 <div class="dp-field-label">Recent Reviews</div>
                 <div class="review-list">${otherReviews.map(r => {
+                    const reviewerName = getReviewerName(r);
                     const rStars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
                     const rDate = new Date(r.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-                    const isOtherUser = currentUser && currentUser.is_authenticated && currentUser.email !== r.user_name;
-                    const userNameClass = isOtherUser ? 'clickable-username' : '';
-                    const userNameStyle = isOtherUser ? 'cursor:pointer;color:var(--accent);text-decoration:underline;' : 'cursor:default;';
+                    const isOtherUser = loggedIn && currentEmail !== (r.user_email || '').toLowerCase();
                     return `<div class="review-card">
                         <div class="review-card-top">
-                            <div class="review-user ${userNameClass}" style="${userNameStyle}" data-user-email="${r.user_name}">${r.user_name}</div>
+                            <div class="review-reviewer-row">
+                                ${renderReviewerAvatar(r, 'review-avatar')}
+                                <div class="review-user ${isOtherUser ? 'clickable-username' : ''}" 
+                                    data-user-email="${r.user_email || r.user_name}">
+                                    ${reviewerName}
+                                </div>
+                            </div>
+
                             <div class="review-date">${rDate}</div>
                         </div>
                         <div class="review-stars">${rStars}</div>
                         <div class="review-text">${r.review_text || 'No written comment.'}</div>
+                        ${renderVoteControls(r, loggedIn, currentEmail)}
                         ${r.photo_url ? `<img class="review-photo" src="${r.photo_url}" alt="Review photo">` : ''}
                     </div>`;
                 }).join('')}</div>
@@ -1034,6 +1114,8 @@ function renderReviewsTab(amenity) {
     if (submitBtn) {
         submitBtn.addEventListener('click', () => submitReview(amenity, pane));
     }
+
+    attachVoteHandlers(amenity, pane);
 
     const starPicker = pane.querySelector('.js-star-picker');
     if (starPicker) {
@@ -1088,8 +1170,13 @@ function submitReview(amenity, pane) {
             }
 
             const newReview = {
-                user_name: b.user_name || currentUser.email || currentUser.username || 'You',
+                id: b.id,
+                user_name: b.user_name || currentUser.username || currentUser.email || 'You',
+                user_email: b.user_email || currentUser.email || '',
+                user_avatar_url: b.user_avatar_url || currentUser.avatar_url || '',
                 rating: b.rating || rating,
+                vote_score: Number(b.vote_score || 0),
+                user_vote: Number(b.user_vote || 0),
                 review_text: b.review_text || reviewText,
                 photo_url: b.photo_url || null,
                 created_at: b.created_at || new Date().toISOString(),
@@ -1155,6 +1242,104 @@ function to12(hhmm) {
     return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
 }
 
+function getReviewerName(review) {
+    return review.user_name || review.user_email || 'Anonymous';
+}
+
+function compareReviewsByVotes(a, b) {
+    const scoreA = Number(a.vote_score || 0);
+    const scoreB = Number(b.vote_score || 0);
+    if (scoreB !== scoreA) return scoreB - scoreA;
+
+    const dateA = new Date(a.created_at || 0).getTime();
+    const dateB = new Date(b.created_at || 0).getTime();
+    return dateB - dateA;
+}
+
+function renderVoteControls(review, loggedIn, currentEmail, featured = false) {
+    const reviewId = Number(review.id || 0);
+    if (!reviewId) return '';
+
+    const userEmail = (review.user_email || '').toLowerCase();
+    const isOwn = Boolean(loggedIn && currentEmail && userEmail === currentEmail);
+    const userVote = Number(review.user_vote || 0);
+    const voteScore = Number(review.vote_score || 0);
+    const rowClass = featured ? 'rv-review-vote-row' : 'review-vote-row';
+    const title = isOwn
+        ? 'You cannot vote on your own review'
+        : (!loggedIn ? 'Sign in to vote on reviews' : 'Vote on this review');
+
+    return `<div class="${rowClass}" data-review-vote-row="${reviewId}">
+        <button type="button" class="review-vote-btn js-vote-btn up ${userVote === 1 ? 'active' : ''}" data-review-id="${reviewId}" data-vote="1" ${isOwn ? 'disabled' : ''} title="${title}" aria-label="Upvote review">▲</button>
+        <span class="review-vote-score" data-review-score="${reviewId}">${voteScore}</span>
+        <button type="button" class="review-vote-btn js-vote-btn down ${userVote === -1 ? 'active' : ''}" data-review-id="${reviewId}" data-vote="-1" ${isOwn ? 'disabled' : ''} title="${title}" aria-label="Downvote review">▼</button>
+    </div>`;
+}
+
+function attachVoteHandlers(amenity, pane) {
+    pane.querySelectorAll('.js-vote-btn').forEach(btn => {
+        btn.addEventListener('click', () => submitReviewVote(amenity, pane, btn));
+    });
+}
+
+function submitReviewVote(amenity, pane, clickedButton) {
+    if (!currentUser || !currentUser.is_authenticated) {
+        showToast('Please sign in to vote on reviews.', 'warn');
+        return;
+    }
+
+    const reviewId = Number(clickedButton.dataset.reviewId || 0);
+    const requestedVote = Number(clickedButton.dataset.vote || 0);
+    if (!reviewId || !requestedVote) return;
+
+    const review = (amenity.reviews || []).find(r => Number(r.id) === reviewId);
+    if (!review) {
+        showToast('Could not find that review.', 'error');
+        return;
+    }
+
+    const currentVote = Number(review.user_vote || 0);
+    const payloadVote = currentVote === requestedVote ? 'clear' : requestedVote;
+    const row = pane.querySelector(`[data-review-vote-row="${reviewId}"]`);
+    const buttons = row ? row.querySelectorAll('.js-vote-btn') : [clickedButton];
+    buttons.forEach(button => {
+        button.disabled = true;
+    });
+
+    fetch(`/api/reviews/${reviewId}/vote/`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ vote: payloadVote }),
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400) {
+                showToast(b.error || 'Unable to save vote.', 'error');
+                return;
+            }
+
+            review.vote_score = Number(b.vote_score || 0);
+            review.user_vote = Number(b.user_vote || 0);
+            renderReviewsTab(amenity);
+        })
+        .catch(() => {
+            showToast('Network error while saving vote.', 'error');
+        })
+        .finally(() => {
+            buttons.forEach(button => {
+                button.disabled = false;
+            });
+        });
+}
+
+function renderReviewerAvatar(review, className = 'rv-avatar') {
+    const reviewerName = getReviewerName(review);
+    return `<div class="${className}"><img class="reviewer-avatar-image" src="${review.user_avatar_url}" alt="${reviewerName} avatar" onerror="this.onerror=null;this.src='/static/maps/default-avatar.svg';"></div>`;
+}
+
 function showToast(msg, type = 'info', duration = 2800) {
     const existing = document.getElementById('map-toast');
     if (existing) existing.remove();
@@ -1218,7 +1403,7 @@ function searchLocations(query) {
                             iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
                         }),
                     }).addTo(map).bindPopup(name);
-                    saveSearchHistory(name);
+                    saveSearchHistory(name, lat, lon);
                     const inp = document.getElementById('search-input');
                     inp.value = name;
                     inp.closest('.search-box').classList.add('has-value');
@@ -1230,22 +1415,41 @@ function searchLocations(query) {
 }
 
 function getSearchHistory()   { try { return JSON.parse(localStorage.getItem('mapSearchHistory') || '[]'); } catch { return []; } }
-function saveSearchHistory(q) {
-    if (!q?.trim()) return;
-    const h = getSearchHistory().filter(x => x.toLowerCase() !== q.toLowerCase());
-    localStorage.setItem('mapSearchHistory', JSON.stringify([q, ...h].slice(0, 5)));
+function saveSearchHistory(name, lat, lon) {
+    if (!name?.trim()) return;
+    const h = getSearchHistory().filter(x => {
+        const xName = typeof x === 'string' ? x : x.name;
+        return xName.toLowerCase() !== name.toLowerCase();
+    });
+    localStorage.setItem('mapSearchHistory', JSON.stringify([{ name, lat, lon }, ...h].slice(0, 5)));
 }
 function showSearchHistory() {
     const h = getSearchHistory(), c = document.getElementById('search-results');
     if (!h.length) { c.classList.remove('active'); return; }
-    c.innerHTML = h.map(s => `<div class="search-result-item search-history-item" data-search="${s}"><div class="result-name">🕐 ${s}</div></div>`).join('');
+    c.innerHTML = h.map((item, i) => {
+        const name = typeof item === 'string' ? item : item.name;
+        return `<div class="search-result-item search-history-item" data-index="${i}"><div class="result-name">🕐 ${name}</div></div>`;
+    }).join('');
     positionSearchResults();
     c.classList.add('active');
     c.querySelectorAll('.search-history-item').forEach(el => el.addEventListener('click', () => {
+        const item = h[parseInt(el.dataset.index, 10)];
+        const name = typeof item === 'string' ? item : item.name;
         const inp = document.getElementById('search-input');
-        inp.value = el.dataset.search;
+        inp.value = name;
         inp.closest('.search-box').classList.add('has-value');
-        searchLocations(el.dataset.search);
+        
+        if (item && typeof item === 'object' && item.lat !== undefined && item.lon !== undefined) {
+            map.setView([item.lat, item.lon], 16);
+            if (selectedLocationMarker) map.removeLayer(selectedLocationMarker);
+            selectedLocationMarker = L.marker([item.lat, item.lon], {
+                title: name, zIndexOffset: 50,
+                icon: L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] }),
+            }).addTo(map).bindPopup(name);
+            hideSearchResults();
+        } else {
+            searchLocations(name);
+        }
     }));
 }
 function positionSearchResults() {
@@ -1282,6 +1486,7 @@ function normalizeAuthUser(data) {
         email: data.email || '',
         username: data.username || '',
         bio: data.bio || '',
+        avatar_url: data.avatar_url || '/static/maps/default-avatar.svg',
         is_authenticated: true,
     };
 }
@@ -1476,18 +1681,21 @@ function showMessagingMenu(userEmail, amenity) {
 // render login/logout button and current user label.
 function updateUserUI() {
     const btn = document.getElementById('auth-button');
-    const disp = document.getElementById('user-display');
+    const userMenu = document.getElementById('user-menu');
+    const avatarImage = document.getElementById('avatar-image');
+    const userMenuEmail = document.getElementById('user-menu-email');
 
-    if (!btn || !disp) return;
+    if (!btn || !userMenu || !avatarImage || !userMenuEmail) return;
 
     if (currentUser && currentUser.is_authenticated) {
-        disp.textContent = currentUser.username || currentUser.email;
-        disp.style.display = '';
-        btn.textContent = 'Logout';
+        btn.style.display = 'none';
+        userMenu.style.display = 'inline-flex';
+        avatarImage.src = currentUser.avatar_url || '/static/maps/default-avatar.svg';
+        userMenuEmail.textContent = currentUser.email || '';
     } else {
-        disp.textContent = '';
-        disp.style.display = 'none';
-        btn.textContent = 'Login';
+        btn.style.display = '';
+        userMenu.style.display = 'none';
+        userMenuEmail.textContent = '';
     }
 
     if (currentDetailAmenity) renderReviewsTab(currentDetailAmenity);
@@ -1501,6 +1709,21 @@ function setupAuth() {
     document.querySelectorAll('.auth-tab-link').forEach(l => l.addEventListener('click', () => switchAuthTab(l.dataset.tab)));
     setupAuthForm('login-form',    '/api/auth/login/',    'login-error');
     setupAuthForm('register-form', '/api/auth/register/', 'register-error', true);
+    const avatarButton = document.getElementById('avatar-button');
+    const dropdown = document.getElementById('user-menu-dropdown');
+    const logoutLink = document.getElementById('logout-link');
+    avatarButton.addEventListener('click', () => {
+        dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+    });
+    logoutLink.addEventListener('click', () => {
+        dropdown.style.display = 'none';
+        logoutUser();
+    });
+    document.addEventListener('click', e => {
+        if (!dropdown.contains(e.target) && !avatarButton.contains(e.target)) {
+            dropdown.style.display = 'none';
+        }
+    });
     fetchCurrentUser();
 }
 
@@ -1561,8 +1784,100 @@ document.addEventListener('DOMContentLoaded', () => {
     map.addLayer(bikeRackMarkers);
     map.addLayer(otherAmenityMarkers);
     map.on('moveend', loadAmenities);
-    map.on('dragstart', () => hoverTooltip.hide());
-    map.on('zoomstart', () => hoverTooltip.hide());
+    map.on('dragstart', () => {
+        hoverTooltip.hide();
+    });
+    map.on('zoomstart', () => {
+        hoverTooltip.hide();
+    });
+
+    // --- Custom Touch Timer for Mobile Long Press Fallback ---
+    let mapTouchTimer;
+    let mapTouchPos;
+
+    map.on('touchstart', (e) => {
+        if (e.originalEvent.touches && e.originalEvent.touches.length > 1) return;
+        mapTouchPos = e.latlng;
+        mapTouchTimer = setTimeout(() => {
+            map.fire('contextmenu', { latlng: mapTouchPos, originalEvent: e.originalEvent });
+        }, 800);
+    });
+
+    map.on('touchend', () => clearTimeout(mapTouchTimer));
+    map.on('touchmove', () => clearTimeout(mapTouchTimer));
+
+    let contextMenuFired = false;
+
+    // --- Right Click / Long Press to Set Location ---
+    map.on('contextmenu', (e) => {
+        clearTimeout(mapTouchTimer);
+        if (contextMenuFired) return;
+        contextMenuFired = true;
+        setTimeout(() => contextMenuFired = false, 500); // debounce to avoid double firing on some devices
+
+        if (e.originalEvent && typeof e.originalEvent.preventDefault === 'function') {
+            e.originalEvent.preventDefault();
+        }
+        
+        const lat = e.latlng.lat;
+        const lon = e.latlng.lng;
+        
+        showToast('Setting custom location...', 'info', 1000);
+        
+        fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`)
+            .then(r => r.json())
+            .then(data => {
+                let name = 'Custom Location';
+                if (data && data.display_name) {
+                    const parts = [];
+                    if (data.name) parts.push(data.name);
+
+                    if (data.address) {
+                        if (data.address.road) {
+                            const street = data.address.house_number ? `${data.address.house_number} ${data.address.road}` : data.address.road;
+                            if (street !== data.name) parts.push(street);
+                        }
+                        const city = data.address.city || data.address.town || data.address.village || data.address.borough;
+                        if (city && !parts.includes(city)) parts.push(city);
+                        if (data.address.state && !parts.includes(data.address.state)) parts.push(data.address.state);
+                    }
+
+                    if (parts.length === 0) {
+                        parts.push(data.display_name.split(',')[0]);
+                    }
+                    name = parts.join(', ');
+                }
+                
+                updateHomeLocation(lat, lon, name);
+                saveSearchHistory(name, lat, lon);
+                showToast('Location set to ' + name, 'success');
+            })
+            .catch(err => {
+                console.error('Reverse geocode failed', err);
+                updateHomeLocation(lat, lon, 'Custom Location');
+                showToast('Custom location set', 'success');
+            });
+    });
+
+    function updateHomeLocation(lat, lon, name) {
+        if (selectedLocationMarker) {
+            selectedLocationMarker.setLatLng([lat, lon]).bindPopup(name).openPopup();
+            const inp = document.getElementById('search-input');
+            if (inp) {
+                inp.value = name;
+                inp.closest('.search-box').classList.add('has-value');
+            }
+        } else {
+            userLocation = { latitude: lat, longitude: lon };
+            if (userMarker) {
+                userMarker.setLatLng([lat, lon]).bindPopup('📍 ' + name).openPopup();
+            } else {
+                userMarker = L.marker([lat, lon], { title: name, zIndexOffset: 100 }).addTo(map).bindPopup('📍 ' + name).openPopup();
+            }
+            document.getElementById('location-status').textContent = 'Custom location';
+            document.getElementById('location-dot').classList.add('found');
+        }
+    }
 
     document.getElementById('reset-filters-btn').addEventListener('click', resetAllFilters);
     document.getElementById('location-button').addEventListener('click', retryGeolocation);

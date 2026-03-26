@@ -1,0 +1,200 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="{% static 'maps/favicon.ico' %}" type="image/x-icon">
+    <title>Settings</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'maps/css/style.css' %}">
+</head>
+<body class="profile-page">
+    {% include "maps/includes/topnav.html" with map_href="/" show_location=0 show_auth_button=0 hide_user_menu=0 show_profile_link=1 show_settings_link=1 map_link_active=0 avatar_src=profile_user.avatar_url current_email=profile_user.email %}
+
+    <main
+        id="settings-root"
+        class="profile-page-shell settings-page-shell"
+        data-profile-update-url="{% url 'maps:update_profile_api' %}"
+        data-password-update-url="{% url 'maps:change_password_api' %}"
+        data-logout-url="{% url 'maps:logout_api' %}"
+    >
+        <div class="profile-page-container settings-page-container">
+            <section class="settings-shell">
+                <aside class="settings-sidebar" aria-label="Settings sections">
+                    <h1 class="settings-title">Settings</h1>
+
+                    <div class="settings-nav" role="tablist" aria-label="Settings sections">
+                        <button
+                            class="settings-nav-button is-active"
+                            type="button"
+                            role="tab"
+                            aria-selected="true"
+                            data-tab="profile"
+                        >
+                            <span class="settings-nav-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none">
+                                    <path d="M12 12a3.75 3.75 0 1 0 0-7.5 3.75 3.75 0 0 0 0 7.5Z"></path>
+                                    <path d="M5 19.25a7 7 0 0 1 14 0"></path>
+                                </svg>
+                            </span>
+                            <span class="settings-nav-label">Profile</span>
+                        </button>
+                        <button
+                            class="settings-nav-button"
+                            type="button"
+                            role="tab"
+                            aria-selected="false"
+                            data-tab="account"
+                        >
+                            <span class="settings-nav-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none">
+                                    <rect x="5.25" y="10.25" width="13.5" height="9.5" rx="2"></rect>
+                                    <path d="M8.25 10.25V8.5a3.75 3.75 0 1 1 7.5 0v1.75"></path>
+                                </svg>
+                            </span>
+                            <span class="settings-nav-label">Account</span>
+                        </button>
+                    </div>
+                </aside>
+
+                <div class="settings-content">
+                    <section class="settings-panel is-active" data-panel="profile" aria-label="Profile settings">
+                        <div class="profile-edit-header">
+                            <h2 class="profile-edit-title settings-panel-title">Profile</h2>
+                            <p class="settings-panel-copy">Update the public details shown on your profile page.</p>
+                        </div>
+
+                        <form id="settings-profile-form" class="profile-edit-form" enctype="multipart/form-data" novalidate>
+                            <div class="profile-edit-field">
+                                <div class="profile-edit-label">Profile photo</div>
+
+                                <div class="profile-edit-avatar-row">
+                                    <button
+                                        id="settings-avatar-button"
+                                        class="profile-edit-avatar-button"
+                                        type="button"
+                                        aria-label="Choose a new profile avatar"
+                                    >
+                                        <img
+                                            id="settings-avatar-preview"
+                                            class="profile-edit-avatar"
+                                            src="{{ profile_user.avatar_url }}"
+                                            alt="Profile avatar preview"
+                                            onerror="this.onerror=null;this.src='/static/maps/default-avatar.svg';"
+                                        >
+                                        <span class="profile-avatar-badge" aria-hidden="true">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                                <path d="M10.5 8.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0"/>
+                                                <path d="M2 4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-1.172a2 2 0 0 1-1.414-.586l-.828-.828A2 2 0 0 0 9.172 2H6.828a2 2 0 0 0-1.414.586l-.828.828A2 2 0 0 1 3.172 4zm.5 2a.5.5 0 1 1 0-1 .5.5 0 0 1 0 1m9 2.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0"/>
+                                            </svg>
+                                        </span>
+                                    </button>
+                                </div>
+                                <p class="profile-edit-field-message">PNG, JPG, or GIF up to 2MB.</p>
+                            </div>
+
+                            <input id="settings-avatar-input" name="avatar" type="file" accept="image/*" hidden>
+
+                            <div class="profile-edit-field">
+                                <label for="settings-email-input" class="profile-edit-label">Email</label>
+                                <input
+                                    id="settings-email-input"
+                                    class="profile-edit-input"
+                                    type="email"
+                                    value="{{ profile_user.email }}"
+                                    readonly
+                                >
+                            </div>
+
+                            <div class="profile-edit-field">
+                                <label for="settings-username-input" class="profile-edit-label">Username</label>
+                                <input
+                                    id="settings-username-input"
+                                    name="username"
+                                    class="profile-edit-input"
+                                    type="text"
+                                    maxlength="30"
+                                    value="{{ profile_user.username }}"
+                                    aria-describedby="settings-username-message"
+                                >
+                                <p id="settings-username-message" class="profile-edit-field-message"></p>
+                            </div>
+
+                            <div class="profile-edit-field">
+                                <label for="settings-bio-input" class="profile-edit-label">Bio</label>
+                                <div class="profile-edit-textarea-shell">
+                                    <textarea
+                                        id="settings-bio-input"
+                                        name="bio"
+                                        class="profile-edit-textarea profile-edit-textarea-bio"
+                                        rows="2"
+                                        maxlength="150"
+                                    >{{ profile_user.bio }}</textarea>
+                                    <div id="settings-bio-count" class="profile-edit-char-count" aria-live="polite"></div>
+                                </div>
+                            </div>
+
+                            <div class="settings-form-actions">
+                                <button id="settings-profile-save" class="profile-edit-save" type="submit" disabled>Save changes</button>
+                            </div>
+                        </form>
+                    </section>
+
+                    <section class="settings-panel" data-panel="account" aria-label="Account settings">
+                        <div class="profile-edit-header">
+                            <h2 class="profile-edit-title settings-panel-title">Account</h2>
+                            <p class="settings-panel-copy">Change your password without leaving the settings page.</p>
+                        </div>
+
+                        <form id="settings-account-form" class="profile-edit-form" novalidate>
+                            <div class="profile-edit-field">
+                                <label for="settings-current-password-input" class="profile-edit-label">Current password</label>
+                                <input
+                                    id="settings-current-password-input"
+                                    name="current_password"
+                                    class="profile-edit-input"
+                                    type="password"
+                                    autocomplete="current-password"
+                                >
+                            </div>
+
+                            <div class="profile-edit-field">
+                                <label for="settings-new-password-input" class="profile-edit-label">New password</label>
+                                <input
+                                    id="settings-new-password-input"
+                                    name="new_password"
+                                    class="profile-edit-input"
+                                    type="password"
+                                    autocomplete="new-password"
+                                >
+                            </div>
+
+                            <div class="profile-edit-field">
+                                <label for="settings-confirm-password-input" class="profile-edit-label">Confirm new password</label>
+                                <input
+                                    id="settings-confirm-password-input"
+                                    name="confirm_password"
+                                    class="profile-edit-input"
+                                    type="password"
+                                    autocomplete="new-password"
+                                >
+                                <p id="settings-account-message" class="profile-edit-field-message"></p>
+                            </div>
+
+                            <div class="settings-form-actions">
+                                <button id="settings-account-save" class="profile-edit-save" type="submit" disabled>Save password</button>
+                            </div>
+                        </form>
+                    </section>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script src="{% static 'maps/js/settings.js' %}"></script>
+</body>
+</html>

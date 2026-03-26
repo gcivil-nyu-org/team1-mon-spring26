@@ -1,6 +1,7 @@
 from django.contrib.gis.db import models
 from django.contrib.postgres.indexes import GistIndex
 from django.contrib.auth.models import AbstractUser
+from django.templatetags.static import static
 import datetime
 
 
@@ -9,6 +10,7 @@ class CustomUser(AbstractUser):
 
     email = models.EmailField(unique=True)
     bio = models.TextField(blank=True)
+    avatar = models.ImageField(upload_to="avatars/%Y/%m/%d/", blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -17,6 +19,16 @@ class CustomUser(AbstractUser):
 
     class Meta:
         ordering = ["-created_at"]
+
+    @property
+    def avatar_url(self):
+        if self.avatar:
+            if hasattr(self.avatar, "storage") and not self.avatar.storage.exists(
+                self.avatar.name
+            ):
+                return static("maps/default-avatar.svg")
+            return self.avatar.url
+        return static("maps/default-avatar.svg")
 
     def __str__(self):
         return self.email
@@ -251,6 +263,39 @@ class Review(models.Model):
     def __str__(self):
         user_name = self.user.email if self.user else "Anonymous"
         return f"Review by {user_name} for {self.amenity.name} - {self.rating}★"
+
+
+class ReviewVote(models.Model):
+    """Per-user up/down vote for a review."""
+
+    VOTE_CHOICES = [
+        (1, "Upvote"),
+        (-1, "Downvote"),
+    ]
+
+    review = models.ForeignKey(Review, on_delete=models.CASCADE, related_name="votes")
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="review_votes",
+    )
+    value = models.SmallIntegerField(choices=VOTE_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("review", "user")]
+        indexes = [
+            models.Index(fields=["review", "value"], name="review_vote_score_idx"),
+            models.Index(
+                fields=["user", "-updated_at"],
+                name="review_vote_user_updated_idx",
+            ),
+        ]
+
+    def __str__(self):
+        vote_label = "upvote" if self.value == 1 else "downvote"
+        return f"{self.user.email} {vote_label}d review {self.review_id}"
 
 
 class AmenityPhoto(models.Model):

@@ -3,9 +3,17 @@ from django.test import TestCase, Client, override_settings
 from django.urls import reverse
 from django.contrib.gis.geos import Point
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils.html import escape
 from unittest.mock import patch
 
-from maps.models import AmenityType, Amenity, CustomUser, Review, AmenityPhoto
+from maps.models import (
+    AmenityType,
+    Amenity,
+    CustomUser,
+    Review,
+    AmenityPhoto,
+    ReviewVote,
+)
 from maps.views import normalize_longitude, get_cluster_grid_size
 
 
@@ -258,6 +266,240 @@ class ViewsCoverageTest(TestCase):
         self.assertIsNotNone(active)
         self.assertTrue(len(active["reviews"]) > 0)
         self.assertEqual(active["reviews"][0]["rating"], 4)
+        self.assertEqual(active["reviews"][0]["user_email"], self.test_user.email)
+        self.assertEqual(
+            active["reviews"][0]["user_avatar_url"], self.test_user.avatar_url
+        )
+
+    def test_avatar_url_falls_back_when_avatar_file_is_missing(self):
+        self.test_user.avatar = "avatars/missing-avatar.png"
+
+        with patch.object(self.test_user.avatar.storage, "exists", return_value=False):
+            self.assertEqual(
+                self.test_user.avatar_url, "/static/maps/default-avatar.svg"
+            )
+
+    def test_profile_view_requires_login(self):
+        response = self.client.get(reverse("maps:profile"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/?auth_required=1", response.url)
+
+    def test_profile_view_authenticated(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:profile"))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "maps/profile.html")
+        self.assertEqual(response.context["profile_user"], self.test_user)
+        self.assertEqual(response.context["reviews_count"], 0)
+        self.assertEqual(response.context["likes_received_count"], 0)
+        self.assertContains(response, "Reviews")
+        self.assertContains(response, "Favorites")
+        self.assertContains(response, "Settings")
+
+    def test_profile_view_renders_full_bio_text(self):
+        bio = "First line\nSecond line with <tags> & symbols"
+        self.test_user.bio = bio
+        self.test_user.save(update_fields=["bio"])
+
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:profile"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, escape(bio), html=True)
+
+    def test_profile_view_includes_review_stats(self):
+        Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=5,
+            review_text="Helpful review",
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:profile"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["reviews_count"], 1)
+
+    def test_settings_view_requires_login(self):
+        response = self.client.get(reverse("maps:settings"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/?auth_required=1", response.url)
+
+    def test_settings_view_authenticated(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:settings"))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "maps/settings.html")
+        self.assertEqual(response.context["profile_user"], self.test_user)
+        self.assertContains(response, "Profile")
+        self.assertContains(response, "Account")
+
+    def test_update_profile_api_updates_profile(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:update_profile_api"),
+            data={"username": "updated-name", "bio": "Updated bio"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.test_user.refresh_from_db()
+        self.assertEqual(self.test_user.username, "updated-name")
+        self.assertEqual(self.test_user.bio, "Updated bio")
+
+        body = response.json()
+        self.assertEqual(body["username"], "updated-name")
+        self.assertEqual(body["bio"], "Updated bio")
+
+    def test_update_profile_api_rejects_blank_username(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:update_profile_api"),
+            data={"username": "   ", "bio": "Updated bio"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Username is required")
+
+    def test_update_profile_api_rejects_bio_longer_than_150_chars(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:update_profile_api"),
+            data={"username": "updated-name", "bio": "a" * 151},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "Bio must be 150 characters or fewer",
+        )
+
+    def test_change_password_api_updates_password_and_keeps_session(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:change_password_api"),
+            data={
+                "current_password": "password123",
+                "new_password": "new-password-456",
+                "confirm_password": "new-password-456",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["message"], "Password updated successfully")
+
+        self.test_user.refresh_from_db()
+        self.assertTrue(self.test_user.check_password("new-password-456"))
+
+        current_user_response = self.client.get(reverse("maps:current_user_api"))
+        self.assertEqual(current_user_response.status_code, 200)
+        self.assertTrue(current_user_response.json()["is_authenticated"])
+
+    def test_change_password_api_rejects_wrong_current_password(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:change_password_api"),
+            data={
+                "current_password": "wrong-password",
+                "new_password": "new-password-456",
+                "confirm_password": "new-password-456",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Current password is incorrect")
+
+    def test_change_password_api_rejects_confirmation_mismatch(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:change_password_api"),
+            data={
+                "current_password": "password123",
+                "new_password": "new-password-456",
+                "confirm_password": "different-password-789",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "New password and confirmation do not match",
+        )
+
+    def test_profile_reviews_api_returns_current_users_reviews(self):
+        other_user = CustomUser.objects.create_user(
+            email="other@example.com",
+            username="other-user",
+            password="password123",
+        )
+        own_review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=5,
+            review_text="My review",
+        )
+        Review.objects.create(
+            amenity=self.amenity_inactive,
+            user=other_user,
+            rating=3,
+            review_text="Someone else's review",
+        )
+        photo = SimpleUploadedFile(
+            "profile-review.jpg", b"file_content", content_type="image/jpeg"
+        )
+        AmenityPhoto.objects.create(
+            amenity=self.amenity_active,
+            uploaded_by=self.test_user,
+            photo=photo,
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:profile_reviews_api"))
+        self.assertEqual(response.status_code, 200)
+
+        reviews = response.json()["reviews"]
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0]["id"], own_review.id)
+        self.assertEqual(reviews[0]["amenity_name"], self.amenity_active.name)
+        self.assertEqual(
+            reviews[0]["amenity_prop_name"],
+            self.amenity_active.prop_name,
+        )
+        self.assertEqual(
+            reviews[0]["amenity_type"], self.amenity_active.amenity_type.name
+        )
+        self.assertIsNotNone(reviews[0]["photo_url"])
+
+    def test_review_detail_api_patch_updates_own_review(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=4,
+            review_text="Original",
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.patch(
+            reverse("maps:review_detail_api", args=[review.id]),
+            data=json.dumps({"rating": 5, "review_text": "Updated"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        review.refresh_from_db()
+        self.assertEqual(review.rating, 5)
+        self.assertEqual(review.review_text, "Updated")
+        self.assertEqual(response.json()["message"], "Review updated successfully")
+
+    def test_review_detail_api_delete_removes_own_review(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=4,
+            review_text="Original",
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.delete(
+            reverse("maps:review_detail_api", args=[review.id])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Review.objects.filter(id=review.id).exists())
 
     # --- Auth API Tests ---
     def test_register_api(self):
@@ -417,3 +659,99 @@ class ViewsCoverageTest(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response_not_found.status_code, 404)
+
+    def test_review_vote_api_toggle_and_change(self):
+        reviewer = CustomUser.objects.create_user(
+            email="reviewer@example.com",
+            username="reviewer",
+            password="password123",
+        )
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=reviewer,
+            rating=4,
+            review_text="Solid spot",
+        )
+
+        self.client.force_login(self.test_user)
+
+        first = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "up"}),
+            content_type="application/json",
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["vote_score"], 1)
+        self.assertEqual(first.json()["user_vote"], 1)
+
+        second = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "up"}),
+            content_type="application/json",
+        )
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["vote_score"], 0)
+        self.assertEqual(second.json()["user_vote"], 0)
+
+        third = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "down"}),
+            content_type="application/json",
+        )
+        self.assertEqual(third.status_code, 200)
+        self.assertEqual(third.json()["vote_score"], -1)
+        self.assertEqual(third.json()["user_vote"], -1)
+
+    def test_amenities_api_returns_vote_score_ordering(self):
+        reviewer_one = CustomUser.objects.create_user(
+            email="reviewer1@example.com",
+            username="reviewer-one",
+            password="password123",
+        )
+        reviewer_two = CustomUser.objects.create_user(
+            email="reviewer2@example.com",
+            username="reviewer-two",
+            password="password123",
+        )
+
+        review_top = Review.objects.create(
+            amenity=self.amenity_active,
+            user=reviewer_one,
+            rating=3,
+            review_text="Top-voted",
+        )
+        review_low = Review.objects.create(
+            amenity=self.amenity_active,
+            user=reviewer_two,
+            rating=5,
+            review_text="Lower votes",
+        )
+
+        voter_a = CustomUser.objects.create_user(
+            email="votera@example.com",
+            username="voter-a",
+            password="password123",
+        )
+        voter_b = CustomUser.objects.create_user(
+            email="voterb@example.com",
+            username="voter-b",
+            password="password123",
+        )
+
+        ReviewVote.objects.create(review=review_top, user=voter_a, value=1)
+        ReviewVote.objects.create(review=review_top, user=voter_b, value=1)
+        ReviewVote.objects.create(review=review_low, user=voter_a, value=-1)
+
+        self.client.force_login(voter_b)
+        response = self.client.get(reverse("maps:amenities_api"))
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()["amenities"]
+        amenity_payload = next(
+            item for item in payload if item.get("id") == self.amenity_active.id
+        )
+
+        self.assertGreaterEqual(len(amenity_payload["reviews"]), 2)
+        first_review = amenity_payload["reviews"][0]
+        self.assertEqual(first_review["id"], review_top.id)
+        self.assertEqual(first_review["vote_score"], 2)
