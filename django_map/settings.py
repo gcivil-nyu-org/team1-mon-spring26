@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "django.contrib.gis",
     "django.contrib.postgres",
     "maps",
+    "storages",
 ]
 
 MIDDLEWARE = [
