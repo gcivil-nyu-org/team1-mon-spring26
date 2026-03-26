@@ -6,6 +6,7 @@
 
     <div class="topnav-links">
         <a class="topnav-link{% if map_link_active %} active{% endif %}" href="{{ map_href|default:'/' }}">Map</a>
+        <a class="topnav-link{% if chats_link_active %} active{% endif %}" href="{% url 'maps:chats' %}">Chats</a>
     </div>
 
     <div class="topnav-right">
