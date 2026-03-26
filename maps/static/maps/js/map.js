@@ -28,6 +28,7 @@ let pinnedHoverAmenity     = null;
 let blockNearbyHover       = false;
 let currentUser            = null;
 let hoverTooltipTimer      = null;
+let pendingAmenityFromQuery = null;
 
 const hoursFilter = {
     openNow:      false,
@@ -694,6 +695,8 @@ function showDetailPanel(amenity, activeTab = 'overview') {
             document.body.classList.remove('sidebar-open');
         }
     }
+
+    wireFavoriteToggle(amenity);
 }
 
 function switchDetailTab(name) {
@@ -720,9 +723,20 @@ function closeDetailPanel(keepPinned = false) {
 
 function renderOverviewTab(amenity) {
     const todayIdx = jsToDbIdx(new Date().getDay());
+    const isFavorited = Boolean(amenity.is_favorited);
     let html = '';
 
     html += `<div class="dp-section"><span class="dp-status ${amenity.active ? 'active' : 'inactive'}">${amenity.active ? 'Active' : 'Inactive'}</span></div>`;
+
+    if (currentUser && currentUser.is_authenticated) {
+        html += `<div class="dp-section">
+            <button type="button" class="dp-favorite-btn ${isFavorited ? 'is-active' : ''}" data-action="toggle-favorite" data-amenity-id="${amenity.id}">
+                ${isFavorited ? '★ Remove from favorites' : '☆ Add to favorites'}
+            </button>
+        </div>`;
+    } else {
+        html += `<div class="dp-section"><div class="review-login-prompt">Please <a href="#" class="js-open-auth">sign in</a> to save this amenity as a favorite.</div></div>`;
+    }
 
     const locParts = [amenity.prop_name, amenity.position, amenity.address].filter(Boolean);
     if (locParts.length) html += `<div class="dp-section"><div class="dp-field-label">Location</div><div class="dp-field-value">${locParts.join(' · ')}</div></div>`;
@@ -767,6 +781,76 @@ function renderOverviewTab(amenity) {
     </div></div>`;
 
     document.getElementById('tab-overview').innerHTML = html;
+
+    const loginLink = document.querySelector('#tab-overview .js-open-auth');
+    if (loginLink) {
+        loginLink.addEventListener('click', e => {
+            e.preventDefault();
+            switchAuthTab('login-tab');
+            showAuthModal();
+        });
+    }
+}
+
+function wireFavoriteToggle(amenity) {
+    const favoriteButton = document.querySelector('#tab-overview [data-action="toggle-favorite"]');
+    if (!favoriteButton) return;
+
+    favoriteButton.addEventListener('click', () => {
+        toggleAmenityFavorite(amenity, favoriteButton);
+    });
+}
+
+function updateAmenityFavoriteStateInCache(amenityId, isFavorited) {
+    Object.values(allAmenitiesData).forEach(items => {
+        items.forEach(item => {
+            if (Number(item.id) === Number(amenityId)) {
+                item.is_favorited = isFavorited;
+            }
+        });
+    });
+}
+
+function toggleAmenityFavorite(amenity, buttonEl) {
+    if (!currentUser || !currentUser.is_authenticated) {
+        showToast('Please sign in to save favorites.', 'warn');
+        return;
+    }
+
+    const isCurrentlyFavorited = Boolean(amenity.is_favorited);
+    const method = isCurrentlyFavorited ? 'DELETE' : 'POST';
+
+    buttonEl.disabled = true;
+
+    fetch(`/api/amenities/${amenity.id}/favorite/`, {
+        method,
+        credentials: 'same-origin',
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400) {
+                showToast(b.error || 'Unable to update favorite.', 'error');
+                return;
+            }
+
+            const nextValue = Boolean(b.is_favorited);
+            amenity.is_favorited = nextValue;
+            updateAmenityFavoriteStateInCache(amenity.id, nextValue);
+
+            if (currentDetailAmenity && Number(currentDetailAmenity.id) === Number(amenity.id)) {
+                currentDetailAmenity.is_favorited = nextValue;
+            }
+
+            renderOverviewTab(amenity);
+            wireFavoriteToggle(amenity);
+            showToast(nextValue ? 'Added to favorites.' : 'Removed from favorites.', 'success');
+        })
+        .catch(() => {
+            showToast('Network error while updating favorite.', 'error');
+        })
+        .finally(() => {
+            buttonEl.disabled = false;
+        });
 }
 
 function renderNearbyTab(a) {
@@ -1482,6 +1566,10 @@ function fetchCurrentUser() {
     .then(data => {
         currentUser = normalizeAuthUser(data);
         updateUserUI();
+        if (pendingAmenityFromQuery) {
+            focusAmenityFromQuery(pendingAmenityFromQuery);
+            pendingAmenityFromQuery = null;
+        }
         return currentUser;
     })
     .catch(error => {
@@ -1603,7 +1691,52 @@ function updateUserUI() {
         userMenuEmail.textContent = '';
     }
 
-    if (currentDetailAmenity) renderReviewsTab(currentDetailAmenity);
+    if (currentDetailAmenity) {
+        renderOverviewTab(currentDetailAmenity);
+        wireFavoriteToggle(currentDetailAmenity);
+        renderReviewsTab(currentDetailAmenity);
+    }
+}
+
+function focusAmenityFromQuery(amenityId) {
+    const numericAmenityId = Number(amenityId || 0);
+    if (!numericAmenityId) return;
+
+    fetch(`/api/amenities/${numericAmenityId}/`, {
+        method: 'GET',
+        credentials: 'same-origin',
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400 || !b.amenity) {
+                return;
+            }
+
+            const amenity = b.amenity;
+            map.flyTo([amenity.latitude, amenity.longitude], Math.max(map.getZoom(), 16));
+
+            if (selectedLocationMarker) {
+                map.removeLayer(selectedLocationMarker);
+            }
+            selectedLocationMarker = L.marker([amenity.latitude, amenity.longitude], {
+                title: amenity.prop_name || amenity.name,
+                zIndexOffset: 50,
+                icon: L.icon({
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
+                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                    iconSize: [25, 41],
+                    iconAnchor: [12, 41],
+                    popupAnchor: [1, -34],
+                    shadowSize: [41, 41],
+                }),
+            }).addTo(map);
+
+            updateAmenityFavoriteStateInCache(amenity.id, Boolean(amenity.is_favorited));
+            showDetailPanel(amenity);
+        })
+        .catch(() => {
+            // Keep the rest of the map experience working if deep-link focus fails.
+        });
 }
 
 /** Auth Wiring */
@@ -1677,6 +1810,8 @@ function setupPWA() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    const queryAmenityId = new URLSearchParams(window.location.search).get('amenity_id');
+
     setupAuth();
     setupSidebarToggle();
     setupHoursFilter();
@@ -1685,6 +1820,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAmenityTypes();
     loadAmenities();
     setupPWA();
+
+    if (queryAmenityId) {
+        pendingAmenityFromQuery = queryAmenityId;
+    }
 
     map.addLayer(bikeRackMarkers);
     map.addLayer(otherAmenityMarkers);

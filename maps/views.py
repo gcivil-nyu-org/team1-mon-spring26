@@ -6,7 +6,15 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.gis.geos import Polygon, GEOSGeometry
-from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser, ReviewVote
+from .models import (
+    AmenityType,
+    Amenity,
+    Review,
+    AmenityPhoto,
+    CustomUser,
+    ReviewVote,
+    Favorite,
+)
 from django.db.models import (
     Avg,
     Count,
@@ -96,6 +104,71 @@ def cluster_amenities(amenities, zoom):
         return cursor.fetchall()
 
 
+def get_review_prefetch_queryset(user):
+    queryset = (
+        Review.objects.select_related("user")
+        .annotate(
+            vote_score=Coalesce(
+                Sum("votes__value"), Value(0), output_field=IntegerField()
+            )
+        )
+        .order_by("-vote_score", "-created_at")
+    )
+    if user.is_authenticated:
+        queryset = queryset.annotate(
+            user_vote=Coalesce(
+                Sum(
+                    "votes__value",
+                    filter=Q(votes__user=user),
+                ),
+                Value(0),
+                output_field=IntegerField(),
+            )
+        )
+    return queryset
+
+
+def serialize_map_amenity(amenity, user, favorite_amenity_ids=None):
+    if favorite_amenity_ids is None:
+        favorite_amenity_ids = set()
+
+    photo_by_user = {}
+    for photo in amenity.photos.all():
+        if photo.uploaded_by_id not in photo_by_user:
+            photo_by_user[photo.uploaded_by_id] = photo.photo.url
+
+    return {
+        "id": amenity.id,
+        "name": amenity.name,
+        "latitude": amenity.location.y,
+        "longitude": amenity.location.x,
+        "address": amenity.address,
+        "prop_name": amenity.prop_name,
+        "description": amenity.description,
+        "operator": amenity.operator,
+        "hours_of_operation": amenity.hours_of_operation,
+        "changing_stations": amenity.changing_stations,
+        "accessibility": amenity.accessibility,
+        "rating": getattr(amenity, "avg_rating", None),
+        "review_count": getattr(amenity, "review_count", 0),
+        "reviews": [
+            serialize_amenity_review(
+                review,
+                photo_url=photo_by_user.get(review.user_id),
+                current_user=user,
+            )
+            for review in amenity.reviews.all()[:5]
+        ],
+        "photo_url": getattr(amenity, "primary_photo_url", None),
+        "active": amenity.active,
+        "type": amenity.amenity_type.name,
+        "type_id": amenity.amenity_type.id,
+        "icon": amenity.amenity_type.icon,
+        "color": amenity.amenity_type.color,
+        "is_favorited": amenity.id in favorite_amenity_ids,
+    }
+
+
 def amenities_api(request):
     """API endpoint to fetch amenities, optionally filtered by type and bounding box."""
     amenity_type_ids = request.GET.getlist("type_id")
@@ -161,26 +234,7 @@ def amenities_api(request):
     amenities = amenities.annotate(primary_photo_url=Subquery(primary_photo_subquery))
 
     # 3. Apply select_related and prefetch_related BEFORE the union.
-    review_prefetch_queryset = (
-        Review.objects.select_related("user")
-        .annotate(
-            vote_score=Coalesce(
-                Sum("votes__value"), Value(0), output_field=IntegerField()
-            )
-        )
-        .order_by("-vote_score", "-created_at")
-    )
-    if request.user.is_authenticated:
-        review_prefetch_queryset = review_prefetch_queryset.annotate(
-            user_vote=Coalesce(
-                Sum(
-                    "votes__value",
-                    filter=Q(votes__user=request.user),
-                ),
-                Value(0),
-                output_field=IntegerField(),
-            )
-        )
+    review_prefetch_queryset = get_review_prefetch_queryset(request.user)
 
     amenities = amenities.select_related("amenity_type").prefetch_related(
         Prefetch("reviews", queryset=review_prefetch_queryset),
@@ -228,6 +282,7 @@ def amenities_api(request):
                         "type_id": bike_rack_type.id,
                         "icon": "bicycle",
                         "color": "#FF9800",
+                        "is_favorited": False,
                     }
                 )
             else:
@@ -256,46 +311,71 @@ def amenities_api(request):
     if not amenities.exists():
         return JsonResponse({"amenities": final_amenities_list})
 
+    favorite_amenity_ids = set()
+    if request.user.is_authenticated:
+        amenity_ids = list(amenities.values_list("id", flat=True))
+        favorite_amenity_ids = set(
+            Favorite.objects.filter(user=request.user, amenity_id__in=amenity_ids)
+            .values_list("amenity_id", flat=True)
+        )
+
     # Serialize the individual amenities
     for a in amenities:
-        photo_by_user = {}
-        for p in a.photos.all():
-            if p.uploaded_by_id not in photo_by_user:
-                photo_by_user[p.uploaded_by_id] = p.photo.url
-
         final_amenities_list.append(
-            {
-                "id": a.id,
-                "name": a.name,
-                "latitude": a.location.y,
-                "longitude": a.location.x,
-                "address": a.address,
-                "prop_name": a.prop_name,
-                "description": a.description,
-                "operator": a.operator,
-                "hours_of_operation": a.hours_of_operation,
-                "changing_stations": a.changing_stations,
-                "accessibility": a.accessibility,
-                "rating": a.avg_rating,
-                "review_count": a.review_count,
-                "reviews": [
-                    serialize_amenity_review(
-                        r,
-                        photo_url=photo_by_user.get(r.user_id),
-                        current_user=request.user,
-                    )
-                    for r in a.reviews.all()[:5]  # Get last 5 reviews
-                ],
-                "photo_url": a.primary_photo_url,
-                "active": a.active,
-                "type": a.amenity_type.name,
-                "type_id": a.amenity_type.id,
-                "icon": a.amenity_type.icon,
-                "color": a.amenity_type.color,
-            }
+            serialize_map_amenity(
+                a,
+                request.user,
+                favorite_amenity_ids=favorite_amenity_ids,
+            )
         )
 
     return JsonResponse({"amenities": final_amenities_list})
+
+
+@require_http_methods(["GET"])
+def amenity_detail_api(request, amenity_id):
+    try:
+        amenity = (
+            Amenity.objects.filter(id=amenity_id)
+            .annotate(
+                avg_rating=Avg("reviews__rating"),
+                review_count=Count("reviews__id", distinct=True),
+            )
+            .annotate(
+                primary_photo_url=Subquery(
+                    AmenityPhoto.objects.filter(
+                        amenity=OuterRef("pk"), is_primary=True
+                    ).values("photo")[:1]
+                )
+            )
+            .select_related("amenity_type")
+            .prefetch_related(
+                Prefetch("reviews", queryset=get_review_prefetch_queryset(request.user)),
+                "photos",
+            )
+            .get()
+        )
+    except Amenity.DoesNotExist:
+        return JsonResponse({"error": "Amenity not found"}, status=404)
+
+    favorite_ids = set()
+    if request.user.is_authenticated:
+        favorite_ids = set(
+            Favorite.objects.filter(user=request.user, amenity=amenity).values_list(
+                "amenity_id", flat=True
+            )
+        )
+
+    return JsonResponse(
+        {
+            "amenity": serialize_map_amenity(
+                amenity,
+                request.user,
+                favorite_amenity_ids=favorite_ids,
+            )
+        },
+        status=200,
+    )
 
 
 def amenity_types_api(request):
@@ -616,6 +696,21 @@ def serialize_profile_review(review):
     }
 
 
+def serialize_profile_favorite(favorite):
+    amenity = favorite.amenity
+    return {
+        "id": favorite.id,
+        "amenity_id": amenity.id,
+        "amenity_name": amenity.name,
+        "amenity_prop_name": amenity.prop_name,
+        "amenity_type": amenity.amenity_type.name,
+        "address": amenity.address,
+        "latitude": amenity.location.y,
+        "longitude": amenity.location.x,
+        "created_at": favorite.created_at.isoformat(),
+    }
+
+
 @login_required(login_url="/?auth_required=1")
 @require_http_methods(["GET"])
 def profile_reviews_api(request):
@@ -632,6 +727,59 @@ def profile_reviews_api(request):
     return JsonResponse(
         {
             "reviews": [serialize_profile_review(review) for review in reviews],
+        },
+        status=200,
+    )
+
+
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["GET"])
+def profile_favorites_api(request):
+    favorites = (
+        Favorite.objects.filter(user=request.user)
+        .select_related("amenity", "amenity__amenity_type")
+        .order_by("-created_at")
+    )
+
+    return JsonResponse(
+        {
+            "favorites": [
+                serialize_profile_favorite(favorite) for favorite in favorites
+            ],
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST", "DELETE"])
+def toggle_favorite_api(request, amenity_id):
+    try:
+        amenity = Amenity.objects.get(id=amenity_id)
+    except Amenity.DoesNotExist:
+        return JsonResponse({"error": "Amenity not found"}, status=404)
+
+    if request.method == "POST":
+        favorite, created = Favorite.objects.get_or_create(
+            user=request.user,
+            amenity=amenity,
+        )
+        return JsonResponse(
+            {
+                "amenity_id": amenity.id,
+                "is_favorited": True,
+                "message": "Added to favorites" if created else "Already favorited",
+            },
+            status=200,
+        )
+
+    Favorite.objects.filter(user=request.user, amenity=amenity).delete()
+    return JsonResponse(
+        {
+            "amenity_id": amenity.id,
+            "is_favorited": False,
+            "message": "Removed from favorites",
         },
         status=200,
     )
