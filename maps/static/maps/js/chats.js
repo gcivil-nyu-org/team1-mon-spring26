@@ -44,6 +44,29 @@ const ChatsApp = (() => {
         if (chatId) {
             openChat(chatId);
         }
+
+        // If redirected from map page to start a new group chat
+        const newGroup = params.get('new_group');
+        if (newGroup) {
+            const amenityId = params.get('amenity_id');
+            const amenityName = params.get('amenity_name');
+            const participant = params.get('participant');
+            openNewChatModal();
+            switchModalTab('group-chat-tab');
+            if (amenityName) {
+                document.getElementById('group-chat-name').value = amenityName;
+                document.getElementById('group-chat-amenity').value = amenityName;
+                selectedAmenityId = amenityId;
+                const info = document.getElementById('selected-amenity-info');
+                if (info) {
+                    info.textContent = `Linked: ${amenityName}`;
+                    info.style.display = 'block';
+                }
+            }
+            if (participant) {
+                addParticipantTag(participant);
+            }
+        }
     }
 
     function setupEventListeners() {
@@ -338,8 +361,8 @@ const ChatsApp = (() => {
             return;
         }
 
-        if (participantEmails.length === 0) {
-            showError(errorEl, 'Please add at least one participant');
+        if (participantEmails.length < 2) {
+            showError(errorEl, 'A group chat requires at least 2 participants. Please add more people.');
             return;
         }
 

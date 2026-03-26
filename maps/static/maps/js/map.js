@@ -1452,8 +1452,13 @@ function showMessagingMenu(userEmail, amenity) {
     // Group chat button (add to group with other reviewers)
     document.getElementById('message-group-btn').onclick = () => {
         modal.style.display = 'none';
-        // TODO: Implement group chat creation with amenity reviewers
-        alert('Group chat creation coming soon!');
+        const params = new URLSearchParams({
+            new_group: '1',
+            amenity_id: amenity.id,
+            amenity_name: amenity.prop_name || amenity.name,
+            participant: userEmail,
+        });
+        window.location.href = `/chats/?${params.toString()}`;
     };
 
     // Profile link
