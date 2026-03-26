@@ -224,17 +224,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderReviewCard(review) {
+        const amenityDisplayName = review.amenity_prop_name || review.amenity_name || 'Amenity';
+
         return `
             <article
                 class="profile-review-card profile-review-card-clickable"
                 data-review-id="${review.id}"
                 tabindex="0"
                 role="button"
-                aria-label="Open review for ${escapeHtml(review.amenity_name)}"
+                aria-label="Open review for ${escapeHtml(amenityDisplayName)}"
             >
                 <div class="profile-review-card-top">
                     <div>
-                        <div class="profile-review-place">${escapeHtml(review.amenity_name)}</div>
+                        <div class="profile-review-place">${escapeHtml(amenityDisplayName)}</div>
                         ${renderAmenityTypeBadge(review)}
                     </div>
                 </div>
@@ -334,11 +336,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const isDeleteMode = state.reviewSheetMode === 'confirm_delete';
         const reviewText = review.review_text || 'No written comment.';
         const reviewDate = formatDate(review.updated_at || review.created_at);
+        const amenityDisplayName = review.amenity_prop_name || review.amenity_name || 'Amenity';
 
         if (isDeleteMode) {
             setReviewSheetMenuVisible(false);
             reviewSheetHeaderCopy.innerHTML = `
-                <h2 class="profile-review-sheet-title" id="review-sheet-title">${escapeHtml(review.amenity_name)}</h2>
+                <h2 class="profile-review-sheet-title" id="review-sheet-title">${escapeHtml(amenityDisplayName)}</h2>
                 ${renderAmenityTypeBadge(review)}
             `;
 
@@ -366,7 +369,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!isEditMode) {
             setReviewSheetMenuVisible(true);
             reviewSheetHeaderCopy.innerHTML = `
-                <h2 class="profile-review-sheet-title" id="review-sheet-title">${escapeHtml(review.amenity_name)}</h2>
+                <h2 class="profile-review-sheet-title" id="review-sheet-title">${escapeHtml(amenityDisplayName)}</h2>
                 ${renderAmenityTypeBadge(review)}
             `;
 
@@ -403,7 +406,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         setReviewSheetMenuVisible(false);
         reviewSheetHeaderCopy.innerHTML = `
-            <h2 class="profile-review-sheet-title" id="review-sheet-title">${escapeHtml(review.amenity_name)}</h2>
+            <h2 class="profile-review-sheet-title" id="review-sheet-title">${escapeHtml(amenityDisplayName)}</h2>
             ${renderAmenityTypeBadge(review)}
         `;
 
