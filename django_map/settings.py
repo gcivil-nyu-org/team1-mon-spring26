@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "django.contrib.gis",
     "django.contrib.postgres",
     "maps",
+    "storages",
 ]
 
 MIDDLEWARE = [
@@ -63,15 +64,6 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = "django_map.urls"
-
-STORAGES = {
-    "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
-    },
-    "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
-    },
-}
 
 TEMPLATES = [
     {
@@ -152,6 +144,37 @@ USE_I18N = True
 USE_TZ = True
 
 
+# Logging configuration
+# Outputs to console, which AWS Elastic Beanstalk captures in /var/log/web.stdout.log
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[{asctime}] {levelname} [{name}:{lineno}] {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": os.environ.get("DJANGO_LOG_LEVEL", "INFO"),
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": os.environ.get("DJANGO_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+    },
+}
+
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
@@ -162,5 +185,33 @@ STATIC_URL = "/static/"
 AUTH_USER_MODEL = "maps.CustomUser"
 
 # Media files (User uploads)
-MEDIA_URL = "media/"
-MEDIA_ROOT = BASE_DIR / "media"
+if DEBUG:
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
+        },
+    }
+
+    MEDIA_URL = "/media/"
+    MEDIA_ROOT = BASE_DIR / "media"
+else:
+    # Production: S3
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+            "OPTIONS": {
+                "location": os.environ["APP_ENV"],
+                "signature_version": "s3v4",
+                "bucket_name": os.environ["AWS_S3_BUCKET_NAME"],
+                "region_name": os.environ["AWS_S3_REGION_NAME"],
+                "querystring_auth": True,
+                "default_acl": None,
+            },
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
