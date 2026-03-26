@@ -65,15 +65,6 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "django_map.urls"
 
-STORAGES = {
-    "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
-    },
-    "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
-    },
-}
-
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
@@ -195,18 +186,33 @@ AUTH_USER_MODEL = "maps.CustomUser"
 
 # Media files (User uploads)
 if DEBUG:
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
+        },
+    }
+
     MEDIA_URL = "/media/"
     MEDIA_ROOT = BASE_DIR / "media"
 else:
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+
     # Production: S3
-    DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
+    #DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
 
     # AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY"]
     # AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_KEY"]
-    AWS_STORAGE_BUCKET = os.environ["AWS_S3_BUCKET_NAME"]
-    AWS_S3_REGION_NAME = os.environ.get("AWS_S3_REGION_NAME", "us-east-2")
     AWS_S3_SIGNATURE_VERSION = "s3v4"
-
-    AWS_S3_CUSTOM_DOMAIN = f"{AWS_STORAGE_BUCKET}.s3.{AWS_S3_REGION_NAME}.amazonaws.com"
+    AWS_S3_CUSTOM_DOMAIN = f"{os.environ['AWS_S3_BUCKET_NAME']}.s3.{os.environ['AWS_S3_REGION_NAME']}.amazonaws.com"
 
     MEDIA_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/{APP_ENV}/"
