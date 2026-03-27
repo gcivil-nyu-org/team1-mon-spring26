@@ -23,14 +23,16 @@ const ChatsApp = (() => {
         }
 
         currentUser = authData;
-        document.getElementById('user-display').textContent = currentUser.email;
-        document.getElementById('user-display').style.display = 'inline-block';
-        
-        // Update auth button to show Logout
+
+        // Update nav to show logged-in state
         const authBtn = document.getElementById('auth-button');
-        if (authBtn) {
-            authBtn.textContent = 'Logout';
-        }
+        const userMenu = document.getElementById('user-menu');
+        const avatarImage = document.getElementById('avatar-image');
+        const userMenuEmail = document.getElementById('user-menu-email');
+        if (authBtn) authBtn.style.display = 'none';
+        if (userMenu) userMenu.style.display = 'inline-flex';
+        if (avatarImage) avatarImage.src = currentUser.avatar_url || '/static/maps/default-avatar.svg';
+        if (userMenuEmail) userMenuEmail.textContent = currentUser.email || '';
 
         // Load initial chat list
         await loadChats();
@@ -74,8 +76,22 @@ const ChatsApp = (() => {
         document.getElementById('new-chat-btn')?.addEventListener('click', openNewChatModal);
         document.getElementById('new-chat-modal-close')?.addEventListener('click', closeNewChatModal);
 
-        // Auth
-        document.getElementById('auth-button')?.addEventListener('click', handleLogout);
+        // Auth — avatar dropdown + logout
+        const avatarButton = document.getElementById('avatar-button');
+        const dropdown = document.getElementById('user-menu-dropdown');
+        const logoutLink = document.getElementById('logout-link');
+        avatarButton?.addEventListener('click', () => {
+            if (dropdown) dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+        });
+        logoutLink?.addEventListener('click', () => {
+            if (dropdown) dropdown.style.display = 'none';
+            handleLogout();
+        });
+        document.addEventListener('click', (e) => {
+            if (dropdown && avatarButton && !dropdown.contains(e.target) && !avatarButton.contains(e.target)) {
+                dropdown.style.display = 'none';
+            }
+        });
 
         // Modal tabs
         document.querySelectorAll('.modal-tab-link').forEach(tab => {

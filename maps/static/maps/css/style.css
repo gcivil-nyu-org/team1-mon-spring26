@@ -1525,6 +1525,9 @@ body.profile-review-sheet-open { overflow: hidden; }
 
 /* ── CLICKABLE USERNAME ── */
 .clickable-username {
+    cursor: pointer;
+    color: var(--accent);
+    text-decoration: underline;
     transition: all var(--trans);
 }
 

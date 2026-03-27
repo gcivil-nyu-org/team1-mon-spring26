@@ -146,32 +146,32 @@ class Migration(migrations.Migration):
         migrations.AddIndex(
             model_name="message",
             index=models.Index(
-                fields=["chat", "-created_at"], name="maps_messag_chat_id_created_idx"
+                fields=["chat", "-created_at"], name="maps_messag_chat_id_5b3ecc_idx"
             ),
         ),
         migrations.AddIndex(
             model_name="message",
             index=models.Index(
-                fields=["sender", "-created_at"], name="maps_messag_sender__created_idx"
+                fields=["sender", "-created_at"], name="maps_messag_sender__e56bbb_idx"
             ),
         ),
         migrations.AddIndex(
             model_name="chatparticipant",
             index=models.Index(
-                fields=["user", "-joined_at"], name="maps_chatpa_user_id_joined_idx"
+                fields=["user", "-joined_at"], name="maps_chatpa_user_id_e99913_idx"
             ),
         ),
         migrations.AddIndex(
             model_name="chat",
             index=models.Index(
-                fields=["-last_message_at"], name="maps_chat_last_messa_idx"
+                fields=["-last_message_at"], name="maps_chat_last_me_aff608_idx"
             ),
         ),
         migrations.AddIndex(
             model_name="chat",
             index=models.Index(
                 fields=["chat_type", "-last_message_at"],
-                name="maps_chat_chat_ty_last_messag_idx",
+                name="maps_chat_chat_ty_456d1e_idx",
             ),
         ),
     ]
