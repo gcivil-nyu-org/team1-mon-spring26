@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.gis.geos import Point
 import datetime
 
-from maps.models import AmenityType, Amenity, Review, AmenityPhoto
+from maps.models import AmenityType, Amenity, Review, AmenityPhoto, Favorite
 
 User = get_user_model()
 
@@ -120,3 +120,10 @@ class ModelsCoverageTest(TestCase):
     def test_amenity_photo_str(self):
         photo = AmenityPhoto.objects.create(amenity=self.amenity, uploaded_by=self.user)
         self.assertEqual(str(photo), f"Photo for Test Amenity by {self.user.email}")
+
+    def test_favorite_str(self):
+        favorite = Favorite.objects.create(user=self.user, amenity=self.amenity)
+        self.assertEqual(
+            str(favorite),
+            f"{self.user.email} favorited {self.amenity.name}",
+        )

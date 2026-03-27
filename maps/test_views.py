@@ -13,6 +13,7 @@ from maps.models import (
     Review,
     AmenityPhoto,
     ReviewVote,
+    Favorite,
 )
 from maps.views import normalize_longitude, get_cluster_grid_size
 
@@ -320,6 +321,73 @@ class ViewsCoverageTest(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["reviews_count"], 1)
+
+    def test_profile_favorites_api_requires_login(self):
+        response = self.client.get(reverse("maps:profile_favorites_api"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/?auth_required=1", response.url)
+
+    def test_profile_favorites_api_returns_favorites(self):
+        Favorite.objects.create(user=self.test_user, amenity=self.amenity_active)
+
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:profile_favorites_api"))
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        self.assertIn("favorites", data)
+        self.assertEqual(len(data["favorites"]), 1)
+        self.assertEqual(data["favorites"][0]["amenity_id"], self.amenity_active.id)
+
+    def test_toggle_favorite_api_add_and_remove(self):
+        self.client.force_login(self.test_user)
+
+        add_response = self.client.post(
+            reverse("maps:toggle_favorite_api", args=[self.amenity_active.id])
+        )
+        self.assertEqual(add_response.status_code, 200)
+        self.assertTrue(
+            Favorite.objects.filter(
+                user=self.test_user,
+                amenity=self.amenity_active,
+            ).exists()
+        )
+
+        remove_response = self.client.delete(
+            reverse("maps:toggle_favorite_api", args=[self.amenity_active.id])
+        )
+        self.assertEqual(remove_response.status_code, 200)
+        self.assertFalse(
+            Favorite.objects.filter(
+                user=self.test_user,
+                amenity=self.amenity_active,
+            ).exists()
+        )
+
+    def test_amenities_api_marks_favorited_amenities(self):
+        Favorite.objects.create(user=self.test_user, amenity=self.amenity_active)
+
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:amenities_api"))
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        active = next(
+            (a for a in data["amenities"] if a.get("id") == self.amenity_active.id),
+            None,
+        )
+        self.assertIsNotNone(active)
+        self.assertTrue(active.get("is_favorited"))
+
+    def test_amenity_detail_api_returns_amenity(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(
+            reverse("maps:amenity_detail_api", args=[self.amenity_active.id])
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("amenity", data)
+        self.assertEqual(data["amenity"]["id"], self.amenity_active.id)
 
     def test_settings_view_requires_login(self):
         response = self.client.get(reverse("maps:settings"))

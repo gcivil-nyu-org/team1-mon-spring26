@@ -12,8 +12,23 @@ urlpatterns = [
         "api/account/password/", views.change_password_api, name="change_password_api"
     ),
     path("api/profile/reviews/", views.profile_reviews_api, name="profile_reviews_api"),
+    path(
+        "api/profile/favorites/",
+        views.profile_favorites_api,
+        name="profile_favorites_api",
+    ),
     path("chats/", views.chats_view, name="chats"),
     path("api/amenities/", views.amenities_api, name="amenities_api"),
+    path(
+        "api/amenities/<int:amenity_id>/",
+        views.amenity_detail_api,
+        name="amenity_detail_api",
+    ),
+    path(
+        "api/amenities/<int:amenity_id>/favorite/",
+        views.toggle_favorite_api,
+        name="toggle_favorite_api",
+    ),
     path("api/amenity-types/", views.amenity_types_api, name="amenity_types_api"),
     path("api/auth/register/", views.register_api, name="register_api"),
     path("api/auth/login/", views.login_api, name="login_api"),

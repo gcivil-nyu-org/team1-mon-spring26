@@ -5,6 +5,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const state = {
         reviews: [],
         reviewsLoaded: false,
+        favorites: [],
+        favoritesLoaded: false,
         activeReviewId: null,
         reviewSheetMode: 'view',
     };
@@ -19,6 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const reviewsState = document.getElementById('profile-reviews-state');
     const reviewsList = document.getElementById('profile-reviews-list');
+    const favoritesState = document.getElementById('profile-favorites-state');
+    const favoritesList = document.getElementById('profile-favorites-list');
 
     const reviewSheet = document.getElementById('review-sheet');
     const reviewSheetPanel = document.getElementById('review-sheet-panel');
@@ -75,6 +79,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (tabName === 'reviews' && !state.reviewsLoaded) {
             fetchProfileReviews();
+        }
+
+        if (tabName === 'favorites' && !state.favoritesLoaded) {
+            fetchProfileFavorites();
         }
     }
 
@@ -276,6 +284,56 @@ document.addEventListener('DOMContentLoaded', () => {
         reviewsList.innerHTML = state.reviews.map(renderReviewCard).join('');
     }
 
+    function buildFavoriteMapUrl(favorite) {
+        const mapUrl = String(pageRoot.dataset.mapUrl || '/').trim() || '/';
+        const url = new URL(mapUrl, window.location.origin);
+        url.searchParams.set('amenity_id', String(favorite.amenity_id));
+        return `${url.pathname}${url.search}`;
+    }
+
+    function renderFavoriteCard(favorite) {
+        const amenityDisplayName = favorite.amenity_prop_name || favorite.amenity_name || 'Amenity';
+        const address = String(favorite.address || '').trim();
+
+        return `
+            <article class="profile-review-card">
+                <div class="profile-review-card-top">
+                    <div>
+                        <div class="profile-review-place">${escapeHtml(amenityDisplayName)}</div>
+                        <div class="profile-review-type-row">
+                            <span class="dp-badge">${escapeHtml(favorite.amenity_type || 'Amenity')}</span>
+                        </div>
+                    </div>
+                </div>
+
+                ${address ? `<p class="profile-review-text">${escapeHtml(address)}</p>` : ''}
+
+                <a class="profile-empty-link" href="${escapeHtml(buildFavoriteMapUrl(favorite))}">
+                    View on map
+                </a>
+            </article>
+        `;
+    }
+
+    function renderFavorites() {
+        if (!favoritesState || !favoritesList) return;
+
+        if (!state.favorites.length) {
+            favoritesState.hidden = false;
+            favoritesState.innerHTML = `
+                <div class="profile-empty-title">No favorites yet.</div>
+                <p class="profile-empty-copy">Save places from the map and they will appear here.</p>
+            `;
+            favoritesList.hidden = true;
+            favoritesList.innerHTML = '';
+            return;
+        }
+
+        favoritesState.hidden = true;
+        favoritesList.hidden = false;
+        favoritesList.innerHTML = state.favorites.map(renderFavoriteCard).join('');
+    }
+
     function getActiveReview() {
         if (!state.activeReviewId) return null;
 
@@ -472,6 +530,36 @@ document.addEventListener('DOMContentLoaded', () => {
             renderReviews();
         } catch (error) {
             reviewsState.textContent = 'Network error while loading reviews.';
+        }
+    }
+
+    async function fetchProfileFavorites() {
+        if (!favoritesState || !favoritesList) return;
+
+        favoritesState.hidden = false;
+        favoritesState.removeAttribute('hidden');
+        favoritesState.textContent = 'Loading your favorites...';
+        favoritesList.hidden = true;
+        favoritesList.setAttribute('hidden', '');
+        favoritesList.innerHTML = '';
+
+        try {
+            const response = await fetch(pageRoot.dataset.favoritesUrl, {
+                method: 'GET',
+                credentials: 'same-origin',
+            });
+
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                favoritesState.textContent = body.error || 'Unable to load favorites.';
+                return;
+            }
+
+            state.favorites = Array.isArray(body.favorites) ? body.favorites : [];
+            state.favoritesLoaded = true;
+            renderFavorites();
+        } catch (error) {
+            favoritesState.textContent = 'Network error while loading favorites.';
         }
     }
 

@@ -20,6 +20,8 @@
         id="profile-page-root"
         class="profile-page-shell"
         data-reviews-url="{% url 'maps:profile_reviews_api' %}"
+        data-favorites-url="{% url 'maps:profile_favorites_api' %}"
+        data-map-url="{% url 'maps:map' %}"
         data-logout-url="{% url 'maps:logout_api' %}"
         data-update-review-base="/api/reviews/"
         data-current-user-name="{{ profile_user.username|default:profile_user.email }}"
@@ -115,10 +117,10 @@
                     </div>
 
                     <div class="profile-tab-panel" data-panel="favorites">
-                        <div class="profile-favorites-state">
-                            <div class="profile-empty-title">No favorites yet.</div>
-                            <p class="profile-empty-copy">Saved places can show up here when favorites are ready.</p>
+                        <div id="profile-favorites-state" class="profile-favorites-state">
+                            Loading your favorites...
                         </div>
+                        <div id="profile-favorites-list" class="profile-reviews-list" hidden></div>
                     </div>
                 </section>
 
