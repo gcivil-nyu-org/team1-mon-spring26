@@ -1169,10 +1169,15 @@ class ViewsCoverageTest(TestCase):
     def test_create_group_chat_unauthenticated(self):
         response = self.client.post(
             reverse("maps:create_group_chat_api"),
-            data=json.dumps({
-                "chat_name": "Test",
-                "participant_emails": [self.test_user2.email, self.test_user3.email],
-            }),
+            data=json.dumps(
+                {
+                    "chat_name": "Test",
+                    "participant_emails": [
+                        self.test_user2.email,
+                        self.test_user3.email,
+                    ],
+                }
+            ),
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 401)
@@ -1181,9 +1186,14 @@ class ViewsCoverageTest(TestCase):
         self.client.force_login(self.test_user)
         response = self.client.post(
             reverse("maps:create_group_chat_api"),
-            data=json.dumps({
-                "participant_emails": [self.test_user2.email, self.test_user3.email],
-            }),
+            data=json.dumps(
+                {
+                    "participant_emails": [
+                        self.test_user2.email,
+                        self.test_user3.email,
+                    ],
+                }
+            ),
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
@@ -1201,10 +1211,12 @@ class ViewsCoverageTest(TestCase):
         self.client.force_login(self.test_user)
         response = self.client.post(
             reverse("maps:create_group_chat_api"),
-            data=json.dumps({
-                "chat_name": "Test Group",
-                "participant_emails": [self.test_user2.email, "ghost@example.com"],
-            }),
+            data=json.dumps(
+                {
+                    "chat_name": "Test Group",
+                    "participant_emails": [self.test_user2.email, "ghost@example.com"],
+                }
+            ),
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 404)
@@ -1213,10 +1225,15 @@ class ViewsCoverageTest(TestCase):
         self.client.force_login(self.test_user)
         response = self.client.post(
             reverse("maps:create_group_chat_api"),
-            data=json.dumps({
-                "chat_name": "My Group",
-                "participant_emails": [self.test_user2.email, self.test_user3.email],
-            }),
+            data=json.dumps(
+                {
+                    "chat_name": "My Group",
+                    "participant_emails": [
+                        self.test_user2.email,
+                        self.test_user3.email,
+                    ],
+                }
+            ),
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 201)
@@ -1224,20 +1241,25 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(data["chat_type"], "group")
         self.assertEqual(data["name"], "My Group")
         self.assertTrue(
-            Chat.objects.get(id=data["id"]).participants.filter(
-                user=self.test_user
-            ).exists()
+            Chat.objects.get(id=data["id"])
+            .participants.filter(user=self.test_user)
+            .exists()
         )
 
     def test_create_group_chat_with_amenity(self):
         self.client.force_login(self.test_user)
         response = self.client.post(
             reverse("maps:create_group_chat_api"),
-            data=json.dumps({
-                "chat_name": "Park Chat",
-                "participant_emails": [self.test_user2.email, self.test_user3.email],
-                "amenity_id": self.amenity_active.id,
-            }),
+            data=json.dumps(
+                {
+                    "chat_name": "Park Chat",
+                    "participant_emails": [
+                        self.test_user2.email,
+                        self.test_user3.email,
+                    ],
+                    "amenity_id": self.amenity_active.id,
+                }
+            ),
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 201)
@@ -1247,11 +1269,16 @@ class ViewsCoverageTest(TestCase):
         self.client.force_login(self.test_user)
         response = self.client.post(
             reverse("maps:create_group_chat_api"),
-            data=json.dumps({
-                "chat_name": "Park Chat",
-                "participant_emails": [self.test_user2.email, self.test_user3.email],
-                "amenity_id": 99999,
-            }),
+            data=json.dumps(
+                {
+                    "chat_name": "Park Chat",
+                    "participant_emails": [
+                        self.test_user2.email,
+                        self.test_user3.email,
+                    ],
+                    "amenity_id": 99999,
+                }
+            ),
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 404)
@@ -1285,7 +1312,9 @@ class ViewsCoverageTest(TestCase):
             data={"username": "a" * 31, "bio": ""},
         )
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["error"], "Username must be 30 characters or fewer")
+        self.assertEqual(
+            response.json()["error"], "Username must be 30 characters or fewer"
+        )
 
     def test_update_profile_api_rejects_taken_username(self):
         self.client.force_login(self.test_user)
@@ -1298,7 +1327,9 @@ class ViewsCoverageTest(TestCase):
 
     def test_update_profile_api_rejects_non_image_avatar(self):
         self.client.force_login(self.test_user)
-        bad_file = SimpleUploadedFile("doc.pdf", b"content", content_type="application/pdf")
+        bad_file = SimpleUploadedFile(
+            "doc.pdf", b"content", content_type="application/pdf"
+        )
         response = self.client.post(
             reverse("maps:update_profile_api"),
             data={"username": "validname", "bio": "", "avatar": bad_file},
@@ -1491,9 +1522,7 @@ class ViewsCoverageTest(TestCase):
 
     # --- amenity_detail_api not found ---
     def test_amenity_detail_api_not_found(self):
-        response = self.client.get(
-            reverse("maps:amenity_detail_api", args=[99999])
-        )
+        response = self.client.get(reverse("maps:amenity_detail_api", args=[99999]))
         self.assertEqual(response.status_code, 404)
 
     # --- fix: total_count key name in get_amenity_reviews_api ---

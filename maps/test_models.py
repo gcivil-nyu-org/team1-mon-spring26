@@ -151,7 +151,9 @@ class ModelsCoverageTest(TestCase):
         self.assertIn("downvote", str(vote))
 
     def test_chat_str_with_name(self):
-        chat = Chat.objects.create(chat_type="group", created_by=self.user, name="My Chat")
+        chat = Chat.objects.create(
+            chat_type="group", created_by=self.user, name="My Chat"
+        )
         self.assertEqual(str(chat), "My Chat")
 
     def test_chat_str_amenity_forum(self):
@@ -165,7 +167,9 @@ class ModelsCoverageTest(TestCase):
         self.assertEqual(str(chat), f"Chat {chat.id}")
 
     def test_chat_get_display_name_named(self):
-        chat = Chat.objects.create(chat_type="group", created_by=self.user, name="Named")
+        chat = Chat.objects.create(
+            chat_type="group", created_by=self.user, name="Named"
+        )
         self.assertEqual(chat.get_display_name(self.user), "Named")
 
     def test_chat_get_display_name_direct(self):
@@ -181,7 +185,9 @@ class ModelsCoverageTest(TestCase):
         chat = Chat.objects.create(
             chat_type="amenity_forum", created_by=self.user, amenity=self.amenity
         )
-        self.assertEqual(chat.get_display_name(self.user), f"Forum: {self.amenity.name}")
+        self.assertEqual(
+            chat.get_display_name(self.user), f"Forum: {self.amenity.name}"
+        )
 
     def test_chat_get_display_name_fallback(self):
         chat = Chat.objects.create(chat_type="group", created_by=self.user)
@@ -242,12 +248,14 @@ class ModelsCoverageTest(TestCase):
 
     def test_custom_user_avatar_url_with_existing_file(self):
         from unittest.mock import patch, PropertyMock
+
         self.user.avatar = "avatars/test.png"
-        with patch.object(
-            self.user.avatar.storage, "exists", return_value=True
-        ):
+        with patch.object(self.user.avatar.storage, "exists", return_value=True):
             with patch.object(
-                type(self.user.avatar), "url", new_callable=PropertyMock, return_value="/media/avatars/test.png"
+                type(self.user.avatar),
+                "url",
+                new_callable=PropertyMock,
+                return_value="/media/avatars/test.png",
             ):
                 url = self.user.avatar_url
                 self.assertEqual(url, "/media/avatars/test.png")
