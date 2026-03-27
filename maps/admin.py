@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser
+from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser, Favorite
 
 
 @admin.register(CustomUser)
@@ -90,3 +90,11 @@ class AmenityPhotoAdmin(admin.ModelAdmin):
         ("Caption & Attribution", {"fields": ("caption", "uploaded_by")}),
         ("Metadata", {"fields": ("created_at",), "classes": ("collapse",)}),
     )
+
+
+@admin.register(Favorite)
+class FavoriteAdmin(admin.ModelAdmin):
+    list_display = ["user", "amenity", "created_at"]
+    list_filter = ["created_at", "amenity__amenity_type"]
+    search_fields = ["user__email", "amenity__name", "amenity__address"]
+    readonly_fields = ("created_at",)

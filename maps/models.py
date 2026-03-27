@@ -298,6 +298,33 @@ class ReviewVote(models.Model):
         return f"{self.user.email} {vote_label}d review {self.review_id}"
 
 
+class Favorite(models.Model):
+    """Per-user favorite amenity."""
+
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="favorites",
+    )
+    amenity = models.ForeignKey(
+        Amenity,
+        on_delete=models.CASCADE,
+        related_name="favorited_by",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        unique_together = [("user", "amenity")]
+        indexes = [
+            models.Index(fields=["user", "-created_at"], name="fav_user_created_idx"),
+            models.Index(fields=["amenity", "user"], name="fav_amenity_user_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} favorited {self.amenity.name}"
+
+
 class AmenityPhoto(models.Model):
     """Photos for amenities uploaded by users."""
 
