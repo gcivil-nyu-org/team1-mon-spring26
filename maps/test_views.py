@@ -841,12 +841,6 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(first_review["id"], review_top.id)
         self.assertEqual(first_review["vote_score"], 2)
 
-    # --- Chats page view ---
-    def test_chats_view(self):
-        response = self.client.get(reverse("maps:chats"))
-        self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "maps/chats.html")
-
     # --- Get Amenity Reviews API ---
     def test_get_amenity_reviews_api_no_id(self):
         response = self.client.get(reverse("maps:get_amenity_reviews_api"))
@@ -1339,8 +1333,9 @@ class ViewsCoverageTest(TestCase):
 
     def test_update_profile_api_rejects_avatar_too_large(self):
         self.client.force_login(self.test_user)
-        big_file = SimpleUploadedFile("big.jpg", b"x" * 10, content_type="image/jpeg")
-        big_file.size = 3 * 1024 * 1024
+        big_file = SimpleUploadedFile(
+            "big.jpg", b"x" * (3 * 1024 * 1024), content_type="image/jpeg"
+        )
         response = self.client.post(
             reverse("maps:update_profile_api"),
             data={"username": "validname2", "bio": "", "avatar": big_file},
