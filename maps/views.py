@@ -7,9 +7,9 @@ from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.gis.geos import Polygon, GEOSGeometry
 from .models import (
-    AmenityType, 
-    Amenity,  
-    Review,  
+    AmenityType,
+    Amenity,
+    Review,
     AmenityPhoto,
     CustomUser,
     Chat,
