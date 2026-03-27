@@ -8,7 +8,7 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("maps", "0002_amenity_friday_close_amenity_friday_open_and_more"),
+        ("maps", "0005_favorite"),
     ]
 
     operations = [
