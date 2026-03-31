@@ -14,6 +14,9 @@ from maps.models import (
     AmenityPhoto,
     ReviewVote,
     Favorite,
+    Chat,
+    ChatParticipant,
+    Message,
 )
 from maps.views import normalize_longitude, get_cluster_grid_size
 
@@ -36,6 +39,20 @@ class ViewsCoverageTest(TestCase):
         )
         self.test_user.set_password("password123")
         self.test_user.save()
+
+        self.test_user2, _ = CustomUser.objects.get_or_create(
+            username="testauth2",
+            email="auth2@example.com",
+        )
+        self.test_user2.set_password("password123")
+        self.test_user2.save()
+
+        self.test_user3, _ = CustomUser.objects.get_or_create(
+            username="testauth3",
+            email="auth3@example.com",
+        )
+        self.test_user3.set_password("password123")
+        self.test_user3.save()
 
         # Setup Amenity Types using get_or_create to avoid "already exists" errors
         self.type_restroom, _ = AmenityType.objects.get_or_create(
@@ -823,3 +840,692 @@ class ViewsCoverageTest(TestCase):
         first_review = amenity_payload["reviews"][0]
         self.assertEqual(first_review["id"], review_top.id)
         self.assertEqual(first_review["vote_score"], 2)
+
+    # --- Get Amenity Reviews API ---
+    def test_get_amenity_reviews_api_no_id(self):
+        response = self.client.get(reverse("maps:get_amenity_reviews_api"))
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_amenity_reviews_api_not_found(self):
+        response = self.client.get(
+            reverse("maps:get_amenity_reviews_api"), {"amenity_id": 99999}
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_get_amenity_reviews_api_success(self):
+        Review.objects.get_or_create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            defaults={"rating": 4, "review_text": "Good"},
+        )
+        response = self.client.get(
+            reverse("maps:get_amenity_reviews_api"),
+            {"amenity_id": self.amenity_active.id},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("reviews", data)
+        self.assertIn("total_reviews", data)
+
+    def test_get_amenity_reviews_api_pagination(self):
+        response = self.client.get(
+            reverse("maps:get_amenity_reviews_api"),
+            {"amenity_id": self.amenity_active.id, "page": 1, "page_size": 5},
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_amenity_reviews_api_invalid_page(self):
+        response = self.client.get(
+            reverse("maps:get_amenity_reviews_api"),
+            {"amenity_id": self.amenity_active.id, "page": "abc"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # --- Amenity Search API ---
+    def test_amenity_search_api_short_query(self):
+        response = self.client.get(reverse("maps:amenity_search_api"), {"q": "a"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["amenities"], [])
+
+    def test_amenity_search_api_returns_results(self):
+        response = self.client.get(
+            reverse("maps:amenity_search_api"), {"q": "Active Test"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(len(response.json()["amenities"]) >= 1)
+
+    def test_amenity_search_api_no_results(self):
+        response = self.client.get(
+            reverse("maps:amenity_search_api"), {"q": "zzznomatch"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["amenities"], [])
+
+    # --- Amenity Reviewers API ---
+    def test_get_amenity_reviewers_api_no_id(self):
+        response = self.client.get(reverse("maps:get_amenity_reviewers_api"))
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_amenity_reviewers_api_not_found(self):
+        response = self.client.get(
+            reverse("maps:get_amenity_reviewers_api"), {"amenity_id": 99999}
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_get_amenity_reviewers_api_success(self):
+        Review.objects.get_or_create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            defaults={"rating": 5, "review_text": "Great"},
+        )
+        response = self.client.get(
+            reverse("maps:get_amenity_reviewers_api"),
+            {"amenity_id": self.amenity_active.id},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("reviewers", data)
+        self.assertEqual(data["amenity_id"], self.amenity_active.id)
+
+    def test_get_amenity_reviewers_api_invalid_limit(self):
+        response = self.client.get(
+            reverse("maps:get_amenity_reviewers_api"),
+            {"amenity_id": self.amenity_active.id, "limit": "abc"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # --- Get User Chats API ---
+    def test_get_user_chats_unauthenticated(self):
+        response = self.client.get(reverse("maps:get_user_chats_api"))
+        self.assertEqual(response.status_code, 401)
+
+    def test_get_user_chats_empty(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:get_user_chats_api"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["total_count"], 0)
+
+    def test_get_user_chats_returns_participant_chats(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="direct", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+        response = self.client.get(reverse("maps:get_user_chats_api"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["total_count"], 1)
+
+    def test_get_user_chats_with_last_message(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="direct", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+        Message.objects.create(chat=chat, sender=self.test_user, content="Hey!")
+        response = self.client.get(reverse("maps:get_user_chats_api"))
+        self.assertEqual(response.json()["chats"][0]["last_message"], "Hey!")
+
+    # --- Get Chat Messages API ---
+    def test_get_chat_messages_unauthenticated(self):
+        response = self.client.get(reverse("maps:get_chat_messages_api"))
+        self.assertEqual(response.status_code, 401)
+
+    def test_get_chat_messages_missing_chat_id(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:get_chat_messages_api"))
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_chat_messages_not_found(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(
+            reverse("maps:get_chat_messages_api"), {"chat_id": 99999}
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_get_chat_messages_not_participant(self):
+        self.client.force_login(self.test_user3)
+        chat = Chat.objects.create(chat_type="direct", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+        response = self.client.get(
+            reverse("maps:get_chat_messages_api"), {"chat_id": chat.id}
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_get_chat_messages_success(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="direct", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+        Message.objects.create(chat=chat, sender=self.test_user, content="First")
+        Message.objects.create(chat=chat, sender=self.test_user2, content="Second")
+        response = self.client.get(
+            reverse("maps:get_chat_messages_api"), {"chat_id": chat.id}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["total_messages"], 2)
+        self.assertEqual(data["messages"][0]["content"], "First")
+
+    def test_get_chat_messages_invalid_page(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="direct", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        response = self.client.get(
+            reverse("maps:get_chat_messages_api"),
+            {"chat_id": chat.id, "page": "abc"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # --- Send Message API ---
+    def test_send_message_unauthenticated(self):
+        response = self.client.post(
+            reverse("maps:send_message_api"),
+            data=json.dumps({"chat_id": 1, "content": "Hi"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_send_message_missing_chat_id(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:send_message_api"),
+            data=json.dumps({"content": "Hi"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_send_message_empty_content(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="direct", created_by=self.test_user)
+        response = self.client.post(
+            reverse("maps:send_message_api"),
+            data=json.dumps({"chat_id": chat.id, "content": "  "}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_send_message_chat_not_found(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:send_message_api"),
+            data=json.dumps({"chat_id": 99999, "content": "Hi"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_send_message_not_participant(self):
+        self.client.force_login(self.test_user3)
+        chat = Chat.objects.create(chat_type="direct", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+        response = self.client.post(
+            reverse("maps:send_message_api"),
+            data=json.dumps({"chat_id": chat.id, "content": "Hi"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_send_message_success(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="direct", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+        response = self.client.post(
+            reverse("maps:send_message_api"),
+            data=json.dumps({"chat_id": chat.id, "content": "Hello!"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["content"], "Hello!")
+        self.assertEqual(response.json()["sender_email"], self.test_user.email)
+
+    def test_send_message_invalid_json(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:send_message_api"),
+            data="not json",
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # --- Create Direct Chat API ---
+    def test_create_direct_chat_unauthenticated(self):
+        response = self.client.post(
+            reverse("maps:create_direct_chat_api"),
+            data=json.dumps({"recipient_email": self.test_user2.email}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_create_direct_chat_missing_recipient(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_direct_chat_api"),
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_create_direct_chat_recipient_not_found(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_direct_chat_api"),
+            data=json.dumps({"recipient_email": "nobody@example.com"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_create_direct_chat_with_self(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_direct_chat_api"),
+            data=json.dumps({"recipient_email": self.test_user.email}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_create_direct_chat_success(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_direct_chat_api"),
+            data=json.dumps({"recipient_email": self.test_user2.email}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        data = response.json()
+        self.assertEqual(data["chat_type"], "direct")
+        chat = Chat.objects.get(id=data["id"])
+        self.assertTrue(chat.participants.filter(user=self.test_user).exists())
+        self.assertTrue(chat.participants.filter(user=self.test_user2).exists())
+
+    def test_create_direct_chat_existing_returns_200(self):
+        self.client.force_login(self.test_user)
+        existing = Chat.objects.create(chat_type="direct", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=existing, user=self.test_user)
+        ChatParticipant.objects.create(chat=existing, user=self.test_user2)
+        response = self.client.post(
+            reverse("maps:create_direct_chat_api"),
+            data=json.dumps({"recipient_email": self.test_user2.email}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], existing.id)
+
+    def test_create_direct_chat_invalid_json(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_direct_chat_api"),
+            data="not json",
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # --- Create Group Chat API ---
+    def test_create_group_chat_unauthenticated(self):
+        response = self.client.post(
+            reverse("maps:create_group_chat_api"),
+            data=json.dumps(
+                {
+                    "chat_name": "Test",
+                    "participant_emails": [
+                        self.test_user2.email,
+                        self.test_user3.email,
+                    ],
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_create_group_chat_missing_name(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_group_chat_api"),
+            data=json.dumps(
+                {
+                    "participant_emails": [
+                        self.test_user2.email,
+                        self.test_user3.email,
+                    ],
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_create_group_chat_missing_participants(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_group_chat_api"),
+            data=json.dumps({"chat_name": "Test Group"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_create_group_chat_participant_not_found(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_group_chat_api"),
+            data=json.dumps(
+                {
+                    "chat_name": "Test Group",
+                    "participant_emails": [self.test_user2.email, "ghost@example.com"],
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_create_group_chat_success(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_group_chat_api"),
+            data=json.dumps(
+                {
+                    "chat_name": "My Group",
+                    "participant_emails": [
+                        self.test_user2.email,
+                        self.test_user3.email,
+                    ],
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        data = response.json()
+        self.assertEqual(data["chat_type"], "group")
+        self.assertEqual(data["name"], "My Group")
+        self.assertTrue(
+            Chat.objects.get(id=data["id"])
+            .participants.filter(user=self.test_user)
+            .exists()
+        )
+
+    def test_create_group_chat_with_amenity(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_group_chat_api"),
+            data=json.dumps(
+                {
+                    "chat_name": "Park Chat",
+                    "participant_emails": [
+                        self.test_user2.email,
+                        self.test_user3.email,
+                    ],
+                    "amenity_id": self.amenity_active.id,
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["chat_type"], "amenity_forum")
+
+    def test_create_group_chat_amenity_not_found(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_group_chat_api"),
+            data=json.dumps(
+                {
+                    "chat_name": "Park Chat",
+                    "participant_emails": [
+                        self.test_user2.email,
+                        self.test_user3.email,
+                    ],
+                    "amenity_id": 99999,
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_create_group_chat_invalid_json(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:create_group_chat_api"),
+            data="not json",
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # --- chats_view requires login ---
+    def test_chats_view_requires_login(self):
+        response = self.client.get(reverse("maps:chats"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/?auth_required=1", response.url)
+
+    def test_chats_view_authenticated(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:chats"))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "maps/chats.html")
+
+    # --- update_profile_api missing branches ---
+    def test_update_profile_api_rejects_username_too_long(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:update_profile_api"),
+            data={"username": "a" * 31, "bio": ""},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"], "Username must be 30 characters or fewer"
+        )
+
+    def test_update_profile_api_rejects_taken_username(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:update_profile_api"),
+            data={"username": self.test_user2.username, "bio": ""},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Username is already taken")
+
+    def test_update_profile_api_rejects_non_image_avatar(self):
+        self.client.force_login(self.test_user)
+        bad_file = SimpleUploadedFile(
+            "doc.pdf", b"content", content_type="application/pdf"
+        )
+        response = self.client.post(
+            reverse("maps:update_profile_api"),
+            data={"username": "validname", "bio": "", "avatar": bad_file},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Avatar must be an image")
+
+    def test_update_profile_api_rejects_avatar_too_large(self):
+        self.client.force_login(self.test_user)
+        big_file = SimpleUploadedFile(
+            "big.jpg", b"x" * (3 * 1024 * 1024), content_type="image/jpeg"
+        )
+        response = self.client.post(
+            reverse("maps:update_profile_api"),
+            data={"username": "validname2", "bio": "", "avatar": big_file},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Avatar must be 2MB or smaller")
+
+    def test_update_profile_api_accepts_valid_avatar(self):
+        self.client.force_login(self.test_user)
+        avatar = SimpleUploadedFile("avatar.jpg", b"imgdata", content_type="image/jpeg")
+        response = self.client.post(
+            reverse("maps:update_profile_api"),
+            data={"username": "avataruser", "bio": "hi", "avatar": avatar},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.test_user.refresh_from_db()
+        self.assertTrue(bool(self.test_user.avatar))
+
+    # --- change_password_api missing branches ---
+    def test_change_password_api_rejects_blank_fields(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:change_password_api"),
+            data={"current_password": "", "new_password": "", "confirm_password": ""},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "All password fields are required")
+
+    def test_change_password_api_rejects_same_as_current(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:change_password_api"),
+            data={
+                "current_password": "password123",
+                "new_password": "password123",
+                "confirm_password": "password123",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "New password must be different from your current password",
+        )
+
+    # --- review_vote_api missing branches ---
+    def test_review_vote_api_own_review_rejected(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=4,
+            review_text="My own",
+        )
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "up"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "You cannot vote on your own review")
+
+    def test_review_vote_api_review_not_found(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:review_vote_api", args=[99999]),
+            data=json.dumps({"vote": "up"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_review_vote_api_invalid_vote_value(self):
+        reviewer = CustomUser.objects.create_user(
+            email="votetest@example.com", username="votetest", password="pw"
+        )
+        review = Review.objects.create(
+            amenity=self.amenity_active, user=reviewer, rating=3, review_text="ok"
+        )
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "sideways"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_review_vote_api_clear_vote(self):
+        reviewer = CustomUser.objects.create_user(
+            email="clearvote@example.com", username="clearvote", password="pw"
+        )
+        review = Review.objects.create(
+            amenity=self.amenity_active, user=reviewer, rating=3, review_text="ok"
+        )
+        self.client.force_login(self.test_user)
+        self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "up"}),
+            content_type="application/json",
+        )
+        response = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "clear"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["user_vote"], 0)
+
+    def test_review_vote_api_change_from_down_to_up(self):
+        reviewer = CustomUser.objects.create_user(
+            email="changevote@example.com", username="changevote", password="pw"
+        )
+        review = Review.objects.create(
+            amenity=self.amenity_active, user=reviewer, rating=3, review_text="ok"
+        )
+        self.client.force_login(self.test_user)
+        self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "down"}),
+            content_type="application/json",
+        )
+        response = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data=json.dumps({"vote": "up"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["user_vote"], 1)
+
+    def test_review_vote_api_invalid_json(self):
+        reviewer = CustomUser.objects.create_user(
+            email="votejson@example.com", username="votejson", password="pw"
+        )
+        review = Review.objects.create(
+            amenity=self.amenity_active, user=reviewer, rating=3, review_text="ok"
+        )
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:review_vote_api", args=[review.id]),
+            data="not json",
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # --- review_detail_api missing branches ---
+    def test_review_detail_api_not_found(self):
+        self.client.force_login(self.test_user)
+        response = self.client.patch(
+            reverse("maps:review_detail_api", args=[99999]),
+            data=json.dumps({"rating": 3, "review_text": "x"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_review_detail_api_patch_rejects_invalid_rating(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active, user=self.test_user, rating=3, review_text="ok"
+        )
+        self.client.force_login(self.test_user)
+        response = self.client.patch(
+            reverse("maps:review_detail_api", args=[review.id]),
+            data=json.dumps({"rating": 6, "review_text": "Updated"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_review_detail_api_patch_rejects_long_review_text(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active, user=self.test_user, rating=3, review_text="ok"
+        )
+        self.client.force_login(self.test_user)
+        response = self.client.patch(
+            reverse("maps:review_detail_api", args=[review.id]),
+            data=json.dumps({"rating": 3, "review_text": "a" * 601}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"], "Review text must be 600 characters or fewer"
+        )
+
+    # --- amenity_detail_api not found ---
+    def test_amenity_detail_api_not_found(self):
+        response = self.client.get(reverse("maps:amenity_detail_api", args=[99999]))
+        self.assertEqual(response.status_code, 404)
+
+    # --- fix: total_count key name in get_amenity_reviews_api ---
+    def test_get_amenity_reviews_api_returns_total_reviews_key(self):
+        response = self.client.get(
+            reverse("maps:get_amenity_reviews_api"),
+            {"amenity_id": self.amenity_active.id},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("total_reviews", data)

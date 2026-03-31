@@ -12,6 +12,9 @@ from .models import (
     Review,
     AmenityPhoto,
     CustomUser,
+    Chat,
+    ChatParticipant,
+    Message,
     ReviewVote,
     Favorite,
 )
@@ -44,6 +47,12 @@ def map_view(request):
     """Render the main map view."""
     amenity_types = AmenityType.objects.all()
     return render(request, "maps/map.html", {"amenity_types": amenity_types})
+
+
+@login_required(login_url="/?auth_required=1")
+def chats_view(request):
+    """Render the chats view for messaging."""
+    return render(request, "maps/chats.html")
 
 
 def get_cluster_grid_size(zoom):
@@ -1011,5 +1020,472 @@ def review_detail_api(request, review_id):
 
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def get_amenity_reviews_api(request):
+    """API endpoint to fetch all reviews for a specific amenity with pagination."""
+    try:
+        amenity_id = request.GET.get("amenity_id")
+        page = int(request.GET.get("page", 1))
+        page_size = int(request.GET.get("page_size", 10))
+
+        if not amenity_id:
+            return JsonResponse({"error": "amenity_id parameter required"}, status=400)
+
+        try:
+            amenity = Amenity.objects.get(id=amenity_id)
+        except Amenity.DoesNotExist:
+            return JsonResponse({"error": "Amenity not found"}, status=404)
+
+        # Get all reviews for the amenity, ordered by most recent
+        reviews = (
+            Review.objects.filter(amenity=amenity)
+            .select_related("user")
+            .order_by("-created_at")
+        )
+
+        # Calculate pagination
+        total_count = reviews.count()
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_reviews = reviews[start_idx:end_idx]
+
+        # Serialize reviews
+        reviews_data = [
+            {
+                "id": r.id,
+                "user_name": r.user.email if r.user else "Anonymous",
+                "rating": r.rating,
+                "review_text": r.review_text,
+                "created_at": r.created_at.isoformat(),
+                "updated_at": r.updated_at.isoformat(),
+            }
+            for r in paginated_reviews
+        ]
+
+        return JsonResponse(
+            {
+                "amenity_id": amenity.id,
+                "amenity_name": amenity.name,
+                "total_reviews": total_count,
+                "average_rating": amenity.get_average_rating(),
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (total_count + page_size - 1) // page_size,
+                "reviews": reviews_data,
+            },
+            status=200,
+        )
+
+    except (ValueError, TypeError):
+        return JsonResponse(
+            {"error": "Invalid page or page_size parameter"}, status=400
+        )
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+# ===== Chat Functionality APIs =====
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def get_user_chats_api(request):
+    """Get all chats for the current user."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        # Get all chats where the user is a participant
+        user_chats = (
+            Chat.objects.filter(participants__user=request.user)
+            .select_related("created_by", "amenity")
+            .prefetch_related("participants__user", "messages")
+            .distinct()
+            .order_by("-last_message_at")
+        )
+
+        chats_data = []
+        for chat in user_chats:
+            # Get the last message
+            last_message = chat.messages.last()
+
+            chats_data.append(
+                {
+                    "id": chat.id,
+                    "chat_type": chat.chat_type,
+                    "name": chat.get_display_name(request.user),
+                    "amenity_id": chat.amenity_id,
+                    "amenity_name": chat.amenity.name if chat.amenity else None,
+                    "created_by_email": chat.created_by.email,
+                    "participant_count": chat.participants.count(),
+                    "last_message": (
+                        last_message.content[:100] if last_message else None
+                    ),
+                    "last_message_sender": (
+                        last_message.sender.email if last_message else None
+                    ),
+                    "last_message_at": chat.last_message_at.isoformat(),
+                    "created_at": chat.created_at.isoformat(),
+                }
+            )
+
+        return JsonResponse(
+            {
+                "chats": chats_data,
+                "total_count": len(chats_data),
+            },
+            status=200,
+        )
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def get_chat_messages_api(request):
+    """Get messages for a specific chat."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        chat_id = request.GET.get("chat_id")
+        page = int(request.GET.get("page", 1))
+        page_size = int(request.GET.get("page_size", 20))
+
+        if not chat_id:
+            return JsonResponse({"error": "chat_id parameter required"}, status=400)
+
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return JsonResponse({"error": "Chat not found"}, status=404)
+
+        # Check if user is a participant in this chat
+        if not chat.participants.filter(user=request.user).exists():
+            return JsonResponse(
+                {"error": "You are not a participant in this chat"}, status=403
+            )
+
+        # Get messages with pagination
+        messages = chat.messages.select_related("sender").order_by("-created_at")
+        total_count = messages.count()
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_messages = messages[start_idx:end_idx]
+
+        messages_data = [
+            {
+                "id": m.id,
+                "sender_id": m.sender.id,
+                "sender_email": m.sender.email,
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in paginated_messages
+        ]
+
+        # Reverse to get chronological order
+        messages_data.reverse()
+
+        return JsonResponse(
+            {
+                "chat_id": chat.id,
+                "chat_type": chat.chat_type,
+                "chat_name": chat.get_display_name(request.user),
+                "amenity_id": chat.amenity_id,
+                "page": page,
+                "page_size": page_size,
+                "total_messages": total_count,
+                "total_pages": (total_count + page_size - 1) // page_size,
+                "messages": messages_data,
+            },
+            status=200,
+        )
+
+    except (ValueError, TypeError):
+        return JsonResponse(
+            {"error": "Invalid page or page_size parameter"}, status=400
+        )
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def send_message_api(request):
+    """Send a message in a chat."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        data = json.loads(request.body)
+        chat_id = data.get("chat_id")
+        content = data.get("content", "").strip()
+
+        if not chat_id:
+            return JsonResponse({"error": "chat_id required"}, status=400)
+
+        if not content:
+            return JsonResponse({"error": "content required"}, status=400)
+
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return JsonResponse({"error": "Chat not found"}, status=404)
+
+        # Check if user is a participant
+        if not chat.participants.filter(user=request.user).exists():
+            return JsonResponse(
+                {"error": "You are not a participant in this chat"}, status=403
+            )
+
+        # Create the message
+        message = Message.objects.create(
+            chat=chat, sender=request.user, content=content
+        )
+
+        # Update chat's last_message_at
+        chat.last_message_at = message.created_at
+        chat.save(update_fields=["last_message_at"])
+
+        return JsonResponse(
+            {
+                "id": message.id,
+                "chat_id": chat.id,
+                "sender_id": message.sender.id,
+                "sender_email": message.sender.email,
+                "content": message.content,
+                "created_at": message.created_at.isoformat(),
+            },
+            status=201,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def create_direct_chat_api(request):
+    """Create or get a direct message chat with another user."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        data = json.loads(request.body)
+        recipient_email = data.get("recipient_email", "").strip()
+
+        if not recipient_email:
+            return JsonResponse({"error": "recipient_email required"}, status=400)
+
+        try:
+            recipient = CustomUser.objects.get(email=recipient_email)
+        except CustomUser.DoesNotExist:
+            return JsonResponse({"error": "Recipient user not found"}, status=404)
+
+        if recipient.id == request.user.id:
+            return JsonResponse(
+                {"error": "Cannot create chat with yourself"}, status=400
+            )
+
+        # Check if direct chat already exists between these two users
+        existing_chat = (
+            Chat.objects.filter(chat_type="direct", participants__user=request.user)
+            .filter(participants__user=recipient)
+            .first()
+        )
+
+        if existing_chat:
+            return JsonResponse(
+                {
+                    "id": existing_chat.id,
+                    "chat_type": existing_chat.chat_type,
+                    "name": existing_chat.get_display_name(request.user),
+                    "created_at": existing_chat.created_at.isoformat(),
+                    "message": "Chat already exists",
+                },
+                status=200,
+            )
+
+        # Create new direct chat
+        chat = Chat.objects.create(
+            chat_type="direct",
+            created_by=request.user,
+        )
+
+        # Add both users as participants
+        ChatParticipant.objects.create(chat=chat, user=request.user)
+        ChatParticipant.objects.create(chat=chat, user=recipient)
+
+        return JsonResponse(
+            {
+                "id": chat.id,
+                "chat_type": chat.chat_type,
+                "name": chat.get_display_name(request.user),
+                "created_at": chat.created_at.isoformat(),
+                "message": "Chat created successfully",
+            },
+            status=201,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def create_group_chat_api(request):
+    """Create a group chat, optionally with recent reviewers of an amenity."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        data = json.loads(request.body)
+        chat_name = data.get("chat_name", "").strip()
+        amenity_id = data.get("amenity_id")
+        participant_emails = data.get("participant_emails", [])
+
+        if not chat_name:
+            return JsonResponse({"error": "chat_name required"}, status=400)
+
+        if not participant_emails:
+            return JsonResponse({"error": "participant_emails required"}, status=400)
+
+        # Get participants
+        participants = CustomUser.objects.filter(email__in=participant_emails)
+        if participants.count() != len(participant_emails):
+            return JsonResponse(
+                {"error": "One or more participants not found"}, status=404
+            )
+
+        # Ensure creator is in the participant list
+        if request.user not in participants:
+            participants = list(participants) + [request.user]
+        else:
+            participants = list(participants)
+
+        # Get amenity if provided (for forum chats)
+        amenity = None
+        if amenity_id:
+            try:
+                amenity = Amenity.objects.get(id=amenity_id)
+            except Amenity.DoesNotExist:
+                return JsonResponse({"error": "Amenity not found"}, status=404)
+
+        # Create the group chat
+        chat_type = "amenity_forum" if amenity else "group"
+        chat = Chat.objects.create(
+            chat_type=chat_type,
+            amenity=amenity,
+            created_by=request.user,
+            name=chat_name,
+        )
+
+        # Add participants
+        for participant in participants:
+            ChatParticipant.objects.create(chat=chat, user=participant)
+
+        return JsonResponse(
+            {
+                "id": chat.id,
+                "chat_type": chat.chat_type,
+                "name": chat.name,
+                "participant_count": len(participants),
+                "created_at": chat.created_at.isoformat(),
+                "message": "Group chat created successfully",
+            },
+            status=201,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def amenity_search_api(request):
+    """Search amenities by name for group chat creation."""
+    q = request.GET.get("q", "").strip()
+    limit = min(int(request.GET.get("limit", 10)), 20)
+
+    if len(q) < 2:
+        return JsonResponse({"amenities": []})
+
+    amenities = (
+        Amenity.objects.filter(name__icontains=q, active=True)
+        .select_related("amenity_type")
+        .order_by("name")[:limit]
+    )
+
+    return JsonResponse(
+        {
+            "amenities": [
+                {
+                    "id": a.id,
+                    "name": a.name,
+                    "address": a.address or "",
+                    "type": a.amenity_type.name,
+                }
+                for a in amenities
+            ]
+        }
+    )
+
+
+@require_http_methods(["GET"])
+def get_amenity_reviewers_api(request):
+    """Get list of recent reviewers for an amenity (for starting group chats)."""
+    try:
+        amenity_id = request.GET.get("amenity_id")
+        limit = int(request.GET.get("limit", 10))
+
+        if not amenity_id:
+            return JsonResponse({"error": "amenity_id parameter required"}, status=400)
+
+        try:
+            amenity = Amenity.objects.get(id=amenity_id)
+        except Amenity.DoesNotExist:
+            return JsonResponse({"error": "Amenity not found"}, status=404)
+
+        # Get recent reviewers
+        reviewers = (
+            Review.objects.filter(amenity=amenity, user__isnull=False)
+            .select_related("user")
+            .order_by("-created_at")[:limit]
+        )
+
+        reviewers_data = [
+            {
+                "user_id": r.user.id,
+                "email": r.user.email,
+                "rating": r.rating,
+                "review_text": r.review_text[:100] if r.review_text else None,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in reviewers
+        ]
+
+        return JsonResponse(
+            {
+                "amenity_id": amenity.id,
+                "amenity_name": amenity.name,
+                "reviewers": reviewers_data,
+                "total_reviewers": len(reviewers_data),
+            },
+            status=200,
+        )
+
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "Invalid limit parameter"}, status=400)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)

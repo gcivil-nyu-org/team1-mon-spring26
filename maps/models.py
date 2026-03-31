@@ -347,3 +347,105 @@ class AmenityPhoto(models.Model):
 
     def __str__(self):
         return f"Photo for {self.amenity.name} by {self.uploaded_by.email}"
+
+
+class Chat(models.Model):
+    """Model for individual and group chats."""
+
+    CHAT_TYPE_CHOICES = [
+        ("direct", "Direct Message"),
+        ("group", "Group Chat"),
+        ("amenity_forum", "Amenity Forum"),
+    ]
+
+    chat_type = models.CharField(
+        max_length=20, choices=CHAT_TYPE_CHOICES, default="direct"
+    )
+    amenity = models.ForeignKey(
+        Amenity,
+        on_delete=models.CASCADE,
+        related_name="chats",
+        null=True,
+        blank=True,
+        help_text="For amenity forum chats, reference the amenity being discussed",
+    )
+    created_by = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, related_name="created_chats"
+    )
+    name = models.CharField(
+        max_length=200, blank=True, help_text="Custom name for group and forum chats"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_message_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-last_message_at"]
+        indexes = [
+            models.Index(fields=["-last_message_at"]),
+            models.Index(fields=["chat_type", "-last_message_at"]),
+        ]
+
+    def __str__(self):
+        if self.name:
+            return self.name
+        if self.chat_type == "amenity_forum" and self.amenity:
+            return f"Forum: {self.amenity.name}"
+        return f"Chat {self.id}"
+
+    def get_display_name(self, current_user):
+        """Get the display name for this chat from the perspective of a user."""
+        if self.name:
+            return self.name
+        if self.chat_type == "direct":
+            # For direct chats, show the other person's email
+            other_user = self.participants.exclude(user=current_user).first()
+            return other_user.user.email if other_user else "Unknown"
+        if self.chat_type == "amenity_forum" and self.amenity:
+            return f"Forum: {self.amenity.name}"
+        return "Chat"
+
+
+class ChatParticipant(models.Model):
+    """Model to track participants in a chat."""
+
+    chat = models.ForeignKey(
+        Chat, on_delete=models.CASCADE, related_name="participants"
+    )
+    user = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, related_name="chat_participations"
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+    last_read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = [("chat", "user")]
+        ordering = ["joined_at"]
+        indexes = [
+            models.Index(fields=["user", "-joined_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} in {self.chat}"
+
+
+class Message(models.Model):
+    """Model for individual messages in a chat."""
+
+    chat = models.ForeignKey(Chat, on_delete=models.CASCADE, related_name="messages")
+    sender = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, related_name="sent_messages"
+    )
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["chat", "-created_at"]),
+            models.Index(fields=["sender", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Message from {self.sender.email} in {self.chat}"

@@ -37,6 +37,22 @@ const hoursFilter = {
     toMinutes:    1439,
 };
 
+// Utility function to get CSRF token from cookies
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i].trim();
+            if (cookie.substring(0, name.length + 1) === name + '=') {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
+
 function initializeGeolocation() {
     const statusEl = document.getElementById('location-status');
     const dotEl    = document.getElementById('location-dot');
@@ -1103,13 +1119,17 @@ function renderReviewsTab(amenity) {
         const stars = '★'.repeat(top.rating) + '☆'.repeat(5 - top.rating);
         const date  = new Date(top.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
         const topReviewerName = getReviewerName(top);
+        const isTopOtherUser = loggedIn && currentEmail !== (top.user_email || '').toLowerCase();
         html += `<div class="dp-section">
             <div class="dp-field-label">Top Voted Review</div>
             <div class="rv-review-card">
                 <div class="rv-review-header">
                     ${renderReviewerAvatar(top)}
                     <div class="rv-review-meta">
-                        <div class="rv-reviewer">${topReviewerName}</div>
+                        <div class="rv-reviewer ${isTopOtherUser ? 'clickable-username' : ''}" 
+                            data-user-email="${top.user_email || top.user_name}">
+                            ${topReviewerName}
+                        </div>
                         <div class="rv-review-stars">${stars}</div>
                     </div>
                     <div class="rv-review-date">${date}</div>
@@ -1128,12 +1148,17 @@ function renderReviewsTab(amenity) {
                     const reviewerName = getReviewerName(r);
                     const rStars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
                     const rDate = new Date(r.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                    const isOtherUser = loggedIn && currentEmail !== (r.user_email || '').toLowerCase();
                     return `<div class="review-card">
                         <div class="review-card-top">
                             <div class="review-reviewer-row">
                                 ${renderReviewerAvatar(r, 'review-avatar')}
-                                <div class="review-user">${reviewerName}</div>
+                                <div class="review-user ${isOtherUser ? 'clickable-username' : ''}" 
+                                    data-user-email="${r.user_email || r.user_name}">
+                                    ${reviewerName}
+                                </div>
                             </div>
+
                             <div class="review-date">${rDate}</div>
                         </div>
                         <div class="review-stars">${rStars}</div>
@@ -1149,6 +1174,16 @@ function renderReviewsTab(amenity) {
     }
 
     pane.innerHTML = html;
+
+    // Setup clickable usernames for messaging
+    pane.querySelectorAll('.clickable-username').forEach(username => {
+        username.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const userEmail = username.dataset.userEmail;
+            showMessagingMenu(userEmail, amenity);
+        });
+    });
 
     const loginLink = pane.querySelector('.js-open-auth');
     if (loginLink) {
@@ -1669,6 +1704,66 @@ function logoutUser() {
         .catch(() => {
             return fetchCurrentUser();
         });
+}
+
+// Show messaging menu for a reviewer
+function showMessagingMenu(userEmail, amenity) {
+    if (!currentUser || !currentUser.is_authenticated) {
+        showAuthModal();
+        return;
+    }
+
+    const modal = document.getElementById('messaging-menu-modal');
+    document.getElementById('messaging-user-name').textContent = userEmail;
+
+    // Direct message button
+    document.getElementById('message-direct-btn').onclick = async () => {
+        modal.style.display = 'none';
+        try {
+            const response = await fetch('/api/chats/direct/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]')?.value || getCookie('csrftoken'),
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({ recipient_email: userEmail }),
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                window.location.href = `/chats/?chat_id=${data.id}`;
+            } else {
+                alert('Error: ' + (data.error || 'Could not create chat'));
+            }
+        } catch (err) {
+            console.error('Error creating direct chat:', err);
+            alert('Error creating chat');
+        }
+    };
+
+    // Group chat button (add to group with other reviewers)
+    document.getElementById('message-group-btn').onclick = () => {
+        modal.style.display = 'none';
+        const params = new URLSearchParams({
+            new_group: '1',
+            amenity_id: amenity.id,
+            amenity_name: amenity.prop_name || amenity.name,
+            participant: userEmail,
+        });
+        window.location.href = `/chats/?${params.toString()}`;
+    };
+
+    // Profile link
+    document.getElementById('view-profile-btn').href = `/profile/?user=${encodeURIComponent(userEmail)}`;
+
+    modal.style.display = 'flex';
+    document.getElementById('messaging-menu-close').addEventListener('click', () => {
+        modal.style.display = 'none';
+    });
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.style.display = 'none';
+    });
 }
 
 // render login/logout button and current user label.
