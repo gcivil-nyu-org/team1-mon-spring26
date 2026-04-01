@@ -65,7 +65,11 @@ urlpatterns = [
         "api/chats/direct/", views.create_direct_chat_api, name="create_direct_chat_api"
     ),
     path("api/chats/group/", views.create_group_chat_api, name="create_group_chat_api"),
-    path("api/chats/participants/", views.get_chat_participants_api, name="get_chat_participants_api"),
+    path(
+        "api/chats/participants/",
+        views.get_chat_participants_api,
+        name="get_chat_participants_api",
+    ),
     path("api/chats/leave/", views.leave_chat_api, name="leave_chat_api"),
     path("api/amenities/search/", views.amenity_search_api, name="amenity_search_api"),
     path(

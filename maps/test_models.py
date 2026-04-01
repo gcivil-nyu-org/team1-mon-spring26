@@ -179,6 +179,17 @@ class ModelsCoverageTest(TestCase):
         chat = Chat.objects.create(chat_type="direct", created_by=self.user)
         ChatParticipant.objects.create(chat=chat, user=self.user)
         ChatParticipant.objects.create(chat=chat, user=other)
+        # Should show username when set, falling back to email
+        self.assertEqual(chat.get_display_name(self.user), other.username)
+
+    def test_chat_get_display_name_direct_no_username(self):
+        other, _ = User.objects.get_or_create(
+            username="", email="nousername@example.com", defaults={"password": "pw"}
+        )
+        chat = Chat.objects.create(chat_type="direct", created_by=self.user)
+        ChatParticipant.objects.create(chat=chat, user=self.user)
+        ChatParticipant.objects.create(chat=chat, user=other)
+        # Should fall back to email when username is not set
         self.assertEqual(chat.get_display_name(self.user), other.email)
 
     def test_chat_get_display_name_amenity_forum(self):
