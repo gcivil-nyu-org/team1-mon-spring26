@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const root = document.getElementById('settings-root');
     if (!root) return;
+    let hasUsablePassword = root.dataset.hasUsablePassword === 'true';
 
     const dropdown = document.getElementById('user-menu-dropdown');
     const dropdownToggle = document.getElementById('avatar-button');
@@ -314,39 +315,70 @@ document.addEventListener('DOMContentLoaded', () => {
         accountMessage.classList.toggle('is-error', isError);
     }
 
-    function syncAccountSaveState() {
-        if (!accountSaveButton || !currentPasswordInput || !newPasswordInput || !confirmPasswordInput) return;
+    function getAccountValidationError({ showFeedback = false } = {}) {
+        if (!newPasswordInput || !confirmPasswordInput) return '';
 
-        const currentPassword = currentPasswordInput.value;
+        const currentPassword = currentPasswordInput ? currentPasswordInput.value : '';
         const newPassword = newPasswordInput.value;
         const confirmPassword = confirmPasswordInput.value;
-        const hasAllFields = Boolean(currentPassword && newPassword && confirmPassword);
+        const hasAllFields = hasUsablePassword
+            ? Boolean(currentPassword && newPassword && confirmPassword)
+            : Boolean(newPassword && confirmPassword);
         const passwordsMatch = newPassword === confirmPassword;
-        const changedPassword = currentPassword !== newPassword;
+        const changedPassword = hasUsablePassword ? currentPassword !== newPassword : true;
 
-        if (!currentPassword && !newPassword && !confirmPassword) {
-            setAccountMessage('');
-        } else if (confirmPassword && !passwordsMatch) {
-            setAccountMessage('New password and confirmation must match.', true);
-        } else if (hasAllFields && !changedPassword) {
-            setAccountMessage('New password must be different from your current password.', true);
-        } else {
-            setAccountMessage('');
+        if (!showFeedback || (!currentPassword && !newPassword && !confirmPassword)) {
+            return '';
         }
+
+        if (confirmPassword && !passwordsMatch) {
+            return 'New password and confirmation must match.';
+        }
+
+        if (hasAllFields && !changedPassword) {
+            return 'New password must be different from your current password.';
+        }
+
+        return '';
+    }
+
+    function syncAccountSaveState({ showFeedback = false } = {}) {
+        if (!accountSaveButton || !newPasswordInput || !confirmPasswordInput) return;
+
+        const currentPassword = currentPasswordInput ? currentPasswordInput.value : '';
+        const newPassword = newPasswordInput.value;
+        const confirmPassword = confirmPasswordInput.value;
+        const hasAllFields = hasUsablePassword
+            ? Boolean(currentPassword && newPassword && confirmPassword)
+            : Boolean(newPassword && confirmPassword);
+        const passwordsMatch = newPassword === confirmPassword;
+        const changedPassword = hasUsablePassword ? currentPassword !== newPassword : true;
+        const errorMessage = getAccountValidationError({ showFeedback });
+
+        setAccountMessage(errorMessage, Boolean(errorMessage));
 
         accountSaveButton.disabled = !hasAllFields || !passwordsMatch || !changedPassword;
     }
 
     function setupAccountForm() {
-        if (!accountForm || !currentPasswordInput || !newPasswordInput || !confirmPasswordInput) return;
+        if (!accountForm || !newPasswordInput || !confirmPasswordInput) return;
 
-        [currentPasswordInput, newPasswordInput, confirmPasswordInput].forEach(input => {
-            input.addEventListener('input', syncAccountSaveState);
+        const accountInputs = [newPasswordInput, confirmPasswordInput];
+        if (currentPasswordInput) {
+            accountInputs.unshift(currentPasswordInput);
+        }
+
+        accountInputs.forEach(input => {
+            input.addEventListener('input', () => {
+                setAccountMessage('');
+                syncAccountSaveState({ showFeedback: false });
+            });
+            input.addEventListener('blur', () => syncAccountSaveState({ showFeedback: true }));
         });
 
         accountForm.addEventListener('submit', async event => {
             event.preventDefault();
-            syncAccountSaveState();
+            syncAccountSaveState({ showFeedback: true });
             if (accountSaveButton && accountSaveButton.disabled) return;
 
             const formData = new FormData(accountForm);
@@ -361,21 +393,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 const body = await response.json().catch(() => ({}));
                 if (!response.ok) {
                     setAccountMessage(body.error || 'Unable to update your password.', true);
-                    showToast(body.error || 'Unable to update your password.', 'error');
-                    syncAccountSaveState();
                     return;
                 }
 
+                const successMessage = body.message || 'Password updated successfully.';
                 accountForm.reset();
                 setAccountMessage('');
-                syncAccountSaveState();
-                showToast(body.message || 'Password updated successfully.', 'success');
+                syncAccountSaveState({ showFeedback: false });
+                showToast(successMessage, 'success');
+
+                // After a social-only account sets a password for the first time,
+                // reload so the UI switches into the normal "change password" mode.
+                if (!hasUsablePassword && body.has_usable_password) {
+                    hasUsablePassword = true;
+                    root.dataset.hasUsablePassword = 'true';
+                    window.setTimeout(() => {
+                        window.location.reload();
+                    }, 800);
+                }
             } catch (error) {
-                showToast('Network error while updating your password.', 'error');
+                setAccountMessage('Network error while updating your password.', true);
             }
         });
 
-        syncAccountSaveState();
+        syncAccountSaveState({ showFeedback: false });
     }
 
     setupDropdown();
