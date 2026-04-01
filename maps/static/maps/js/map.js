@@ -789,8 +789,13 @@ function renderOverviewTab(amenity) {
 
     html += `<div class="dp-section"><div class="dp-field-label">Coordinates</div><div class="dp-field-value" style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${amenity.latitude.toFixed(5)}, ${amenity.longitude.toFixed(5)}</div></div>`;
 
-    const walkUrl  = `https://www.google.com/maps/dir/?api=1&destination=${amenity.latitude},${amenity.longitude}&travelmode=walking`;
-    const bikeUrl  = `https://www.google.com/maps/dir/?api=1&destination=${amenity.latitude},${amenity.longitude}&travelmode=bicycling`;
+    let origin = '';
+    if (selectedLocationMarker) {
+        const { lat, lng } = selectedLocationMarker.getLatLng();
+        origin = `&origin=${lat},${lng}`;
+    }
+    const walkUrl  = `https://www.google.com/maps/dir/?api=1&destination=${amenity.latitude},${amenity.longitude}${origin}&travelmode=walking`;
+    const bikeUrl  = `https://www.google.com/maps/dir/?api=1&destination=${amenity.latitude},${amenity.longitude}${origin}&travelmode=bicycling`;
     html += `<div class="dp-section"><div class="dp-nav">
         <a href="${walkUrl}" target="_blank" class="dp-nav-btn">🚶 Walk there</a>
         <a href="${bikeUrl}" target="_blank" class="dp-nav-btn">🚴 Bike there</a>
