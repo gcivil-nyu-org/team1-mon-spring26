@@ -29,6 +29,11 @@ urlpatterns = [
         views.toggle_favorite_api,
         name="toggle_favorite_api",
     ),
+    path(
+        "api/amenities/<int:amenity_id>/rating-distribution/",
+        views.amenity_rating_distribution_api,
+        name="amenity_rating_distribution_api",
+    ),
     path("api/amenity-types/", views.amenity_types_api, name="amenity_types_api"),
     path("api/auth/register/", views.register_api, name="register_api"),
     path("api/auth/login/", views.login_api, name="login_api"),

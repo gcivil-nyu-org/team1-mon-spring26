@@ -797,6 +797,27 @@ def toggle_favorite_api(request, amenity_id):
     )
 
 
+@require_http_methods(["GET"])
+def amenity_rating_distribution_api(request, amenity_id):
+    """API endpoint to fetch the rating distribution for a specific amenity."""
+    try:
+        amenity = Amenity.objects.get(id=amenity_id)
+    except Amenity.DoesNotExist:
+        return JsonResponse({"error": "Amenity not found"}, status=404)
+
+    rating_distribution = list(
+        Review.objects.filter(amenity=amenity)
+        .values("rating")
+        .annotate(count=Count("rating"))
+        .order_by("-rating")
+    )
+
+    return JsonResponse(
+        {"amenity_id": amenity_id, "rating_distribution": rating_distribution},
+        status=200,
+    )
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def create_review_api(request):
