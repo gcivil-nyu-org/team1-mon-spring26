@@ -28,6 +28,7 @@ let pinnedHoverAmenity     = null;
 let blockNearbyHover       = false;
 let currentUser            = null;
 let hoverTooltipTimer      = null;
+let pendingAmenityFromQuery = null;
 
 const hoursFilter = {
     openNow:      false,
@@ -35,6 +36,22 @@ const hoursFilter = {
     fromMinutes:  0,
     toMinutes:    1439,
 };
+
+// Utility function to get CSRF token from cookies
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i].trim();
+            if (cookie.substring(0, name.length + 1) === name + '=') {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
 
 function initializeGeolocation() {
     const statusEl = document.getElementById('location-status');
@@ -694,6 +711,8 @@ function showDetailPanel(amenity, activeTab = 'overview') {
             document.body.classList.remove('sidebar-open');
         }
     }
+
+    wireFavoriteToggle(amenity);
 }
 
 function switchDetailTab(name) {
@@ -720,9 +739,20 @@ function closeDetailPanel(keepPinned = false) {
 
 function renderOverviewTab(amenity) {
     const todayIdx = jsToDbIdx(new Date().getDay());
+    const isFavorited = Boolean(amenity.is_favorited);
     let html = '';
 
     html += `<div class="dp-section"><span class="dp-status ${amenity.active ? 'active' : 'inactive'}">${amenity.active ? 'Active' : 'Inactive'}</span></div>`;
+
+    if (currentUser && currentUser.is_authenticated) {
+        html += `<div class="dp-section">
+            <button type="button" class="dp-favorite-btn ${isFavorited ? 'is-active' : ''}" data-action="toggle-favorite" data-amenity-id="${amenity.id}">
+                ${isFavorited ? '★ Remove from favorites' : '☆ Add to favorites'}
+            </button>
+        </div>`;
+    } else {
+        html += `<div class="dp-section"><div class="review-login-prompt">Please <a href="#" class="js-open-auth">sign in</a> to save this amenity as a favorite.</div></div>`;
+    }
 
     const locParts = [amenity.prop_name, amenity.position, amenity.address].filter(Boolean);
     if (locParts.length) html += `<div class="dp-section"><div class="dp-field-label">Location</div><div class="dp-field-value">${locParts.join(' · ')}</div></div>`;
@@ -767,6 +797,76 @@ function renderOverviewTab(amenity) {
     </div></div>`;
 
     document.getElementById('tab-overview').innerHTML = html;
+
+    const loginLink = document.querySelector('#tab-overview .js-open-auth');
+    if (loginLink) {
+        loginLink.addEventListener('click', e => {
+            e.preventDefault();
+            switchAuthTab('login-tab');
+            showAuthModal();
+        });
+    }
+}
+
+function wireFavoriteToggle(amenity) {
+    const favoriteButton = document.querySelector('#tab-overview [data-action="toggle-favorite"]');
+    if (!favoriteButton) return;
+
+    favoriteButton.addEventListener('click', () => {
+        toggleAmenityFavorite(amenity, favoriteButton);
+    });
+}
+
+function updateAmenityFavoriteStateInCache(amenityId, isFavorited) {
+    Object.values(allAmenitiesData).forEach(items => {
+        items.forEach(item => {
+            if (Number(item.id) === Number(amenityId)) {
+                item.is_favorited = isFavorited;
+            }
+        });
+    });
+}
+
+function toggleAmenityFavorite(amenity, buttonEl) {
+    if (!currentUser || !currentUser.is_authenticated) {
+        showToast('Please sign in to save favorites.', 'warn');
+        return;
+    }
+
+    const isCurrentlyFavorited = Boolean(amenity.is_favorited);
+    const method = isCurrentlyFavorited ? 'DELETE' : 'POST';
+
+    buttonEl.disabled = true;
+
+    fetch(`/api/amenities/${amenity.id}/favorite/`, {
+        method,
+        credentials: 'same-origin',
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400) {
+                showToast(b.error || 'Unable to update favorite.', 'error');
+                return;
+            }
+
+            const nextValue = Boolean(b.is_favorited);
+            amenity.is_favorited = nextValue;
+            updateAmenityFavoriteStateInCache(amenity.id, nextValue);
+
+            if (currentDetailAmenity && Number(currentDetailAmenity.id) === Number(amenity.id)) {
+                currentDetailAmenity.is_favorited = nextValue;
+            }
+
+            renderOverviewTab(amenity);
+            wireFavoriteToggle(amenity);
+            showToast(nextValue ? 'Added to favorites.' : 'Removed from favorites.', 'success');
+        })
+        .catch(() => {
+            showToast('Network error while updating favorite.', 'error');
+        })
+        .finally(() => {
+            buttonEl.disabled = false;
+        });
 }
 
 function renderNearbyTab(a) {
@@ -1019,13 +1119,17 @@ function renderReviewsTab(amenity) {
         const stars = '★'.repeat(top.rating) + '☆'.repeat(5 - top.rating);
         const date  = new Date(top.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
         const topReviewerName = getReviewerName(top);
+        const isTopOtherUser = loggedIn && currentEmail !== (top.user_email || '').toLowerCase();
         html += `<div class="dp-section">
             <div class="dp-field-label">Top Voted Review</div>
             <div class="rv-review-card">
                 <div class="rv-review-header">
                     ${renderReviewerAvatar(top)}
                     <div class="rv-review-meta">
-                        <div class="rv-reviewer">${topReviewerName}</div>
+                        <div class="rv-reviewer ${isTopOtherUser ? 'clickable-username' : ''}" 
+                            data-user-email="${top.user_email || top.user_name}">
+                            ${topReviewerName}
+                        </div>
                         <div class="rv-review-stars">${stars}</div>
                     </div>
                     <div class="rv-review-date">${date}</div>
@@ -1044,12 +1148,17 @@ function renderReviewsTab(amenity) {
                     const reviewerName = getReviewerName(r);
                     const rStars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
                     const rDate = new Date(r.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                    const isOtherUser = loggedIn && currentEmail !== (r.user_email || '').toLowerCase();
                     return `<div class="review-card">
                         <div class="review-card-top">
                             <div class="review-reviewer-row">
                                 ${renderReviewerAvatar(r, 'review-avatar')}
-                                <div class="review-user">${reviewerName}</div>
+                                <div class="review-user ${isOtherUser ? 'clickable-username' : ''}" 
+                                    data-user-email="${r.user_email || r.user_name}">
+                                    ${reviewerName}
+                                </div>
                             </div>
+
                             <div class="review-date">${rDate}</div>
                         </div>
                         <div class="review-stars">${rStars}</div>
@@ -1065,6 +1174,16 @@ function renderReviewsTab(amenity) {
     }
 
     pane.innerHTML = html;
+
+    // Setup clickable usernames for messaging
+    pane.querySelectorAll('.clickable-username').forEach(username => {
+        username.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const userEmail = username.dataset.userEmail;
+            showMessagingMenu(userEmail, amenity);
+        });
+    });
 
     const loginLink = pane.querySelector('.js-open-auth');
     if (loginLink) {
@@ -1482,6 +1601,10 @@ function fetchCurrentUser() {
     .then(data => {
         currentUser = normalizeAuthUser(data);
         updateUserUI();
+        if (pendingAmenityFromQuery) {
+            focusAmenityFromQuery(pendingAmenityFromQuery);
+            pendingAmenityFromQuery = null;
+        }
         return currentUser;
     })
     .catch(error => {
@@ -1583,6 +1706,66 @@ function logoutUser() {
         });
 }
 
+// Show messaging menu for a reviewer
+function showMessagingMenu(userEmail, amenity) {
+    if (!currentUser || !currentUser.is_authenticated) {
+        showAuthModal();
+        return;
+    }
+
+    const modal = document.getElementById('messaging-menu-modal');
+    document.getElementById('messaging-user-name').textContent = userEmail;
+
+    // Direct message button
+    document.getElementById('message-direct-btn').onclick = async () => {
+        modal.style.display = 'none';
+        try {
+            const response = await fetch('/api/chats/direct/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]')?.value || getCookie('csrftoken'),
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({ recipient_email: userEmail }),
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                window.location.href = `/chats/?chat_id=${data.id}`;
+            } else {
+                alert('Error: ' + (data.error || 'Could not create chat'));
+            }
+        } catch (err) {
+            console.error('Error creating direct chat:', err);
+            alert('Error creating chat');
+        }
+    };
+
+    // Group chat button (add to group with other reviewers)
+    document.getElementById('message-group-btn').onclick = () => {
+        modal.style.display = 'none';
+        const params = new URLSearchParams({
+            new_group: '1',
+            amenity_id: amenity.id,
+            amenity_name: amenity.prop_name || amenity.name,
+            participant: userEmail,
+        });
+        window.location.href = `/chats/?${params.toString()}`;
+    };
+
+    // Profile link
+    document.getElementById('view-profile-btn').href = `/profile/?user=${encodeURIComponent(userEmail)}`;
+
+    modal.style.display = 'flex';
+    document.getElementById('messaging-menu-close').addEventListener('click', () => {
+        modal.style.display = 'none';
+    });
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.style.display = 'none';
+    });
+}
+
 // render login/logout button and current user label.
 function updateUserUI() {
     const btn = document.getElementById('auth-button');
@@ -1603,7 +1786,52 @@ function updateUserUI() {
         userMenuEmail.textContent = '';
     }
 
-    if (currentDetailAmenity) renderReviewsTab(currentDetailAmenity);
+    if (currentDetailAmenity) {
+        renderOverviewTab(currentDetailAmenity);
+        wireFavoriteToggle(currentDetailAmenity);
+        renderReviewsTab(currentDetailAmenity);
+    }
+}
+
+function focusAmenityFromQuery(amenityId) {
+    const numericAmenityId = Number(amenityId || 0);
+    if (!numericAmenityId) return;
+
+    fetch(`/api/amenities/${numericAmenityId}/`, {
+        method: 'GET',
+        credentials: 'same-origin',
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400 || !b.amenity) {
+                return;
+            }
+
+            const amenity = b.amenity;
+            map.flyTo([amenity.latitude, amenity.longitude], Math.max(map.getZoom(), 16));
+
+            if (selectedLocationMarker) {
+                map.removeLayer(selectedLocationMarker);
+            }
+            selectedLocationMarker = L.marker([amenity.latitude, amenity.longitude], {
+                title: amenity.prop_name || amenity.name,
+                zIndexOffset: 50,
+                icon: L.icon({
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
+                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                    iconSize: [25, 41],
+                    iconAnchor: [12, 41],
+                    popupAnchor: [1, -34],
+                    shadowSize: [41, 41],
+                }),
+            }).addTo(map);
+
+            updateAmenityFavoriteStateInCache(amenity.id, Boolean(amenity.is_favorited));
+            showDetailPanel(amenity);
+        })
+        .catch(() => {
+            // Keep the rest of the map experience working if deep-link focus fails.
+        });
 }
 
 /** Auth Wiring */
@@ -1677,6 +1905,8 @@ function setupPWA() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    const queryAmenityId = new URLSearchParams(window.location.search).get('amenity_id');
+
     setupAuth();
     setupSidebarToggle();
     setupHoursFilter();
@@ -1685,6 +1915,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAmenityTypes();
     loadAmenities();
     setupPWA();
+
+    if (queryAmenityId) {
+        pendingAmenityFromQuery = queryAmenityId;
+    }
 
     map.addLayer(bikeRackMarkers);
     map.addLayer(otherAmenityMarkers);

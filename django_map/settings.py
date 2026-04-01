@@ -48,7 +48,13 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.gis",
     "django.contrib.postgres",
+    "django.contrib.sites",
     "maps",
+    "storages",
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",
+    "allauth.socialaccount.providers.google",
 ]
 
 MIDDLEWARE = [
@@ -60,18 +66,10 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.middleware.gzip.GZipMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
 ]
 
 ROOT_URLCONF = "django_map.urls"
-
-STORAGES = {
-    "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
-    },
-    "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
-    },
-}
 
 TEMPLATES = [
     {
@@ -152,6 +150,37 @@ USE_I18N = True
 USE_TZ = True
 
 
+# Logging configuration
+# Outputs to console, which AWS Elastic Beanstalk captures in /var/log/web.stdout.log
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[{asctime}] {levelname} [{name}:{lineno}] {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": os.environ.get("DJANGO_LOG_LEVEL", "INFO"),
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": os.environ.get("DJANGO_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+    },
+}
+
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
@@ -161,6 +190,86 @@ STATIC_URL = "/static/"
 # Custom User Model
 AUTH_USER_MODEL = "maps.CustomUser"
 
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",
+]
+
+SITE_ID = int(os.environ.get("SITE_ID", "1"))
+
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/"
+
+SOCIALACCOUNT_LOGIN_ON_GET = True
+SOCIALACCOUNT_ADAPTER = "maps.adapters.GoogleSocialAccountAdapter"
+
+SOCIALACCOUNT_PROVIDERS = {
+    "google": {
+        "SCOPE": [
+            "profile",
+            "email",
+        ],
+        "AUTH_PARAMS": {
+            "access_type": "online",
+        },
+        "OAUTH_PKCE_ENABLED": True,
+    }
+}
+
 # Media files (User uploads)
-MEDIA_URL = "media/"
-MEDIA_ROOT = BASE_DIR / "media"
+if DEBUG:
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
+        },
+    }
+
+    MEDIA_URL = "/media/"
+    MEDIA_ROOT = BASE_DIR / "media"
+else:
+    # Production: S3
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+            "OPTIONS": {
+                "location": os.environ["APP_ENV"],
+                "signature_version": "s3v4",
+                "bucket_name": os.environ["AWS_S3_BUCKET_NAME"],
+                "region_name": os.environ["AWS_S3_REGION_NAME"],
+                "querystring_auth": True,
+                "default_acl": None,
+            },
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+
+# Email configuration
+# Development:
+# - default to console backend so local testing does not require real SMTP
+# Production:
+# - use AWS SES SMTP settings from environment variables
+if DEBUG:
+    EMAIL_BACKEND = os.environ.get(
+        "EMAIL_BACKEND",
+        "django.core.mail.backends.console.EmailBackend",
+    )
+else:
+    EMAIL_BACKEND = os.environ.get(
+        "EMAIL_BACKEND",
+        "django.core.mail.backends.smtp.EmailBackend",
+    )
+
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "noreply@example.com")
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") == "1"
+EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "0") == "1"

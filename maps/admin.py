@@ -1,5 +1,15 @@
 from django.contrib import admin
-from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser
+from .models import (
+    AmenityType,
+    Amenity,
+    Review,
+    AmenityPhoto,
+    CustomUser,
+    Chat,
+    ChatParticipant,
+    Message,
+    Favorite,
+)
 
 
 @admin.register(CustomUser)
@@ -90,3 +100,53 @@ class AmenityPhotoAdmin(admin.ModelAdmin):
         ("Caption & Attribution", {"fields": ("caption", "uploaded_by")}),
         ("Metadata", {"fields": ("created_at",), "classes": ("collapse",)}),
     )
+
+
+@admin.register(Favorite)
+class FavoriteAdmin(admin.ModelAdmin):
+    list_display = ["user", "amenity", "created_at"]
+    list_filter = ["created_at", "amenity__amenity_type"]
+    search_fields = ["user__email", "amenity__name", "amenity__address"]
+    readonly_fields = ("created_at",)
+
+
+@admin.register(Chat)
+class ChatAdmin(admin.ModelAdmin):
+    list_display = [
+        "id",
+        "chat_type",
+        "created_by",
+        "amenity",
+        "created_at",
+        "last_message_at",
+    ]
+    list_filter = ["chat_type", "created_at", "last_message_at"]
+    search_fields = ["name", "created_by__email", "amenity__name"]
+    readonly_fields = ("created_at", "updated_at")
+    fieldsets = (
+        ("Chat Info", {"fields": ("chat_type", "name", "amenity")}),
+        ("Participants", {"fields": ("created_by",)}),
+        (
+            "Metadata",
+            {
+                "fields": ("created_at", "updated_at", "last_message_at"),
+                "classes": ("collapse",),
+            },
+        ),
+    )
+
+
+@admin.register(ChatParticipant)
+class ChatParticipantAdmin(admin.ModelAdmin):
+    list_display = ["user", "chat", "joined_at"]
+    list_filter = ["chat", "joined_at"]
+    search_fields = ["user__email", "chat__name"]
+    readonly_fields = ("joined_at",)
+
+
+@admin.register(Message)
+class MessageAdmin(admin.ModelAdmin):
+    list_display = ["id", "chat", "sender", "created_at"]
+    list_filter = ["chat", "sender", "created_at"]
+    search_fields = ["sender__email", "chat__name", "content"]
+    readonly_fields = ("created_at", "updated_at")

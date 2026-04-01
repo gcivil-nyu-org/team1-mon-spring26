@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="{% static 'maps/favicon.svg' %}" type="image/svg+xml">
+    <link rel="icon" href="{% static 'maps/favicon.ico' %}" type="image/x-icon">
     <title>Settings</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -21,6 +21,7 @@
         data-profile-update-url="{% url 'maps:update_profile_api' %}"
         data-password-update-url="{% url 'maps:change_password_api' %}"
         data-logout-url="{% url 'maps:logout_api' %}"
+        data-has-usable-password="{{ has_usable_password|yesno:'true,false' }}"
     >
         <div class="profile-page-container settings-page-container">
             <section class="settings-shell">
@@ -147,23 +148,33 @@
                     <section class="settings-panel" data-panel="account" aria-label="Account settings">
                         <div class="profile-edit-header">
                             <h2 class="profile-edit-title settings-panel-title">Account</h2>
-                            <p class="settings-panel-copy">Change your password without leaving the settings page.</p>
+                            <p class="settings-panel-copy">
+                                {% if has_usable_password %}
+                                    Change your password without leaving the settings page.
+                                {% else %}
+                                    Set a password to sign in with email and password.
+                                {% endif %}
+                            </p>
                         </div>
 
                         <form id="settings-account-form" class="profile-edit-form" novalidate>
-                            <div class="profile-edit-field">
-                                <label for="settings-current-password-input" class="profile-edit-label">Current password</label>
-                                <input
-                                    id="settings-current-password-input"
-                                    name="current_password"
-                                    class="profile-edit-input"
-                                    type="password"
-                                    autocomplete="current-password"
-                                >
-                            </div>
+                            {% if has_usable_password %}
+                                <div class="profile-edit-field" id="settings-current-password-field">
+                                    <label for="settings-current-password-input" class="profile-edit-label">Current password</label>
+                                    <input
+                                        id="settings-current-password-input"
+                                        name="current_password"
+                                        class="profile-edit-input"
+                                        type="password"
+                                        autocomplete="current-password"
+                                    >
+                                </div>
+                            {% endif %}
 
                             <div class="profile-edit-field">
-                                <label for="settings-new-password-input" class="profile-edit-label">New password</label>
+                                <label for="settings-new-password-input" class="profile-edit-label">
+                                    {% if has_usable_password %}New password{% else %}Set password{% endif %}
+                                </label>
                                 <input
                                     id="settings-new-password-input"
                                     name="new_password"
@@ -186,7 +197,9 @@
                             </div>
 
                             <div class="settings-form-actions">
-                                <button id="settings-account-save" class="profile-edit-save" type="submit" disabled>Save password</button>
+                                <button id="settings-account-save" class="profile-edit-save" type="submit" disabled>
+                                    {% if has_usable_password %}Save password{% else %}Set password{% endif %}
+                                </button>
                             </div>
                         </form>
                     </section>
