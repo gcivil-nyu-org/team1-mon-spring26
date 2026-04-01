@@ -331,6 +331,13 @@ class AmenityPhoto(models.Model):
     amenity = models.ForeignKey(
         Amenity, on_delete=models.CASCADE, related_name="photos"
     )
+    review = models.ForeignKey(
+        Review,
+        on_delete=models.CASCADE,
+        related_name="photos",
+        null=True,
+        blank=True,
+    )
     photo = models.ImageField(upload_to="amenity_photos/%Y/%m/%d/")
     caption = models.CharField(max_length=300, blank=True)
     uploaded_by = models.ForeignKey(
@@ -343,6 +350,7 @@ class AmenityPhoto(models.Model):
         ordering = ["-is_primary", "-created_at"]
         indexes = [
             models.Index(fields=["amenity", "-is_primary"]),
+            models.Index(fields=["review"]),
         ]
 
     def __str__(self):
