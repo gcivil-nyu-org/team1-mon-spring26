@@ -561,15 +561,25 @@ def profile_view(request):
     """
     Profile page.
     Anonymous users are redirected back to the map page.
+    If a `user` query param (email) is provided, show that user's profile.
     """
+    user_email = request.GET.get("user")
+    if user_email:
+        try:
+            profile_user = CustomUser.objects.get(email=user_email)
+        except CustomUser.DoesNotExist:
+            profile_user = request.user
+    else:
+        profile_user = request.user
+
     return render(
         request,
         "maps/profile.html",
         {
-            "profile_user": request.user,
-            "reviews_count": request.user.reviews.count(),
+            "profile_user": profile_user,
+            "reviews_count": profile_user.reviews.count(),
             "likes_received_count": ReviewVote.objects.filter(
-                review__user=request.user,
+                review__user=profile_user,
                 value=1,
             ).count(),
         },
@@ -727,10 +737,20 @@ def serialize_profile_favorite(favorite):
 @require_http_methods(["GET"])
 def profile_reviews_api(request):
     """
-    Return all reviews written by the current user for the profile page.
+    Return all reviews written by the given user for the profile page.
+    Defaults to the current user; accepts an optional `user` query param (email).
     """
+    user_email = request.GET.get("user")
+    if user_email:
+        try:
+            target_user = CustomUser.objects.get(email=user_email)
+        except CustomUser.DoesNotExist:
+            target_user = request.user
+    else:
+        target_user = request.user
+
     reviews = (
-        Review.objects.filter(user=request.user)
+        Review.objects.filter(user=target_user)
         .select_related("amenity")
         .prefetch_related("amenity__photos")
         .order_by("-updated_at", "-created_at")
@@ -747,8 +767,17 @@ def profile_reviews_api(request):
 @login_required(login_url="/?auth_required=1")
 @require_http_methods(["GET"])
 def profile_favorites_api(request):
+    user_email = request.GET.get("user")
+    if user_email:
+        try:
+            target_user = CustomUser.objects.get(email=user_email)
+        except CustomUser.DoesNotExist:
+            target_user = request.user
+    else:
+        target_user = request.user
+
     favorites = (
-        Favorite.objects.filter(user=request.user)
+        Favorite.objects.filter(user=target_user)
         .select_related("amenity", "amenity__amenity_type")
         .order_by("-created_at")
     )
@@ -1134,6 +1163,14 @@ def get_user_chats_api(request):
             # Get the last message
             last_message = chat.messages.last()
 
+            other_user_email = None
+            other_user_avatar = None
+            if chat.chat_type == "direct":
+                other_participant = chat.participants.exclude(user=request.user).first()
+                if other_participant:
+                    other_user_email = other_participant.user.email
+                    other_user_avatar = other_participant.user.avatar_url
+
             chats_data.append(
                 {
                     "id": chat.id,
@@ -1143,6 +1180,8 @@ def get_user_chats_api(request):
                     "amenity_name": chat.amenity.name if chat.amenity else None,
                     "created_by_email": chat.created_by.email,
                     "participant_count": chat.participants.count(),
+                    "other_user_email": other_user_email,
+                    "other_user_avatar": other_user_avatar,
                     "last_message": (
                         last_message.content[:100] if last_message else None
                     ),
@@ -1213,12 +1252,22 @@ def get_chat_messages_api(request):
         # Reverse to get chronological order
         messages_data.reverse()
 
+        other_user_email = None
+        other_user_avatar = None
+        if chat.chat_type == "direct":
+            other_participant = chat.participants.exclude(user=request.user).first()
+            if other_participant:
+                other_user_email = other_participant.user.email
+                other_user_avatar = other_participant.user.avatar_url
+
         return JsonResponse(
             {
                 "chat_id": chat.id,
                 "chat_type": chat.chat_type,
                 "chat_name": chat.get_display_name(request.user),
                 "amenity_id": chat.amenity_id,
+                "other_user_email": other_user_email,
+                "other_user_avatar": other_user_avatar,
                 "page": page,
                 "page_size": page_size,
                 "total_messages": total_count,
@@ -1431,6 +1480,68 @@ def create_group_chat_api(request):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def get_chat_participants_api(request):
+    """Return all participants for a chat the current user belongs to."""
+    if not request.user.is_authenticated:
+        return JsonResponse({"error": "Login required"}, status=401)
+
+    chat_id = request.GET.get("chat_id")
+    if not chat_id:
+        return JsonResponse({"error": "chat_id required"}, status=400)
+
+    try:
+        chat = Chat.objects.get(id=chat_id)
+    except Chat.DoesNotExist:
+        return JsonResponse({"error": "Chat not found"}, status=404)
+
+    if not chat.participants.filter(user=request.user).exists():
+        return JsonResponse({"error": "You are not a participant"}, status=403)
+
+    participants = chat.participants.select_related("user").all()
+    return JsonResponse(
+        {
+            "participants": [
+                {
+                    "email": p.user.email,
+                    "username": p.user.username or p.user.email,
+                    "avatar_url": p.user.avatar_url,
+                }
+                for p in participants
+            ]
+        }
+    )
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST"])
+def leave_chat_api(request):
+    """Remove the current user from a group chat."""
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    chat_id = data.get("chat_id")
+    if not chat_id:
+        return JsonResponse({"error": "chat_id required"}, status=400)
+
+    try:
+        chat = Chat.objects.get(id=chat_id)
+    except Chat.DoesNotExist:
+        return JsonResponse({"error": "Chat not found"}, status=404)
+
+    if chat.chat_type == "direct":
+        return JsonResponse({"error": "Cannot leave a direct chat"}, status=400)
+
+    deleted, _ = ChatParticipant.objects.filter(chat=chat, user=request.user).delete()
+    if not deleted:
+        return JsonResponse({"error": "You are not a participant"}, status=403)
+
+    return JsonResponse({"success": True})
 
 
 @require_http_methods(["GET"])
