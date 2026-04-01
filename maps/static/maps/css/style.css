@@ -547,9 +547,17 @@ aside.detail-panel.open { width: var(--detail-w) !important; }
 .rv-hero-emoji { font-size: 56px; line-height: 1; }
 .rv-hero-type  { font-size: 11px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: var(--text-3); }
 .rv-description { font-size: 13px; color: var(--text-2); line-height: 1.6; margin-top: 4px; }
-.rv-rating-row  { display: flex; align-items: center; gap: 14px; margin-top: 8px; }
+.rv-rating-row  { display: grid; grid-template-columns: auto 1fr; gap: 24px; align-items: center; margin-top: 8px; }
 .rv-rating-big  { font-size: 38px; font-weight: 700; color: var(--text-1); line-height: 1; }
-.rv-rating-right { display: flex; flex-direction: column; gap: 3px; }
+.rv-rating-left { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.rv-rating-right { width: 100%; }
+
+.rating-histo { display: flex; flex-direction: column; gap: 2px; }
+.rating-histo-row { display: grid; grid-template-columns: 20px 1fr 24px; align-items: center; gap: 6px; }
+.rating-histo-label { font-size: 11px; color: var(--text-3); font-weight: 500; }
+.rating-histo-bar-wrap { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+.rating-histo-bar { height: 100%; background: #f59e0b; border-radius: 3px; }
+.rating-histo-count { font-size: 11px; color: var(--text-3); text-align: right; font-family: var(--mono); }
 .rv-stars  { font-size: 17px; color: #f59e0b; letter-spacing: 1px; }
 .rv-count  { font-size: 12px; color: var(--text-3); }
 .rv-review-card   { margin-top: 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }

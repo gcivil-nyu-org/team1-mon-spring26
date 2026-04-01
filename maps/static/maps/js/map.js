@@ -1068,21 +1068,41 @@ function renderReviewsTab(amenity) {
     html += `<div class="dp-section">
         <div class="dp-field-label">Community Rating</div>
         <div class="rv-rating-row">`;
+
     if (hasRating) {
         const avg = +amenity.rating;
         const filled = Math.round(avg);
         const stars  = '★'.repeat(filled) + '☆'.repeat(5 - filled);
-        html += `<span class="rv-rating-big">${avg.toFixed(1)}</span>
-            <div class="rv-rating-right">
-                <div class="rv-stars">${stars}</div>
-                <div class="rv-count">${amenity.review_count} review${amenity.review_count !== 1 ? 's' : ''}</div>
-            </div>`;
+        const totalReviews = amenity.review_count || 0;
+
+        html += `<div class="rv-rating-left">
+                    <span class="rv-rating-big">${avg.toFixed(1)}</span>
+                    <div class="rv-stars">${stars}</div>
+                    <div class="rv-count">${totalReviews} review${totalReviews !== 1 ? 's' : ''}</div>
+                </div>
+                <div class="rv-rating-right">
+                    <div class="rating-histo-container">
+                        <div class="loading-spinner"></div>
+                    </div>
+                </div>`;
     } else {
-        html += `<span class="rv-rating-big" style="font-size:26px">-</span>
-            <div class="rv-rating-right">
-                <div class="rv-stars">☆☆☆☆☆</div>
-                <div class="rv-count">No ratings yet</div>
-            </div>`;
+        html += `<div class="rv-rating-left">
+                    <span class="rv-rating-big" style="font-size:26px">-</span>
+                    <div class="rv-stars">☆☆☆☆☆</div>
+                    <div class="rv-count">No ratings yet</div>
+                </div>
+                <div class="rv-rating-right">
+                    <div class="rating-histo">`;
+        for (let i = 5; i >= 1; i--) {
+             html += `<div class="rating-histo-row">
+                        <div class="rating-histo-label">${i} ★</div>
+                        <div class="rating-histo-bar-wrap">
+                            <div class="rating-histo-bar" style="width: 0%"></div>
+                        </div>
+                         <div class="rating-histo-count">0</div>
+                    </div>`;
+        }
+        html += `</div></div>`;
     }
     html += `</div></div>`;
 
@@ -1174,6 +1194,49 @@ function renderReviewsTab(amenity) {
     }
 
     pane.innerHTML = html;
+
+    if (hasRating) {
+        fetch(`/api/amenities/${amenity.id}/rating-distribution/`)
+            .then(response => response.json())
+            .then(data => {
+                const histoContainer = pane.querySelector('.rating-histo-container');
+                if (!histoContainer) return;
+
+                const distribution = data.rating_distribution || [];
+                const ratingCounts = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+                let maxCount = 0;
+
+                distribution.forEach(item => {
+                    const rating = Math.round(Number(item.rating));
+                    if (rating >= 1 && rating <= 5) {
+                        ratingCounts[rating] = item.count;
+                        if (item.count > maxCount) {
+                            maxCount = item.count;
+                        }
+                    }
+                });
+
+                let histoHtml = '<div class="rating-histo">';
+                for (let i = 5; i >= 1; i--) {
+                    const count = ratingCounts[i];
+                    const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                    histoHtml += `<div class="rating-histo-row">
+                                <div class="rating-histo-label">${i}</div>
+                                <div class="rating-histo-bar-wrap">
+                                    <div class="rating-histo-bar" style="width: ${percentage}%"></div>
+                                </div>
+                            </div>`;
+                }
+                histoHtml += '</div>';
+                histoContainer.innerHTML = histoHtml;
+            }).catch(e => {
+                const histoContainer = pane.querySelector('.rating-histo-container');
+                if (histoContainer) {
+                    histoContainer.innerHTML = '<div class="rv-count">Could not load rating details.</div>';
+                }
+                console.error('Failed to load rating distribution', e);
+            });
+    }
 
     // Setup clickable usernames for messaging
     pane.querySelectorAll('.clickable-username').forEach(username => {
