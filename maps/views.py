@@ -5,7 +5,9 @@ from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.password_validation import validate_password
 from django.contrib.gis.geos import Polygon, GEOSGeometry
+from django.core.exceptions import ValidationError
 from .models import (
     AmenityType,
     Amenity,
@@ -462,6 +464,7 @@ def serialize_auth_user(user):
         "username": user.username,
         "bio": user.bio,
         "avatar_url": user.avatar_url,
+        "has_usable_password": user.has_usable_password(),
         "is_authenticated": True,
     }
 
@@ -548,6 +551,7 @@ def current_user_api(request):
                 "email": "",
                 "username": "",
                 "bio": "",
+                "has_usable_password": False,
                 "is_authenticated": False,
             },
             status=200,
@@ -586,6 +590,7 @@ def settings_view(request):
         "maps/settings.html",
         {
             "profile_user": request.user,
+            "has_usable_password": request.user.has_usable_password(),
         },
     )
 
@@ -597,14 +602,24 @@ def change_password_api(request):
     """
     Change the current user's password while preserving the active session.
     """
+    has_usable_password = request.user.has_usable_password()
     current_password = (request.POST.get("current_password") or "").strip()
     new_password = (request.POST.get("new_password") or "").strip()
     confirm_password = (request.POST.get("confirm_password") or "").strip()
 
-    if not current_password or not new_password or not confirm_password:
-        return JsonResponse({"error": "All password fields are required"}, status=400)
+    if has_usable_password:
+        if not current_password or not new_password or not confirm_password:
+            return JsonResponse(
+                {"error": "All password fields are required"},
+                status=400,
+            )
+    elif not new_password or not confirm_password:
+        return JsonResponse(
+            {"error": "New password and confirmation are required"},
+            status=400,
+        )
 
-    if not request.user.check_password(current_password):
+    if has_usable_password and not request.user.check_password(current_password):
         return JsonResponse({"error": "Current password is incorrect"}, status=400)
 
     if new_password != confirm_password:
@@ -613,17 +628,33 @@ def change_password_api(request):
             status=400,
         )
 
-    if current_password == new_password:
+    if has_usable_password and current_password == new_password:
         return JsonResponse(
             {"error": "New password must be different from your current password"},
             status=400,
         )
 
+    try:
+        validate_password(new_password, request.user)
+    except ValidationError as exc:
+        return JsonResponse({"error": " ".join(exc.messages)}, status=400)
+
     request.user.set_password(new_password)
     request.user.save(update_fields=["password"])
     update_session_auth_hash(request, request.user)
 
-    return JsonResponse({"message": "Password updated successfully"}, status=200)
+    return JsonResponse(
+        {
+            "message": (
+                "Password updated successfully"
+                if has_usable_password
+                else "Password set successfully"
+            ),
+            "has_usable_password": True,
+            "password_action": "change" if has_usable_password else "set",
+        },
+        status=200,
+    )
 
 
 @csrf_exempt

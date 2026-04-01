@@ -48,8 +48,13 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.gis",
     "django.contrib.postgres",
+    "django.contrib.sites",
     "maps",
     "storages",
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",
+    "allauth.socialaccount.providers.google",
 ]
 
 MIDDLEWARE = [
@@ -61,6 +66,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.middleware.gzip.GZipMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
 ]
 
 ROOT_URLCONF = "django_map.urls"
@@ -184,6 +190,32 @@ STATIC_URL = "/static/"
 # Custom User Model
 AUTH_USER_MODEL = "maps.CustomUser"
 
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",
+]
+
+SITE_ID = int(os.environ.get("SITE_ID", "1"))
+
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/"
+
+SOCIALACCOUNT_LOGIN_ON_GET = True
+SOCIALACCOUNT_ADAPTER = "maps.adapters.GoogleSocialAccountAdapter"
+
+SOCIALACCOUNT_PROVIDERS = {
+    "google": {
+        "SCOPE": [
+            "profile",
+            "email",
+        ],
+        "AUTH_PARAMS": {
+            "access_type": "online",
+        },
+        "OAUTH_PKCE_ENABLED": True,
+    }
+}
+
 # Media files (User uploads)
 if DEBUG:
     STORAGES = {
@@ -215,3 +247,29 @@ else:
             "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
         },
     }
+
+# Email configuration
+# Development:
+# - default to console backend so local testing does not require real SMTP
+# Production:
+# - use AWS SES SMTP settings from environment variables
+if DEBUG:
+    EMAIL_BACKEND = os.environ.get(
+        "EMAIL_BACKEND",
+        "django.core.mail.backends.console.EmailBackend",
+    )
+else:
+    EMAIL_BACKEND = os.environ.get(
+        "EMAIL_BACKEND",
+        "django.core.mail.backends.smtp.EmailBackend",
+    )
+
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "noreply@example.com")
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") == "1"
+EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "0") == "1"
