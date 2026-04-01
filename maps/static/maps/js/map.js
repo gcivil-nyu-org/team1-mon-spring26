@@ -1,4 +1,14 @@
-const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0 }).setView([40.73, -73.99], 13);
+let restoredState = null;
+try {
+    if (!new URLSearchParams(window.location.search).has('auth_required')) {
+        restoredState = JSON.parse(sessionStorage.getItem('mapState'));
+    }
+} catch (e) { /* ignore */ }
+
+const initialCenter = restoredState ? restoredState.center : [40.73, -73.99];
+const initialZoom = restoredState ? restoredState.zoom : 13;
+
+const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0 }).setView(initialCenter, initialZoom);
 
 const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const tileUrl = isLocalhost ? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' : '/tiles/{z}/{x}/{y}.png';
@@ -53,7 +63,7 @@ function getCookie(name) {
     return cookieValue;
 }
 
-function initializeGeolocation() {
+function initializeGeolocation(shouldSetView = true) {
     const statusEl = document.getElementById('location-status');
     const dotEl    = document.getElementById('location-dot');
     const locBtn   = document.getElementById('location-button');
@@ -61,13 +71,15 @@ function initializeGeolocation() {
     locBtn.classList.add('locating');
     statusEl.textContent = 'Locating…';
     const tid = setTimeout(() => {
-        if (!userLocation) { statusEl.textContent = 'Default location'; locBtn.classList.remove('locating'); map.setView([40.73, -73.99], 13); }
+        if (!userLocation) { statusEl.textContent = 'Default location'; locBtn.classList.remove('locating'); if (shouldSetView) map.setView([40.73, -73.99], 13); }
     }, 8000);
     navigator.geolocation.getCurrentPosition(
         ({ coords: { latitude, longitude } }) => {
             clearTimeout(tid);
             userLocation = { latitude, longitude };
-            map.setView([latitude, longitude], 15);
+            if (shouldSetView) {
+                map.setView([latitude, longitude], 15);
+            }
             if (userMarker) map.removeLayer(userMarker);
             userMarker = L.marker([latitude, longitude], { title: 'Your Location', zIndexOffset: 100 }).addTo(map);
             userMarker.bindPopup('Your Location');
@@ -80,7 +92,9 @@ function initializeGeolocation() {
             locBtn.classList.remove('locating');
             dotEl.classList.add('denied');
             statusEl.textContent = ({ 1: 'Permission denied', 2: 'Unavailable', 3: 'Timed out' })[err.code] || 'Unable to locate';
-            map.setView([40.73, -73.99], 13);
+            if (shouldSetView) {
+                map.setView([40.73, -73.99], 13);
+            }
         },
         { enableHighAccuracy: true, timeout: 7000, maximumAge: 0 }
     );
@@ -158,6 +172,7 @@ function loadAmenityTypes() {
             });
         });
         updateHoursFilterVisibility();
+        loadAmenities();
     }).catch(e => console.error('Error loading types:', e));
 }
 
@@ -1972,6 +1987,20 @@ function setupPWA() {
     }
 }
 
+window.addEventListener('beforeunload', () => {
+    const mapState = {
+        center: map.getCenter(),
+        zoom: map.getZoom(),
+    };
+    if (selectedLocationMarker) {
+        mapState.selectedLocation = selectedLocationMarker.getLatLng();
+        if (selectedLocationMarker.getPopup()) {
+             mapState.selectedLocationName = selectedLocationMarker.getPopup().getContent();
+        }
+    }
+    sessionStorage.setItem('mapState', JSON.stringify(mapState));
+});
+
 document.addEventListener('DOMContentLoaded', () => {
     const queryAmenityId = new URLSearchParams(window.location.search).get('amenity_id');
 
@@ -1979,9 +2008,32 @@ document.addEventListener('DOMContentLoaded', () => {
     setupSidebarToggle();
     setupHoursFilter();
     setupDetailTabs();
-    initializeGeolocation();
+    
+    if (restoredState) {
+        if (restoredState.selectedLocation) {
+            const { lat, lng } = restoredState.selectedLocation;
+            const name = restoredState.selectedLocationName || 'Selected Location';
+            if (selectedLocationMarker) map.removeLayer(selectedLocationMarker);
+            selectedLocationMarker = L.marker([lat, lng], {
+                title: name, zIndexOffset: 50,
+                icon: L.icon({
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
+                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                    iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+                }),
+            }).addTo(map).bindPopup(name);
+            const inp = document.getElementById('search-input');
+            if (inp) {
+                inp.value = name;
+                inp.closest('.search-box').classList.add('has-value');
+            }
+        }
+        initializeGeolocation(false);
+    } else {
+        initializeGeolocation();
+    }
+
     loadAmenityTypes();
-    loadAmenities();
     setupPWA();
 
     if (queryAmenityId) {
