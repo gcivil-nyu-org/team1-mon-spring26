@@ -860,17 +860,21 @@ def create_review_api(request):
             return JsonResponse({"error": "Login required"}, status=401)
 
         content_type = request.content_type or ""
+        photo_files = []
         if content_type.startswith("multipart/form-data"):
             amenity_id = request.POST.get("amenity_id")
             rating = request.POST.get("rating", 5)
             review_text = request.POST.get("review_text", "").strip()
-            photo_file = request.FILES.get("photo")
+            photo_files = request.FILES.getlist("photos")
+            if not photo_files:
+                legacy_photo = request.FILES.get("photo")
+                if legacy_photo:
+                    photo_files = [legacy_photo]
         else:
             data = json.loads(request.body)
             amenity_id = data.get("amenity_id")
             rating = data.get("rating", 5)
             review_text = data.get("review_text", "").strip()
-            photo_file = None
 
         if not amenity_id:
             return JsonResponse({"error": "amenity_id required"}, status=400)
@@ -883,9 +887,14 @@ def create_review_api(request):
         if not (1 <= rating <= 5):
             return JsonResponse({"error": "Rating must be between 1 and 5"}, status=400)
 
-        if photo_file:
-            content_type = photo_file.content_type or ""
-            if not content_type.startswith("image/"):
+        if len(photo_files) > 5:
+            return JsonResponse(
+                {"error": "You can upload up to 5 photos per review"}, status=400
+            )
+
+        for photo_file in photo_files:
+            photo_content_type = photo_file.content_type or ""
+            if not photo_content_type.startswith("image/"):
                 return JsonResponse({"error": "Photo must be an image"}, status=400)
             if photo_file.size > 5 * 1024 * 1024:
                 return JsonResponse(
@@ -909,19 +918,20 @@ def create_review_api(request):
             amenity=amenity, user=user, rating=rating, review_text=review_text
         )
 
-        review_photo = None
-        if photo_file:
-            review_photo = AmenityPhoto.objects.create(
+        existing_photos = AmenityPhoto.objects.filter(amenity=amenity).exists()
+        review_photos = []
+        for index, photo_file in enumerate(photo_files):
+            review_photos.append(AmenityPhoto.objects.create(
                 amenity=amenity,
                 photo=photo_file,
                 uploaded_by=user,
-                is_primary=not AmenityPhoto.objects.filter(amenity=amenity).exists(),
+                is_primary=not existing_photos and index == 0,
                 caption=f"Review photo by {user.email}",
-            )
+            ))
 
         response_data = serialize_amenity_review(
             review,
-            photo_url=review_photo.photo.url if review_photo else None,
+            photo_url=review_photos[0].photo.url if review_photos else None,
             current_user=request.user,
         )
         response_data["message"] = "Review created successfully"
