@@ -1162,7 +1162,6 @@ def get_amenity_reviews_api(request):
 @transaction.non_atomic_requests
 def chat_events_sse(request):
     """SSE endpoint for chat notifications.
-
     Uses a hybrid approach:
     - Caches user's chat IDs at connection start (one query)
     - Polls infrequently (every 15 seconds) for new messages
