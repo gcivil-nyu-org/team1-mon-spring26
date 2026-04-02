@@ -1232,6 +1232,8 @@ def chat_events_sse(request):
                         continue
 
                     connection.close()  # Release DB connection before yielding/sleeping
+                else:
+                    connection.close()  # Ensure connection is closed when there are no new messages
                 # Send keep-alive
                 yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
                 
