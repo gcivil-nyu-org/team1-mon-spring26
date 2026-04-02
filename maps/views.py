@@ -143,10 +143,11 @@ def serialize_map_amenity(amenity, user, favorite_amenity_ids=None):
     if favorite_amenity_ids is None:
         favorite_amenity_ids = set()
 
-    photo_by_user = {}
+    photo_urls_by_user = {}
     for photo in amenity.photos.all():
-        if photo.uploaded_by_id not in photo_by_user:
-            photo_by_user[photo.uploaded_by_id] = photo.photo.url
+        if photo.uploaded_by_id not in photo_urls_by_user:
+            photo_urls_by_user[photo.uploaded_by_id] = []
+        photo_urls_by_user[photo.uploaded_by_id].append(photo.photo.url)
 
     return {
         "id": amenity.id,
@@ -165,7 +166,8 @@ def serialize_map_amenity(amenity, user, favorite_amenity_ids=None):
         "reviews": [
             serialize_amenity_review(
                 review,
-                photo_url=photo_by_user.get(review.user_id),
+                photo_url=photo_urls_by_user.get(review.user_id, [None])[0],
+                photo_urls=photo_urls_by_user.get(review.user_id, []),
                 current_user=user,
             )
             for review in amenity.reviews.all()[:5]
@@ -468,7 +470,7 @@ def serialize_auth_user(user):
     }
 
 
-def serialize_amenity_review(review, photo_url=None, current_user=None):
+def serialize_amenity_review(review, photo_url=None, photo_urls=None, current_user=None):
     current_user_vote = getattr(review, "user_vote", 0)
     if not (current_user and current_user.is_authenticated):
         current_user_vote = 0
@@ -484,6 +486,7 @@ def serialize_amenity_review(review, photo_url=None, current_user=None):
         "user_vote": int(current_user_vote or 0),
         "review_text": review.review_text,
         "photo_url": photo_url,
+        "photo_urls": photo_urls or ([photo_url] if photo_url else []),
         "created_at": review.created_at.isoformat(),
     }
 
@@ -686,15 +689,14 @@ def serialize_profile_review(review):
     Serialize one review for the profile page.
     The photo is inferred from the amenity photo uploaded by the same user.
     """
-    review_photo_url = None
+    review_photo_urls = []
 
     # Reuse prefetched amenity photos when available.
     # The current data model stores review photos on AmenityPhoto,
     # not directly on Review.
     for photo in review.amenity.photos.all():
         if photo.uploaded_by_id == review.user_id:
-            review_photo_url = photo.photo.url
-            break
+            review_photo_urls.append(photo.photo.url)
 
     return {
         "id": review.id,
@@ -704,7 +706,8 @@ def serialize_profile_review(review):
         "amenity_type": review.amenity.amenity_type.name,
         "rating": review.rating,
         "review_text": review.review_text,
-        "photo_url": review_photo_url,
+        "photo_url": review_photo_urls[0] if review_photo_urls else None,
+        "photo_urls": review_photo_urls,
         "created_at": review.created_at.isoformat(),
         "updated_at": review.updated_at.isoformat(),
     }
@@ -828,18 +831,20 @@ def create_review_api(request):
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
 
-        content_type = request.content_type or ""
+        content_type = request.META.get("CONTENT_TYPE", "")
         if content_type.startswith("multipart/form-data"):
             amenity_id = request.POST.get("amenity_id")
             rating = request.POST.get("rating", 5)
-            review_text = request.POST.get("review_text", "").strip()
-            photo_file = request.FILES.get("photo")
+            review_text = (request.POST.get("review_text") or "").strip()
+            photo_files = request.FILES.getlist("photos")
+            if not photo_files and "photo" in request.FILES:
+                photo_files = request.FILES.getlist("photo")
         else:
             data = json.loads(request.body)
             amenity_id = data.get("amenity_id")
             rating = data.get("rating", 5)
-            review_text = data.get("review_text", "").strip()
-            photo_file = None
+            review_text = (data.get("review_text") or "").strip()
+            photo_files = []
 
         if not amenity_id:
             return JsonResponse({"error": "amenity_id required"}, status=400)
@@ -852,9 +857,12 @@ def create_review_api(request):
         if not (1 <= rating <= 5):
             return JsonResponse({"error": "Rating must be between 1 and 5"}, status=400)
 
-        if photo_file:
-            content_type = photo_file.content_type or ""
-            if not content_type.startswith("image/"):
+        if len(photo_files) > 5:
+            return JsonResponse({"error": "Maximum of 5 photos allowed"}, status=400)
+
+        for photo_file in photo_files:
+            file_content_type = photo_file.content_type or ""
+            if not file_content_type.startswith("image/"):
                 return JsonResponse({"error": "Photo must be an image"}, status=400)
             if photo_file.size > 5 * 1024 * 1024:
                 return JsonResponse(
@@ -878,19 +886,22 @@ def create_review_api(request):
             amenity=amenity, user=user, rating=rating, review_text=review_text
         )
 
-        review_photo = None
-        if photo_file:
+        review_photos = []
+        is_first = not AmenityPhoto.objects.filter(amenity=amenity).exists()
+        for i, photo_file in enumerate(photo_files):
             review_photo = AmenityPhoto.objects.create(
                 amenity=amenity,
                 photo=photo_file,
                 uploaded_by=user,
-                is_primary=not AmenityPhoto.objects.filter(amenity=amenity).exists(),
+                is_primary=(is_first and i == 0),
                 caption=f"Review photo by {user.email}",
             )
+            review_photos.append(review_photo)
 
         response_data = serialize_amenity_review(
             review,
-            photo_url=review_photo.photo.url if review_photo else None,
+            photo_url=review_photos[0].photo.url if review_photos else None,
+            photo_urls=[rp.photo.url for rp in review_photos] if review_photos else [],
             current_user=request.user,
         )
         response_data["message"] = "Review created successfully"
@@ -1153,9 +1164,7 @@ def chat_events_sse(request):
                     # Only push an event if there's a message from someone else
                     other_msgs = [m for m in new_msgs if m.sender_id != user_id]
                     if other_msgs:
-                        yield f"data: {json.dumps(
-                            {'type': 'new_message', 'chat_id': other_msgs[-1].chat_id}
-                            )}\n\n"
+                        yield f"data: {json.dumps({'type': 'new_message', 'chat_id': other_msgs[-1].chat_id})}\n\n"
                     else:
                         # Ignore our own messages
                         yield ": keep-alive\n\n"
@@ -1316,7 +1325,7 @@ def send_message_api(request):
 
         data = json.loads(request.body)
         chat_id = data.get("chat_id")
-        content = data.get("content", "").strip()
+        content = (data.get("content") or "").strip()
 
         if not chat_id:
             return JsonResponse({"error": "chat_id required"}, status=400)
@@ -1371,7 +1380,7 @@ def create_direct_chat_api(request):
             return JsonResponse({"error": "Login required"}, status=401)
 
         data = json.loads(request.body)
-        recipient_email = data.get("recipient_email", "").strip()
+        recipient_email = (data.get("recipient_email") or "").strip()
 
         if not recipient_email:
             return JsonResponse({"error": "recipient_email required"}, status=400)
@@ -1441,7 +1450,7 @@ def create_group_chat_api(request):
             return JsonResponse({"error": "Login required"}, status=401)
 
         data = json.loads(request.body)
-        chat_name = data.get("chat_name", "").strip()
+        chat_name = (data.get("chat_name") or "").strip()
         amenity_id = data.get("amenity_id")
         participant_emails = data.get("participant_emails", [])
 
