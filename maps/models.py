@@ -406,9 +406,11 @@ class Chat(models.Model):
         if self.name:
             return self.name
         if self.chat_type == "direct":
-            # For direct chats, show the other person's email
+            # For direct chats, show the other person's username if set, else email
             other_user = self.participants.exclude(user=current_user).first()
-            return other_user.user.email if other_user else "Unknown"
+            if other_user:
+                return other_user.user.username or other_user.user.email
+            return "Unknown"
         if self.chat_type == "amenity_forum" and self.amenity:
             return f"Forum: {self.amenity.name}"
         return "Chat"
