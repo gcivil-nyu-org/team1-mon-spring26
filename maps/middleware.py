@@ -1,5 +1,6 @@
 from django.middleware.gzip import GZipMiddleware
 
+
 class SelectiveGZipMiddleware(GZipMiddleware):
     """
     A custom GZip middleware that skips compression for Server-Sent Events (SSE)
