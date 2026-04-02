@@ -1164,14 +1164,15 @@ def chat_events_sse(request):
     """SSE endpoint to notify users of new chat messages."""
     if not request.user.is_authenticated:
         return StreamingHttpResponse(
-            'data: {"error": "unauthorized"}\n\n', content_type="text/event-stream; charset=utf-8"
+            'data: {"error": "unauthorized"}\n\n',
+            content_type="text/event-stream; charset=utf-8",
         )
 
     # Resolve user ID outside the generator to prevent lazy-evaluation
     # issues after closing the database connection inside the loop.
     user_id = request.user.id
     last_event_id = request.headers.get("Last-Event-ID")
-    
+
     # Detect Apple devices (macOS, iOS) to selectively apply WebKit padding
     user_agent = request.META.get("HTTP_USER_AGENT", "").lower()
     is_apple_device = any(
@@ -1216,7 +1217,9 @@ def chat_events_sse(request):
         except Exception:
             yield "retry: 3000\n: keep-alive\n\n"
 
-    response = StreamingHttpResponse(event_stream(), content_type="text/event-stream; charset=utf-8")
+    response = StreamingHttpResponse(
+        event_stream(), content_type="text/event-stream; charset=utf-8"
+    )
     response["Cache-Control"] = "no-cache, no-transform"
     response["Connection"] = "keep-alive"
     response["X-Accel-Buffering"] = "no"  # Disable buffering in nginx
