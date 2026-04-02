@@ -1199,9 +1199,7 @@ def chat_events_sse(request):
                     # Only push an event if there's a message from someone else
                     other_msgs = [m for m in new_msgs if m.sender_id != user_id]
                     if other_msgs:
-                        yield f"data: {json.dumps(
-                            {'type': 'new_message', 'chat_id': other_msgs[-1].chat_id}
-                            )}\n\n"
+                        yield f"data: {json.dumps({'type': 'new_message', 'chat_id': other_msgs[-1].chat_id})}\n\n"
                     else:
                         # Ignore our own messages
                         yield f": keep-alive{pad}\n\n"
@@ -1213,14 +1211,6 @@ def chat_events_sse(request):
                 yield f": keep-alive{pad}\n\n"
 
             time.sleep(3)
-
-            try:
-                # Close connection to force a fresh database read on the next iteration
-                from django.db import connection
-
-                connection.close()
-            except Exception:
-                pass
 
     response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"
