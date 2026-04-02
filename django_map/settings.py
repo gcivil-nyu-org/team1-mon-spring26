@@ -104,19 +104,48 @@ if not DB_USER:
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.contrib.gis.db.backends.postgis",
-        "NAME": DB_NAME,
-        "USER": DB_USER,
-        "PASSWORD": os.environ.get(
-            "DB_PASSWORD",
-            os.environ.get("RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword")),
-        ),
-        "HOST": os.environ.get("RDS_HOSTNAME", "localhost"),
-        "PORT": os.environ.get("RDS_PORT", os.environ.get("PGPORT", "5432")),
+
+if os.environ.get("RDS_DB_NAME", None):
+    # on AWS, use RDS pgbouncer proxy
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.contrib.gis.db.backends.postgis",
+            "NAME": DB_NAME,
+            "USER": DB_USER,
+            "PASSWORD": os.environ.get(
+                "DB_PASSWORD",
+                os.environ.get(
+                    "RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword")
+                ),
+            ),
+            "HOST": "localhost",
+            "PORT": 6432,  # pgbouncer port
+            "CONN_MAX_AGE": 0,  # Don't cache connections; let pgbouncer manage pooling
+            "OPTIONS": {
+                # Use pgbouncer's transaction pooling mode
+                # See https://www.pgbouncer.org/config.html#server-pooler-mode
+                "sslmode": "require",
+                "connect_timeout": 10,
+            },
+        }
     }
-}
+else:
+    # local
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.contrib.gis.db.backends.postgis",
+            "NAME": DB_NAME,
+            "USER": DB_USER,
+            "PASSWORD": os.environ.get(
+                "DB_PASSWORD",
+                os.environ.get(
+                    "RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword")
+                ),
+            ),
+            "HOST": os.environ.get("RDS_HOSTNAME", "localhost"),
+            "PORT": os.environ.get("RDS_PORT", os.environ.get("PGPORT", "5432")),
+        }
+    }
 
 
 # Password validation

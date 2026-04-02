@@ -1178,7 +1178,6 @@ def chat_events_sse(request):
 
     def event_stream():
         from django.db.models import Max
-        from django.db import connection
         import json
         import time
 
@@ -1194,7 +1193,7 @@ def chat_events_sse(request):
             event_id = 0
             while True:
                 event_id += 1
-                connection.close()  # Release DB connection during sleep
+                # connection.close()  # Release DB connection during sleep
                 yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
                 time.sleep(60)
             return
@@ -1227,13 +1226,14 @@ def chat_events_sse(request):
                         event_data = json.dumps(
                             {"type": "new_message", "chat_id": msg.chat_id}
                         )
-                        connection.close()  # Release DB con  before yield/sleep
+                        # connection.close()  # Release DB con  before yield/sleep
                         yield f"id: {event_id}\nretry: 60000\ndata: {event_data}\n\n"
                         continue
 
-                    connection.close()  # Release DB connection before yielding/sleeping
+                    # connection.close()  # Release DB con before yielding/sleeping
                 else:
-                    connection.close()  # Ensure con closed when no new messages
+                    # connection.close()  # Ensure con closed when no new messages
+                    pass
                 # Send keep-alive
                 yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
 
@@ -1241,7 +1241,7 @@ def chat_events_sse(request):
                 # 100 concurrent users = ~6.7 queries/second (vs hundreds before)
                 time.sleep(5)
             except Exception:
-                connection.close()  # Release DB connection on error too
+                # connection.close()  # Release DB connection on error too
                 event_id += 1
                 yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
                 time.sleep(5)
