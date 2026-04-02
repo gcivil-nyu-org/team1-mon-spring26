@@ -1161,10 +1161,13 @@ def get_amenity_reviews_api(request):
 @require_http_methods(["GET"])
 @transaction.non_atomic_requests
 def chat_events_sse(request):
-    """SSE endpoint to notify users of new chat messages.
+    """SSE endpoint for chat notifications.
     
-    WARNING: This is a polling-based approach. For production systems with many users,
-    consider using Redis/Celery for event notifications instead of polling.
+    This endpoint does NOT query the database to avoid holding connections.
+    It serves keep-alive heartbeats only. Clients handle message fetching
+    separately to avoid connection pool exhaustion.
+    
+    The actual message checking happens on-demand when users access the chats page.
     """
     if not request.user.is_authenticated:
         return StreamingHttpResponse(
@@ -1172,76 +1175,22 @@ def chat_events_sse(request):
             content_type="text/event-stream; charset=utf-8",
         )
 
-    user_id = request.user.id
-    last_event_id = request.headers.get("Last-Event-ID")
-
-    # Detect Apple devices (macOS, iOS) to selectively apply WebKit padding
-    user_agent = request.META.get("HTTP_USER_AGENT", "").lower()
-    is_apple_device = any(
-        os in user_agent for os in ["macintosh", "mac os x", "iphone", "ipad"]
-    )
-
     def event_stream():
-        from django.db.models import Max, Q
-        import json
         import time
-
-        # Safari/WebKit bug: Needs ~2048 bytes of padding to process the stream
-        # before the connection closes, otherwise it discards short payloads.
-        pad = " " * 2048 if is_apple_device else ""
-
-        # Get the user's chat IDs ONCE at connection start, not every loop
-        user_chat_ids = list(
-            ChatParticipant.objects.filter(user_id=user_id).values_list(
-                "chat_id", flat=True
-            )
-        )
+        import json
         
-        if not user_chat_ids:
-            # User has no chats, send keep-alive indefinitely
-            while True:
-                yield f":{pad}\nid: 0\nretry: 10000\n: keep-alive\n\n"
-                time.sleep(10)
-            return
-
-        if last_event_id and last_event_id.isdigit():
-            last_id = int(last_event_id)
-        else:
-            # Initial connection: get the current max ID for this user's chats
-            last_id_dict = Message.objects.filter(
-                chat_id__in=user_chat_ids
-            ).aggregate(max_id=Max("id"))
-            last_id = last_id_dict.get("max_id") or 0
-
-        # Continuously stream events
+        # Counter for event IDs
+        event_id = 0
+        
+        # Send keep-alives every 30 seconds, no database queries
         while True:
             try:
-                # Simple query: filter by chat_id (no joins!) and id > last_id
-                new_msgs = Message.objects.filter(
-                    chat_id__in=user_chat_ids, 
-                    id__gt=last_id
-                ).only("id", "sender_id", "chat_id").order_by("id")[:1]
-                
-                if new_msgs:
-                    msg = new_msgs[0]
-                    last_id = msg.id
-                    
-                    # Only send notification if not sent by current user
-                    if msg.sender_id != user_id:
-                        event_data = json.dumps(
-                            {"type": "new_message", "chat_id": msg.chat_id}
-                        )
-                        yield f":{pad}\nid: {last_id}\nretry: 10000\ndata: {event_data}\n\n"  # noqa: E501
-
-                # Always send keep-alive to keep connection open
-                yield f":{pad}\nid: {last_id}\nretry: 10000\n: keep-alive\n\n"
-
-                # Long polling interval to avoid overwhelming the database
-                # At 10 seconds, a 100 concurrent user setup = 10 queries/sec
-                time.sleep(10)
-            except Exception as e:
-                yield "retry: 10000\n: keep-alive\n\n"
-                time.sleep(10)
+                event_id += 1
+                # Send minimal keep-alive with no database access
+                yield f"id: {event_id}\nretry: 30000\n: keep-alive\n\n"
+                time.sleep(30)
+            except Exception:
+                time.sleep(30)
 
     response = StreamingHttpResponse(
         event_stream(), content_type="text/event-stream; charset=utf-8"
