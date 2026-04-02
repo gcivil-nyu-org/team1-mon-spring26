@@ -1204,7 +1204,9 @@ def chat_events_sse(request):
                 new_msgs = list(
                     Message.objects.filter(
                         chat__participants__user_id=user_id, id__gt=last_id
-                    ).only("id", "sender_id", "chat_id").order_by("id")
+                    )
+                    .only("id", "sender_id", "chat_id")
+                    .order_by("id")
                 )
 
                 if new_msgs:
