@@ -2,6 +2,7 @@ import json
 from django.test import TestCase, Client, override_settings
 from django.urls import reverse
 from django.contrib.gis.geos import Point
+from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils.html import escape
 from unittest.mock import patch
@@ -132,6 +133,7 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "maps/map.html")
         self.assertIn("amenity_types", response.context)
+        self.assertContains(response, reverse("google_login"))
 
     def test_amenity_types_api(self):
         response = self.client.get(reverse("maps:amenity_types_api"))
@@ -506,6 +508,54 @@ class ViewsCoverageTest(TestCase):
             "New password and confirmation do not match",
         )
 
+    def test_change_password_api_sets_password_for_social_only_user(self):
+        social_user = CustomUser.objects.create(
+            username="google-only",
+            email="google-only@example.com",
+        )
+        social_user.set_unusable_password()
+        social_user.save(update_fields=["password"])
+
+        self.client.force_login(social_user)
+        response = self.client.post(
+            reverse("maps:change_password_api"),
+            data={
+                "new_password": "brand-new-password-456",
+                "confirm_password": "brand-new-password-456",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["message"], "Password set successfully")
+        self.assertTrue(response.json()["has_usable_password"])
+        self.assertEqual(response.json()["password_action"], "set")
+
+        social_user.refresh_from_db()
+        self.assertTrue(social_user.check_password("brand-new-password-456"))
+
+    def test_password_reset_sends_email_for_user_with_usable_password(self):
+        response = self.client.post(
+            reverse("password_reset"),
+            data={"email": self.test_user.email},
+        )
+        self.assertRedirects(response, reverse("password_reset_done"))
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.test_user.email])
+
+    def test_password_reset_does_not_email_social_only_user(self):
+        social_user = CustomUser.objects.create(
+            username="google-reset-only",
+            email="google-reset-only@example.com",
+        )
+        social_user.set_unusable_password()
+        social_user.save(update_fields=["password"])
+
+        response = self.client.post(
+            reverse("password_reset"),
+            data={"email": social_user.email},
+        )
+        self.assertRedirects(response, reverse("password_reset_done"))
+        self.assertEqual(len(mail.outbox), 0)
+
     def test_profile_reviews_api_returns_current_users_reviews(self):
         other_user = CustomUser.objects.create_user(
             email="other@example.com",
@@ -651,11 +701,13 @@ class ViewsCoverageTest(TestCase):
         response = self.client.get(reverse("maps:current_user_api"))
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["is_authenticated"])
+        self.assertFalse(response.json()["has_usable_password"])
 
         self.client.force_login(self.test_user)
         response2 = self.client.get(reverse("maps:current_user_api"))
         self.assertEqual(response2.status_code, 200)
         self.assertTrue(response2.json()["is_authenticated"])
+        self.assertTrue(response2.json()["has_usable_password"])
 
     # --- Review API Tests ---
     def test_create_review_api(self):
@@ -1411,6 +1463,25 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(
             response.json()["error"],
             "New password must be different from your current password",
+        )
+
+    def test_change_password_api_social_only_user_requires_new_password_fields(self):
+        social_user = CustomUser.objects.create(
+            username="google-blank",
+            email="google-blank@example.com",
+        )
+        social_user.set_unusable_password()
+        social_user.save(update_fields=["password"])
+
+        self.client.force_login(social_user)
+        response = self.client.post(
+            reverse("maps:change_password_api"),
+            data={"new_password": "", "confirm_password": ""},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "New password and confirmation are required",
         )
 
     # --- review_vote_api missing branches ---

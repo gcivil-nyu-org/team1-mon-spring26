@@ -5,8 +5,10 @@ from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.password_validation import validate_password
 from django.contrib.gis.geos import Polygon, GEOSGeometry
 from django.db import transaction
+from django.core.exceptions import ValidationError
 from .models import (
     AmenityType,
     Amenity,
@@ -464,6 +466,7 @@ def serialize_auth_user(user):
         "username": user.username,
         "bio": user.bio,
         "avatar_url": user.avatar_url,
+        "has_usable_password": user.has_usable_password(),
         "is_authenticated": True,
     }
 
@@ -550,6 +553,7 @@ def current_user_api(request):
                 "email": "",
                 "username": "",
                 "bio": "",
+                "has_usable_password": False,
                 "is_authenticated": False,
             },
             status=200,
@@ -588,6 +592,7 @@ def settings_view(request):
         "maps/settings.html",
         {
             "profile_user": request.user,
+            "has_usable_password": request.user.has_usable_password(),
         },
     )
 
@@ -599,14 +604,24 @@ def change_password_api(request):
     """
     Change the current user's password while preserving the active session.
     """
+    has_usable_password = request.user.has_usable_password()
     current_password = (request.POST.get("current_password") or "").strip()
     new_password = (request.POST.get("new_password") or "").strip()
     confirm_password = (request.POST.get("confirm_password") or "").strip()
 
-    if not current_password or not new_password or not confirm_password:
-        return JsonResponse({"error": "All password fields are required"}, status=400)
+    if has_usable_password:
+        if not current_password or not new_password or not confirm_password:
+            return JsonResponse(
+                {"error": "All password fields are required"},
+                status=400,
+            )
+    elif not new_password or not confirm_password:
+        return JsonResponse(
+            {"error": "New password and confirmation are required"},
+            status=400,
+        )
 
-    if not request.user.check_password(current_password):
+    if has_usable_password and not request.user.check_password(current_password):
         return JsonResponse({"error": "Current password is incorrect"}, status=400)
 
     if new_password != confirm_password:
@@ -615,17 +630,33 @@ def change_password_api(request):
             status=400,
         )
 
-    if current_password == new_password:
+    if has_usable_password and current_password == new_password:
         return JsonResponse(
             {"error": "New password must be different from your current password"},
             status=400,
         )
 
+    try:
+        validate_password(new_password, request.user)
+    except ValidationError as exc:
+        return JsonResponse({"error": " ".join(exc.messages)}, status=400)
+
     request.user.set_password(new_password)
     request.user.save(update_fields=["password"])
     update_session_auth_hash(request, request.user)
 
-    return JsonResponse({"message": "Password updated successfully"}, status=200)
+    return JsonResponse(
+        {
+            "message": (
+                "Password updated successfully"
+                if has_usable_password
+                else "Password set successfully"
+            ),
+            "has_usable_password": True,
+            "password_action": "change" if has_usable_password else "set",
+        },
+        status=200,
+    )
 
 
 @csrf_exempt
@@ -829,17 +860,21 @@ def create_review_api(request):
             return JsonResponse({"error": "Login required"}, status=401)
 
         content_type = request.content_type or ""
+        photo_files = []
         if content_type.startswith("multipart/form-data"):
             amenity_id = request.POST.get("amenity_id")
             rating = request.POST.get("rating", 5)
             review_text = request.POST.get("review_text", "").strip()
-            photo_file = request.FILES.get("photo")
+            photo_files = request.FILES.getlist("photos")
+            if not photo_files:
+                legacy_photo = request.FILES.get("photo")
+                if legacy_photo:
+                    photo_files = [legacy_photo]
         else:
             data = json.loads(request.body)
             amenity_id = data.get("amenity_id")
             rating = data.get("rating", 5)
             review_text = data.get("review_text", "").strip()
-            photo_file = None
 
         if not amenity_id:
             return JsonResponse({"error": "amenity_id required"}, status=400)
@@ -852,9 +887,14 @@ def create_review_api(request):
         if not (1 <= rating <= 5):
             return JsonResponse({"error": "Rating must be between 1 and 5"}, status=400)
 
-        if photo_file:
-            content_type = photo_file.content_type or ""
-            if not content_type.startswith("image/"):
+        if len(photo_files) > 5:
+            return JsonResponse(
+                {"error": "You can upload up to 5 photos per review"}, status=400
+            )
+
+        for photo_file in photo_files:
+            photo_content_type = photo_file.content_type or ""
+            if not photo_content_type.startswith("image/"):
                 return JsonResponse({"error": "Photo must be an image"}, status=400)
             if photo_file.size > 5 * 1024 * 1024:
                 return JsonResponse(
@@ -878,19 +918,22 @@ def create_review_api(request):
             amenity=amenity, user=user, rating=rating, review_text=review_text
         )
 
-        review_photo = None
-        if photo_file:
-            review_photo = AmenityPhoto.objects.create(
-                amenity=amenity,
-                photo=photo_file,
-                uploaded_by=user,
-                is_primary=not AmenityPhoto.objects.filter(amenity=amenity).exists(),
-                caption=f"Review photo by {user.email}",
+        existing_photos = AmenityPhoto.objects.filter(amenity=amenity).exists()
+        review_photos = []
+        for index, photo_file in enumerate(photo_files):
+            review_photos.append(
+                AmenityPhoto.objects.create(
+                    amenity=amenity,
+                    photo=photo_file,
+                    uploaded_by=user,
+                    is_primary=not existing_photos and index == 0,
+                    caption=f"Review photo by {user.email}",
+                )
             )
 
         response_data = serialize_amenity_review(
             review,
-            photo_url=review_photo.photo.url if review_photo else None,
+            photo_url=review_photos[0].photo.url if review_photos else None,
             current_user=request.user,
         )
         response_data["message"] = "Review created successfully"
