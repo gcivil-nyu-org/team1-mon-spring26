@@ -1182,6 +1182,8 @@ def chat_events_sse(request):
         ).aggregate(max_id=Max("id"))
         last_id = last_id_dict.get("max_id") or 0
 
+        pad = " " * 2048
+
         # Keep connection open and poll every 3 seconds
         while True:
             try:
@@ -1202,13 +1204,13 @@ def chat_events_sse(request):
                             )}\n\n"
                     else:
                         # Ignore our own messages
-                        yield ": keep-alive\n\n"
+                        yield f": keep-alive{pad}\n\n"
                 else:
                     # Keep the connection alive to prevent browser/server timeouts
-                    yield ": keep-alive\n\n"
+                    yield f": keep-alive{pad}\n\n"
             except Exception:
                 # Suppress DB disconnect errors; it will retry
-                yield ": keep-alive\n\n"
+                yield f": keep-alive{pad}\n\n"
 
             time.sleep(3)
 

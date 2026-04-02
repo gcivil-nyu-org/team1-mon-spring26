@@ -98,4 +98,8 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('beforeunload', () => {
         if (sseSource) sseSource.close();
     });
+    
+    window.addEventListener('pagehide', () => {
+        if (sseSource) sseSource.close();
+    });
 });
