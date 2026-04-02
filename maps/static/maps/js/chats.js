@@ -114,6 +114,11 @@ const ChatsApp = (() => {
         document.getElementById('participant-tags-input')?.addEventListener('click', () => {
             document.getElementById('participant-email-input')?.focus();
         });
+
+        // Listen for new messages from the SSE stream
+        window.addEventListener('chat:new_message', () => {
+            refreshActiveChat();
+        });
     }
 
     async function loadChats() {
@@ -141,7 +146,7 @@ const ChatsApp = (() => {
                 <div class="empty-chats">
                     <div class="empty-icon">💬</div>
                     <div class="empty-text">No chats yet</div>
-                    <button class="btn-primary" style="width:auto;padding:10px 20px;" onclick="ChatsApp.openNewChatModal()">Start a conversation</button>
+                    <button class="btn-secondary" onclick="ChatsApp.openNewChatModal()">Start a conversation</button>
                 </div>
             `;
             return;
@@ -156,7 +161,7 @@ const ChatsApp = (() => {
                 <div class="chat-item-preview">
                     ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
                 </div>
-                ${chat.chat_type !== 'direct' && chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
+                ${chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
             </div>
         `).join('');
 
@@ -184,52 +189,27 @@ const ChatsApp = (() => {
                 amenity_id: info.amenity_id,
                 amenity_name: null,
                 participant_count: null,
-                other_user_email: info.other_user_email || null,
-                other_user_avatar: info.other_user_avatar || null,
             };
         }
 
-        const isDirect = currentChat.chat_type === 'direct';
-        const otherUserProfileUrl = isDirect && currentChat.other_user_email
-            ? `/profile/?user=${encodeURIComponent(currentChat.other_user_email)}`
-            : null;
+        // Clear the global "New" notification badge now that we are viewing a chat
+        const chatsLink = document.querySelector('a[href^="/chats/"]');
+        if (chatsLink) {
+            chatsLink.href = '/chats/';
+            const badge = chatsLink.querySelector('.chat-notification-badge');
+            if (badge) badge.remove();
+        }
 
         const chatMain = document.getElementById('chat-main');
         chatMain.innerHTML = `
             <div class="chat-header">
                 <div class="chat-header-info">
-                    ${isDirect && otherUserProfileUrl ? `
-                        <a href="${otherUserProfileUrl}" class="chat-header-avatar-link">
-                            <img
-                                class="chat-header-avatar"
-                                src="${escapeHtml(currentChat.other_user_avatar || '')}"
-                                alt="Profile"
-                                onerror="this.onerror=null;this.src='/static/maps/default-avatar.svg';"
-                            >
-                        </a>
-                    ` : ''}
-                    <div class="chat-header-title-wrap">
-                        <h2>${escapeHtml(currentChat.name)}</h2>
-                        ${currentChat.chat_type === 'amenity_forum' && currentChat.amenity_name ? `<div class="chat-header-meta">📍 ${escapeHtml(currentChat.amenity_name)}</div>` : ''}
+                    <h2>${escapeHtml(currentChat.name)}</h2>
+                    <div class="chat-header-meta">
+                        ${currentChat.chat_type === 'amenity_forum' && currentChat.amenity_name ? `📍 ${escapeHtml(currentChat.amenity_name)}` : ''}
+                        ${currentChat.participant_count ? `<span>${currentChat.participant_count} participants</span>` : ''}
                     </div>
                 </div>
-                ${!isDirect ? `
-                    <div class="chat-header-actions">
-                        <div class="chat-participants-wrap">
-                            <button class="chat-participants-btn" id="chat-participants-btn">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.85"/></svg>
-                                <span id="participants-count-label">${currentChat.participant_count || ''}</span>
-                            </button>
-                            <div class="chat-participants-panel" id="chat-participants-panel" hidden>
-                                <div class="chat-participants-panel-title">Participants</div>
-                                <div id="chat-participants-list" class="chat-participants-list">
-                                    <div class="loading-spinner" style="font-size:12px;padding:8px;">Loading...</div>
-                                </div>
-                            </div>
-                        </div>
-                        <button class="chat-leave-btn" id="chat-leave-btn">Leave chat</button>
-                    </div>
-                ` : ''}
             </div>
             <div class="chat-messages" id="chat-messages">
                 <div class="loading-spinner">Loading messages...</div>
@@ -245,83 +225,31 @@ const ChatsApp = (() => {
 
         // Set up sending
         document.getElementById('send-btn').addEventListener('click', sendMessage);
-        document.getElementById('message-input').addEventListener('keydown', (e) => {
+        const msgInput = document.getElementById('message-input');
+        msgInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
             }
         });
+        msgInput.addEventListener('focus', clearNotificationIfCurrentChat);
+        msgInput.addEventListener('input', clearNotificationIfCurrentChat);
 
-        if (!isDirect) {
-            // Participants panel toggle
-            const participantsBtn = document.getElementById('chat-participants-btn');
-            const participantsPanel = document.getElementById('chat-participants-panel');
-            participantsBtn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const isOpen = !participantsPanel.hidden;
-                if (isOpen) {
-                    participantsPanel.hidden = true;
-                    return;
-                }
-                participantsPanel.hidden = false;
-                await loadParticipants(chatId);
-            });
-            document.addEventListener('click', function closePanel(e) {
-                if (!participantsPanel.contains(e.target) && e.target !== participantsBtn) {
-                    participantsPanel.hidden = true;
-                    document.removeEventListener('click', closePanel);
-                }
-            });
-
-            // Leave chat
-            document.getElementById('chat-leave-btn').addEventListener('click', async () => {
-                if (!confirm('Leave this chat?')) return;
-                try {
-                    const res = await fetch('/api/chats/leave/', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRFToken': getCookie('csrftoken'),
-                        },
-                        body: JSON.stringify({ chat_id: currentChat.id }),
-                    });
-                    if (res.ok) {
-                        currentChat = null;
-                        await loadChats();
-                        document.getElementById('chat-main').innerHTML = `
-                            <div class="chat-empty">
-                                <div class="empty-icon">💬</div>
-                                <div class="empty-title">Select a chat to start messaging</div>
-                                <div class="empty-subtitle">or start a new conversation</div>
-                            </div>`;
-                    } else {
-                        const data = await res.json();
-                        alert(data.error || 'Could not leave chat');
-                    }
-                } catch {
-                    alert('Network error');
-                }
-            });
-        }
+        // Auto-focus the input area so the user can start typing immediately
+        msgInput.focus();
     }
 
-    async function loadParticipants(chatId) {
-        const list = document.getElementById('chat-participants-list');
-        const countLabel = document.getElementById('participants-count-label');
-        try {
-            const res = await fetch(`/api/chats/participants/?chat_id=${chatId}`);
-            const data = await res.json();
-            if (!res.ok) { list.textContent = data.error || 'Error'; return; }
-            if (countLabel) countLabel.textContent = data.participants.length;
-            list.innerHTML = data.participants.map(p => `
-                <a class="chat-participant-item" href="/profile/?user=${encodeURIComponent(p.email)}">
-                    <img class="chat-participant-avatar" src="${escapeHtml(p.avatar_url || '')}"
-                        onerror="this.onerror=null;this.src='/static/maps/default-avatar.svg';" alt="">
-                    <span class="chat-participant-name">${escapeHtml(p.username)}</span>
-                </a>
-            `).join('');
-        } catch {
-            list.textContent = 'Failed to load participants';
+    function clearNotificationIfCurrentChat() {
+        if (!currentChat) return;
+        const chatsLink = document.querySelector('a[href^="/chats/"]');
+        if (chatsLink) {
+            const url = new URL(chatsLink.href, window.location.origin);
+            const notifChatId = url.searchParams.get('chat_id');
+            if (notifChatId == currentChat.id) {
+                chatsLink.href = '/chats/';
+                const badge = chatsLink.querySelector('.chat-notification-badge');
+                if (badge) badge.remove();
+            }
         }
     }
 
@@ -385,6 +313,7 @@ const ChatsApp = (() => {
             if (response.ok) {
                 input.value = '';
                 await loadChatMessages(currentChat.id);
+                await loadChats();
             } else {
                 alert('Error sending message: ' + (data.error || 'Unknown error'));
             }
@@ -721,6 +650,20 @@ const ChatsApp = (() => {
         }
     }
 
+    async function refreshActiveChat() {
+        await loadChats();
+        if (currentChat) {
+            // Refresh current chat view to get latest messages
+            await loadChatMessages(currentChat.id, 1);
+            
+            // If the user is already focused on the input for this chat, clear notification immediately
+            const msgInput = document.getElementById('message-input');
+            if (msgInput && document.activeElement === msgInput) {
+                clearNotificationIfCurrentChat();
+            }
+        }
+    }
+
     // Export public methods
     return {
         init,
@@ -728,8 +671,11 @@ const ChatsApp = (() => {
         closeNewChatModal,
         openChat,
         loadChats,
+        refreshActiveChat,
     };
 })();
+
+window.ChatsApp = ChatsApp;
 
 // Utility functions
 function escapeHtml(text) {
