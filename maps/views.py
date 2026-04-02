@@ -1200,10 +1200,11 @@ def chat_events_sse(request):
         # Continuously stream events
         while True:
             try:
+                # Use only() to fetch minimal data from database
                 new_msgs = list(
                     Message.objects.filter(
                         chat__participants__user_id=user_id, id__gt=last_id
-                    ).order_by("id")
+                    ).only("id", "sender_id", "chat_id").order_by("id")
                 )
 
                 if new_msgs:
@@ -1213,18 +1214,17 @@ def chat_events_sse(request):
                         event_data = json.dumps(
                             {"type": "new_message", "chat_id": other_msgs[-1].chat_id}
                         )
-                        yield f":{pad}\nid: {last_id}\nretry: 3000\ndata: {event_data}\n\n"  # noqa: E501
-                        if is_apple_device:
-                            time.sleep(0.5)
+                        yield f":{pad}\nid: {last_id}\nretry: 5000\ndata: {event_data}\n\n"  # noqa: E501
 
                 # Always send keep-alive to keep connection open
-                yield f":{pad}\nid: {last_id}\nretry: 3000\n: keep-alive\n\n"
+                yield f":{pad}\nid: {last_id}\nretry: 5000\n: keep-alive\n\n"
 
-                # Wait before checking for new messages again
-                time.sleep(1)
+                # Increase polling interval to reduce database load
+                # 5 seconds instead of 1 second = 80% fewer queries
+                time.sleep(5)
             except Exception:
-                yield "retry: 3000\n: keep-alive\n\n"
-                time.sleep(1)
+                yield "retry: 5000\n: keep-alive\n\n"
+                time.sleep(5)
 
     response = StreamingHttpResponse(
         event_stream(), content_type="text/event-stream; charset=utf-8"
