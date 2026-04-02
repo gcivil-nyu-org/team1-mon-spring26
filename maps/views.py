@@ -1239,12 +1239,12 @@ def chat_events_sse(request):
 
                 # Long interval: 15 seconds between checks
                 # 100 concurrent users = ~6.7 queries/second (vs hundreds before)
-                time.sleep(5)
+                time.sleep(2)
             except Exception:
                 # connection.close()  # Release DB connection on error too
                 event_id += 1
                 yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
-                time.sleep(5)
+                time.sleep(2)
 
     response = StreamingHttpResponse(
         event_stream(), content_type="text/event-stream; charset=utf-8"
