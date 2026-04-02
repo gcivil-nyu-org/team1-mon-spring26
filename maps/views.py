@@ -1182,11 +1182,11 @@ def chat_events_sse(request):
     def event_stream():
         from django.db.models import Max
         import json
+        import time
 
-        # Safari/WebKit bug: Needs ~512 bytes of padding to process the stream
+        # Safari/WebKit bug: Needs ~2048 bytes of padding to process the stream
         # before the connection closes, otherwise it discards short payloads.
-        if is_apple_device:
-            yield f": {' ' * 512}\n\n"
+        pad = ' ' * 2048 if is_apple_device else ''
 
         if last_event_id and last_event_id.isdigit():
             last_id = int(last_event_id)
@@ -1208,20 +1208,24 @@ def chat_events_sse(request):
                 last_id = new_msgs[-1].id
                 other_msgs = [m for m in new_msgs if m.sender_id != user_id]
                 if other_msgs:
-                    yield f"id: {last_id}\nretry: 3000\ndata: {json.dumps(
-                        {'type': 'new_message', 'chat_id': other_msgs[-1].chat_id}
-                        )}\n\n"
+                    yield f":{pad}\nid: {last_id}\nretry: 3000\ndata: {json.dumps({'type': 'new_message', 'chat_id': other_msgs[-1].chat_id})}\n\n"
+                    if is_apple_device:
+                        time.sleep(0.5)
                     return
 
-            yield f"id: {last_id}\nretry: 3000\n: keep-alive\n\n"
+            yield f":{pad}\nid: {last_id}\nretry: 3000\n: keep-alive\n\n"
+            if is_apple_device:
+                time.sleep(0.5)
         except Exception:
             yield "retry: 3000\n: keep-alive\n\n"
+            if is_apple_device:
+                time.sleep(0.5)
 
     response = StreamingHttpResponse(
         event_stream(), content_type="text/event-stream; charset=utf-8"
     )
-    response["Cache-Control"] = "no-cache, no-transform"
-    response["Connection"] = "keep-alive"
+    # Aggressive Cache-Control prevents Safari from looping stale Event-IDs
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response["X-Accel-Buffering"] = "no"  # Disable buffering in nginx
     return response
 
