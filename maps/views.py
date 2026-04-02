@@ -1162,7 +1162,7 @@ def get_amenity_reviews_api(request):
 @transaction.non_atomic_requests
 def chat_events_sse(request):
     """SSE endpoint for chat notifications.
-    
+
     Uses a hybrid approach:
     - Caches user's chat IDs at connection start (one query)
     - Polls infrequently (every 15 seconds) for new messages
@@ -1189,7 +1189,7 @@ def chat_events_sse(request):
                 "chat_id", flat=True
             )
         )
-        
+
         if not user_chat_ids:
             # User has no chats, send keep-alive indefinitely
             event_id = 0
@@ -1201,9 +1201,9 @@ def chat_events_sse(request):
             return
 
         # Get initial max ID
-        last_id_dict = Message.objects.filter(
-            chat_id__in=user_chat_ids
-        ).aggregate(max_id=Max("id"))
+        last_id_dict = Message.objects.filter(chat_id__in=user_chat_ids).aggregate(
+            max_id=Max("id")
+        )
         last_id = last_id_dict.get("max_id") or 0
         event_id = 0
 
@@ -1211,32 +1211,33 @@ def chat_events_sse(request):
         while True:
             try:
                 event_id += 1
-                
+
                 # Query once every 15 seconds (much less aggressive)
-                new_msgs = Message.objects.filter(
-                    chat_id__in=user_chat_ids, 
-                    id__gt=last_id
-                ).only("id", "sender_id", "chat_id").order_by("id")[:1]
-                
+                new_msgs = (
+                    Message.objects.filter(chat_id__in=user_chat_ids, id__gt=last_id)
+                    .only("id", "sender_id", "chat_id")
+                    .order_by("id")[:1]
+                )
+
                 if new_msgs:
                     msg = new_msgs[0]
                     last_id = msg.id
-                    
+
                     # Only send notification if not sent by current user
                     if msg.sender_id != user_id:
                         event_data = json.dumps(
                             {"type": "new_message", "chat_id": msg.chat_id}
                         )
-                        connection.close()  # Release DB connection before yielding/sleeping
+                        connection.close()  # Release DB con  before yield/sleep
                         yield f"id: {event_id}\nretry: 60000\ndata: {event_data}\n\n"
                         continue
 
                     connection.close()  # Release DB connection before yielding/sleeping
                 else:
-                    connection.close()  # Ensure connection is closed when there are no new messages
+                    connection.close()  # Ensure con closed when no new messages
                 # Send keep-alive
                 yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
-                
+
                 # Long interval: 15 seconds between checks
                 # 100 concurrent users = ~6.7 queries/second (vs hundreds before)
                 time.sleep(5)
