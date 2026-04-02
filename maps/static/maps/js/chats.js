@@ -114,6 +114,11 @@ const ChatsApp = (() => {
         document.getElementById('participant-tags-input')?.addEventListener('click', () => {
             document.getElementById('participant-email-input')?.focus();
         });
+
+        // Listen for new messages from the SSE stream
+        window.addEventListener('chat:new_message', () => {
+            refreshActiveChat();
+        });
     }
 
     async function loadChats() {
@@ -187,6 +192,14 @@ const ChatsApp = (() => {
             };
         }
 
+        // Clear the global "New" notification badge now that we are viewing a chat
+        const chatsLink = document.querySelector('a[href^="/chats/"]');
+        if (chatsLink) {
+            chatsLink.href = '/chats/';
+            const badge = chatsLink.querySelector('.chat-notification-badge');
+            if (badge) badge.remove();
+        }
+
         const chatMain = document.getElementById('chat-main');
         chatMain.innerHTML = `
             <div class="chat-header">
@@ -212,12 +225,32 @@ const ChatsApp = (() => {
 
         // Set up sending
         document.getElementById('send-btn').addEventListener('click', sendMessage);
-        document.getElementById('message-input').addEventListener('keydown', (e) => {
+        const msgInput = document.getElementById('message-input');
+        msgInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
             }
         });
+        msgInput.addEventListener('focus', clearNotificationIfCurrentChat);
+        msgInput.addEventListener('input', clearNotificationIfCurrentChat);
+
+        // Auto-focus the input area so the user can start typing immediately
+        msgInput.focus();
+    }
+
+    function clearNotificationIfCurrentChat() {
+        if (!currentChat) return;
+        const chatsLink = document.querySelector('a[href^="/chats/"]');
+        if (chatsLink) {
+            const url = new URL(chatsLink.href, window.location.origin);
+            const notifChatId = url.searchParams.get('chat_id');
+            if (notifChatId == currentChat.id) {
+                chatsLink.href = '/chats/';
+                const badge = chatsLink.querySelector('.chat-notification-badge');
+                if (badge) badge.remove();
+            }
+        }
     }
 
     async function loadChatMessages(chatId, page = 1) {
@@ -280,6 +313,7 @@ const ChatsApp = (() => {
             if (response.ok) {
                 input.value = '';
                 await loadChatMessages(currentChat.id);
+                await loadChats();
             } else {
                 alert('Error sending message: ' + (data.error || 'Unknown error'));
             }
@@ -616,6 +650,20 @@ const ChatsApp = (() => {
         }
     }
 
+    async function refreshActiveChat() {
+        await loadChats();
+        if (currentChat) {
+            // Refresh current chat view to get latest messages
+            await loadChatMessages(currentChat.id, 1);
+            
+            // If the user is already focused on the input for this chat, clear notification immediately
+            const msgInput = document.getElementById('message-input');
+            if (msgInput && document.activeElement === msgInput) {
+                clearNotificationIfCurrentChat();
+            }
+        }
+    }
+
     // Export public methods
     return {
         init,
@@ -623,8 +671,11 @@ const ChatsApp = (() => {
         closeNewChatModal,
         openChat,
         loadChats,
+        refreshActiveChat,
     };
 })();
+
+window.ChatsApp = ChatsApp;
 
 // Utility functions
 function escapeHtml(text) {

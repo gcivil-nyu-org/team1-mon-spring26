@@ -762,9 +762,26 @@ class ViewsCoverageTest(TestCase):
         )
         response_file = self.client.post(
             reverse("maps:create_review_api"),
-            data={"amenity_id": self.amenity_inactive.id, "rating": 3, "photo": photo},
+            data={"amenity_id": self.amenity_inactive.id, "rating": 3, "photos": photo},
         )
         self.assertEqual(response_file.status_code, 201)
+
+        # Test multiple photos
+        photo1 = SimpleUploadedFile(
+            "test1.jpg", b"file_content1", content_type="image/jpeg"
+        )
+        photo2 = SimpleUploadedFile(
+            "test2.jpg", b"file_content2", content_type="image/jpeg"
+        )
+        response_multiple = self.client.post(
+            reverse("maps:create_review_api"),
+            data={
+                "amenity_id": self.amenity_bike_cluster1.id,
+                "rating": 4,
+                "photos": [photo1, photo2],
+            },
+        )
+        self.assertEqual(response_multiple.status_code, 201)
 
         bad_photo = SimpleUploadedFile(
             "test.txt", b"content", content_type="text/plain"
@@ -774,7 +791,7 @@ class ViewsCoverageTest(TestCase):
             data={
                 "amenity_id": self.amenity_bike_cluster1.id,
                 "rating": 3,
-                "photo": bad_photo,
+                "photos": bad_photo,
             },
         )
         self.assertEqual(response_bad_file.status_code, 400)
@@ -785,10 +802,26 @@ class ViewsCoverageTest(TestCase):
             data={
                 "amenity_id": self.amenity_bike_cluster1.id,
                 "rating": 3,
-                "photo": bad_photo,
+                "photos": bad_photo,
             },
         )
         self.assertEqual(response_big_file.status_code, 400)
+
+        too_many_photos = [
+            SimpleUploadedFile(
+                f"img{i}.jpg", b"file_content", content_type="image/jpeg"
+            )
+            for i in range(6)
+        ]
+        response_too_many = self.client.post(
+            reverse("maps:create_review_api"),
+            data={
+                "amenity_id": self.amenity_bike_cluster2.id,
+                "rating": 4,
+                "photos": too_many_photos,
+            },
+        )
+        self.assertEqual(response_too_many.status_code, 400)
 
         response_not_found = self.client.post(
             reverse("maps:create_review_api"),

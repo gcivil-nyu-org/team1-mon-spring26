@@ -1,5 +1,5 @@
 from django.shortcuts import render
-from django.http import JsonResponse
+from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import authenticate, login, logout
@@ -7,6 +7,7 @@ from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.gis.geos import Polygon, GEOSGeometry
+from django.db import transaction
 from django.core.exceptions import ValidationError
 from .models import (
     AmenityType,
@@ -34,6 +35,7 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from decimal import Decimal, InvalidOperation
 import json
+import time
 
 
 def normalize_longitude(lon):
@@ -1145,6 +1147,74 @@ def get_amenity_reviews_api(request):
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@transaction.non_atomic_requests
+def chat_events_sse(request):
+    """SSE endpoint to notify users of new chat messages."""
+    if not request.user.is_authenticated:
+        return StreamingHttpResponse(
+            'data: {"error": "unauthorized"}\n\n', content_type="text/event-stream"
+        )
+
+    # Resolve user ID outside the generator to prevent lazy-evaluation
+    # issues after closing the database connection inside the loop.
+    user_id = request.user.id
+
+    def event_stream():
+        from django.db.models import Max
+        import json
+
+        # Get initial max ID
+        last_id_dict = Message.objects.filter(
+            chat__participants__user_id=user_id
+        ).aggregate(max_id=Max("id"))
+        last_id = last_id_dict.get("max_id") or 0
+
+        # Keep connection open and poll every 3 seconds
+        while True:
+            try:
+                # Eagerly evaluate the list to prevent dual-query race conditions
+                new_msgs = list(
+                    Message.objects.filter(
+                        chat__participants__user_id=user_id, id__gt=last_id
+                    ).order_by("id")
+                )
+
+                if new_msgs:
+                    last_id = new_msgs[-1].id
+                    # Only push an event if there's a message from someone else
+                    other_msgs = [m for m in new_msgs if m.sender_id != user_id]
+                    if other_msgs:
+                        yield f"data: {json.dumps(
+                            {'type': 'new_message', 'chat_id': other_msgs[-1].chat_id}
+                            )}\n\n"
+                    else:
+                        # Ignore our own messages
+                        yield ": keep-alive\n\n"
+                else:
+                    # Keep the connection alive to prevent browser/server timeouts
+                    yield ": keep-alive\n\n"
+            except Exception:
+                # Suppress DB disconnect errors; it will retry
+                yield ": keep-alive\n\n"
+
+            time.sleep(3)
+
+            try:
+                # Close connection to force a fresh database read on the next iteration
+                from django.db import connection
+
+                connection.close()
+            except Exception:
+                pass
+
+    response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"  # Disable buffering in nginx
+    return response
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
 def get_user_chats_api(request):
     """Get all chats for the current user."""
     try:
@@ -1464,6 +1534,69 @@ def create_group_chat_api(request):
         return JsonResponse({"error": str(e)}, status=500)
 
 
+@csrf_exempt
+@require_http_methods(["GET"])
+def get_chat_participants_api(request):
+    """Get participants for a specific chat."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        chat_id = request.GET.get("chat_id")
+        if not chat_id:
+            return JsonResponse({"error": "chat_id parameter required"}, status=400)
+
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return JsonResponse({"error": "Chat not found"}, status=404)
+
+        if not chat.participants.filter(user=request.user).exists():
+            return JsonResponse(
+                {"error": "You are not a participant in this chat"}, status=403
+            )
+
+        participants_data = [
+            {
+                "user_id": p.user.id,
+                "email": p.user.email,
+                "joined_at": p.joined_at.isoformat(),
+            }
+            for p in chat.participants.select_related("user")
+        ]
+
+        return JsonResponse(
+            {
+                "chat_id": chat.id,
+                "participants": participants_data,
+            }
+        )
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def leave_chat_api(request):
+    """Leave a chat."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        data = json.loads(request.body)
+        chat_id = data.get("chat_id")
+        if not chat_id:
+            return JsonResponse({"error": "chat_id required"}, status=400)
+
+        ChatParticipant.objects.filter(chat_id=chat_id, user=request.user).delete()
+
+        return JsonResponse({"message": "Successfully left the chat"})
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
 @require_http_methods(["GET"])
 def amenity_search_api(request):
     """Search amenities by name for group chat creation."""
@@ -1536,7 +1669,6 @@ def get_amenity_reviewers_api(request):
             },
             status=200,
         )
-
     except (ValueError, TypeError):
         return JsonResponse({"error": "Invalid limit parameter"}, status=400)
     except Exception as e:

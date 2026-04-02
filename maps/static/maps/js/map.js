@@ -1,4 +1,14 @@
-const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0 }).setView([40.73, -73.99], 13);
+let restoredState = null;
+try {
+    if (!new URLSearchParams(window.location.search).has('auth_required')) {
+        restoredState = JSON.parse(sessionStorage.getItem('mapState'));
+    }
+} catch (e) { /* ignore */ }
+
+const initialCenter = restoredState ? restoredState.center : [40.73, -73.99];
+const initialZoom = restoredState ? restoredState.zoom : 13;
+
+const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0 }).setView(initialCenter, initialZoom);
 
 const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const tileUrl = isLocalhost ? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' : '/tiles/{z}/{x}/{y}.png';
@@ -53,7 +63,7 @@ function getCookie(name) {
     return cookieValue;
 }
 
-function initializeGeolocation() {
+function initializeGeolocation(shouldSetView = true) {
     const statusEl = document.getElementById('location-status');
     const dotEl    = document.getElementById('location-dot');
     const locBtn   = document.getElementById('location-button');
@@ -61,13 +71,15 @@ function initializeGeolocation() {
     locBtn.classList.add('locating');
     statusEl.textContent = 'Locating…';
     const tid = setTimeout(() => {
-        if (!userLocation) { statusEl.textContent = 'Default location'; locBtn.classList.remove('locating'); map.setView([40.73, -73.99], 13); }
+        if (!userLocation) { statusEl.textContent = 'Default location'; locBtn.classList.remove('locating'); if (shouldSetView) map.setView([40.73, -73.99], 13); }
     }, 8000);
     navigator.geolocation.getCurrentPosition(
         ({ coords: { latitude, longitude } }) => {
             clearTimeout(tid);
             userLocation = { latitude, longitude };
-            map.setView([latitude, longitude], 15);
+            if (shouldSetView) {
+                map.setView([latitude, longitude], 15);
+            }
             if (userMarker) map.removeLayer(userMarker);
             userMarker = L.marker([latitude, longitude], { title: 'Your Location', zIndexOffset: 100 }).addTo(map);
             userMarker.bindPopup('Your Location');
@@ -80,7 +92,9 @@ function initializeGeolocation() {
             locBtn.classList.remove('locating');
             dotEl.classList.add('denied');
             statusEl.textContent = ({ 1: 'Permission denied', 2: 'Unavailable', 3: 'Timed out' })[err.code] || 'Unable to locate';
-            map.setView([40.73, -73.99], 13);
+            if (shouldSetView) {
+                map.setView([40.73, -73.99], 13);
+            }
         },
         { enableHighAccuracy: true, timeout: 7000, maximumAge: 0 }
     );
@@ -158,6 +172,7 @@ function loadAmenityTypes() {
             });
         });
         updateHoursFilterVisibility();
+        loadAmenities();
     }).catch(e => console.error('Error loading types:', e));
 }
 
@@ -1131,8 +1146,13 @@ function renderReviewsTab(amenity) {
                 <button type="button" class="star-btn lit" data-value="5" aria-label="Rate 5 stars">★</button>
             </div>
             <textarea class="review-textarea js-review-text" rows="3" maxlength="600" placeholder="Share your experience at this location (optional)..."></textarea>
-            <input type="file" class="js-review-photo" accept="image/*" style="margin-top:8px;font-size:12px;color:var(--text-2)">
-            <div style="display:flex;justify-content:flex-end">
+            <div style="margin-top:12px">
+                <label style="display:block;font-size:12px;color:var(--text-2);margin-bottom:6px;font-weight:500">Add Photos (optional)</label>
+                <p style="font-size:11px;color:var(--text-3);margin:0 0 6px 0">Max 5MB per photo, up to 5 photos</p>
+                <input type="file" class="js-review-photos" accept="image/*" multiple style="font-size:12px;color:var(--text-2)">
+                <div class="js-photo-preview" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:8px;margin-top:8px"></div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;margin-top:12px">
                 <button type="button" class="review-submit js-review-submit">Submit Review</button>
             </div>
         </div>`;
@@ -1161,7 +1181,7 @@ function renderReviewsTab(amenity) {
                 </div>
                 <div class="rv-review-text">${top.review_text || 'No written comment.'}</div>
                 ${renderVoteControls(top, loggedIn, currentEmail, true)}
-                ${top.photo_url ? `<img class="rv-review-photo" src="${top.photo_url}" alt="Review photo">` : ''}
+                ${renderReviewPhotos(top)}
             </div>
         </div>`;
 
@@ -1189,7 +1209,7 @@ function renderReviewsTab(amenity) {
                         <div class="review-stars">${rStars}</div>
                         <div class="review-text">${r.review_text || 'No written comment.'}</div>
                         ${renderVoteControls(r, loggedIn, currentEmail)}
-                        ${r.photo_url ? `<img class="review-photo" src="${r.photo_url}" alt="Review photo">` : ''}
+                        ${renderReviewPhotos(r)}
                     </div>`;
                 }).join('')}</div>
             </div>`;
@@ -1268,6 +1288,7 @@ function renderReviewsTab(amenity) {
     }
 
     attachVoteHandlers(amenity, pane);
+    attachReviewPhotoCarousels(pane);
 
     const starPicker = pane.querySelector('.js-star-picker');
     if (starPicker) {
@@ -1280,6 +1301,79 @@ function renderReviewsTab(amenity) {
             });
         });
     }
+
+    // Handle multiple photo uploads with preview
+    const photoInput = pane.querySelector('.js-review-photos');
+    if (photoInput) {
+        photoInput.addEventListener('change', () => {
+            updatePhotoPreview(pane);
+        });
+    }
+}
+
+function updatePhotoPreview(pane) {
+    const photoInput = pane.querySelector('.js-review-photos');
+    const previewContainer = pane.querySelector('.js-photo-preview');
+    if (!photoInput || !previewContainer) return;
+
+    const files = Array.from(photoInput.files);
+    if (files.length > 5) {
+        const dt = new DataTransfer();
+        files.slice(0, 5).forEach(file => dt.items.add(file));
+        photoInput.files = dt.files;
+        showToast('You can upload up to 5 photos per review.', 'warn');
+    }
+
+    const previewFiles = Array.from(photoInput.files);
+    previewContainer.innerHTML = '';
+
+    previewFiles.forEach((file, index) => {
+        // Validate file size
+        const maxSize = 5 * 1024 * 1024;
+        if (file.size > maxSize) {
+            showToast(`Photo "${file.name}" exceeds 5MB limit and will be skipped`, 'warn');
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const thumb = document.createElement('div');
+            thumb.className = 'photo-thumb';
+            thumb.style.cssText = 'position:relative;border-radius:4px;overflow:hidden;background:#f0f0f0;aspect-ratio:1;cursor:pointer';
+            thumb.innerHTML = `
+                <img src="${e.target.result}" style="width:100%;height:100%;object-fit:cover;display:block">
+                <button type="button" class="photo-thumb-delete" data-index="${index}" 
+                    style="position:absolute;top:2px;right:2px;background:#ff4444;color:white;border:none;border-radius:3px;width:20px;height:20px;padding:0;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center">×</button>
+            `;
+            previewContainer.appendChild(thumb);
+
+            thumb.querySelector('.photo-thumb-delete').addEventListener('click', (evt) => {
+                evt.preventDefault();
+                evt.stopPropagation();
+                const dt = new DataTransfer();
+                Array.from(photoInput.files).forEach((f, i) => {
+                    if (i !== index) dt.items.add(f);
+                });
+                photoInput.files = dt.files;
+                updatePhotoPreview(pane);
+            });
+        };
+        reader.readAsDataURL(file);
+    });
+
+    if (previewFiles.length > 0) {
+        // Show file count
+        if (previewContainer.previousElementSibling && previewContainer.previousElementSibling.classList.contains('photo-count')) {
+            previewContainer.previousElementSibling.remove();
+        }
+        const countEl = document.createElement('p');
+        countEl.className = 'photo-count';
+        countEl.style.cssText = 'font-size:11px;color:var(--text-3);margin:0 0 6px 0';
+        countEl.textContent = `${previewFiles.length} photo${previewFiles.length !== 1 ? 's' : ''} selected`;
+        previewContainer.parentNode.insertBefore(countEl, previewContainer);
+    } else if (previewContainer.previousElementSibling && previewContainer.previousElementSibling.classList.contains('photo-count')) {
+        previewContainer.previousElementSibling.remove();
+    }
 }
 
 function submitReview(amenity, pane) {
@@ -1290,12 +1384,11 @@ function submitReview(amenity, pane) {
 
     const textEl = pane.querySelector('.js-review-text');
     const starPicker = pane.querySelector('.js-star-picker');
-    const photoEl = pane.querySelector('.js-review-photo');
+    const photoInput = pane.querySelector('.js-review-photos');
     const btn = pane.querySelector('.js-review-submit');
     if (!textEl || !btn || !starPicker) return;
 
     const rating = Math.min(5, Math.max(1, parseInt(starPicker.dataset.rating || '5', 10) || 5));
-
     const reviewText = textEl.value.trim();
 
     btn.disabled = true;
@@ -1305,7 +1398,14 @@ function submitReview(amenity, pane) {
     formData.append('amenity_id', String(amenity.id));
     formData.append('rating', String(rating));
     formData.append('review_text', reviewText);
-    if (photoEl && photoEl.files && photoEl.files[0]) formData.append('photo', photoEl.files[0]);
+
+    // Add all selected photos
+    if (photoInput && photoInput.files) {
+        const files = Array.from(photoInput.files).slice(0, 5);
+        files.forEach(file => {
+            formData.append('photos', file);
+        });
+    }
 
     fetch('/api/reviews/', {
         method: 'POST',
@@ -1330,7 +1430,8 @@ function submitReview(amenity, pane) {
                 vote_score: Number(b.vote_score || 0),
                 user_vote: Number(b.user_vote || 0),
                 review_text: b.review_text || reviewText,
-                photo_url: b.photo_url || null,
+                photo_url: b.photo_url || null,  // Backward compatibility
+                photo_urls: b.photo_urls || (b.photo_url ? [b.photo_url] : []),
                 created_at: b.created_at || new Date().toISOString(),
             };
 
@@ -1406,6 +1507,65 @@ function compareReviewsByVotes(a, b) {
     const dateA = new Date(a.created_at || 0).getTime();
     const dateB = new Date(b.created_at || 0).getTime();
     return dateB - dateA;
+}
+
+function renderReviewPhotos(review) {
+    const photoUrls = review.photo_urls || [];
+    const fallbackPhoto = review.photo_url;
+
+    if (photoUrls.length > 1) {
+        const photos = photoUrls
+            .map((url, idx) => `<img class="rv-review-photo" src="${url}" alt="Review photo ${idx + 1}" style="min-width:100%;width:100%;height:180px;object-fit:cover;display:block;">`)
+            .join('');
+        return `<div class="review-photo-carousel" data-carousel style="position:relative;margin-top:8px;overflow:hidden;border-radius:10px;">
+            <div class="review-photo-track" data-carousel-track data-index="0" style="display:flex;transition:transform .25s ease;">${photos}</div>
+            <button type="button" class="review-photo-arrow prev" data-carousel-prev aria-label="Previous photo" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);border:none;border-radius:999px;width:30px;height:30px;background:rgba(0,0,0,.55);color:#fff;cursor:pointer;font-size:16px;line-height:1;">&#8249;</button>
+            <button type="button" class="review-photo-arrow next" data-carousel-next aria-label="Next photo" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);border:none;border-radius:999px;width:30px;height:30px;background:rgba(0,0,0,.55);color:#fff;cursor:pointer;font-size:16px;line-height:1;">&#8250;</button>
+        </div>`;
+    }
+
+    if (photoUrls.length === 1) {
+        return `<img class="rv-review-photo" src="${photoUrls[0]}" alt="Review photo" style="width:100%;height:180px;object-fit:cover;display:block;margin-top:8px;border-radius:10px;">`;
+    }
+
+    // Fallback to single photo for backward compatibility
+    if (fallbackPhoto) {
+        return `<img class="rv-review-photo" src="${fallbackPhoto}" alt="Review photo" style="width:100%;height:180px;object-fit:cover;display:block;margin-top:8px;border-radius:10px;">`;
+    }
+
+    return '';
+}
+
+function attachReviewPhotoCarousels(pane) {
+    pane.querySelectorAll('[data-carousel]').forEach(carousel => {
+        const track = carousel.querySelector('[data-carousel-track]');
+        const prevBtn = carousel.querySelector('[data-carousel-prev]');
+        const nextBtn = carousel.querySelector('[data-carousel-next]');
+        if (!track || !prevBtn || !nextBtn) return;
+
+        const total = track.children.length;
+        if (total <= 1) return;
+
+        const setIndex = (nextIndex) => {
+            let idx = nextIndex;
+            if (idx < 0) idx = total - 1;
+            if (idx >= total) idx = 0;
+            track.dataset.index = String(idx);
+            track.style.transform = `translateX(-${idx * 100}%)`;
+        };
+
+        prevBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            const current = Number(track.dataset.index || 0);
+            setIndex(current - 1);
+        });
+
+        nextBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            const current = Number(track.dataset.index || 0);
+            setIndex(current + 1);
+        });
+    });
 }
 
 function renderVoteControls(review, loggedIn, currentEmail, featured = false) {
@@ -1972,6 +2132,20 @@ function setupPWA() {
     }
 }
 
+window.addEventListener('beforeunload', () => {
+    const mapState = {
+        center: map.getCenter(),
+        zoom: map.getZoom(),
+    };
+    if (selectedLocationMarker) {
+        mapState.selectedLocation = selectedLocationMarker.getLatLng();
+        if (selectedLocationMarker.getPopup()) {
+             mapState.selectedLocationName = selectedLocationMarker.getPopup().getContent();
+        }
+    }
+    sessionStorage.setItem('mapState', JSON.stringify(mapState));
+});
+
 document.addEventListener('DOMContentLoaded', () => {
     const queryAmenityId = new URLSearchParams(window.location.search).get('amenity_id');
 
@@ -1979,9 +2153,32 @@ document.addEventListener('DOMContentLoaded', () => {
     setupSidebarToggle();
     setupHoursFilter();
     setupDetailTabs();
-    initializeGeolocation();
+    
+    if (restoredState) {
+        if (restoredState.selectedLocation) {
+            const { lat, lng } = restoredState.selectedLocation;
+            const name = restoredState.selectedLocationName || 'Selected Location';
+            if (selectedLocationMarker) map.removeLayer(selectedLocationMarker);
+            selectedLocationMarker = L.marker([lat, lng], {
+                title: name, zIndexOffset: 50,
+                icon: L.icon({
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
+                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                    iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+                }),
+            }).addTo(map).bindPopup(name);
+            const inp = document.getElementById('search-input');
+            if (inp) {
+                inp.value = name;
+                inp.closest('.search-box').classList.add('has-value');
+            }
+        }
+        initializeGeolocation(false);
+    } else {
+        initializeGeolocation();
+    }
+
     loadAmenityTypes();
-    loadAmenities();
     setupPWA();
 
     if (queryAmenityId) {
