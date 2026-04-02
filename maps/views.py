@@ -921,13 +921,15 @@ def create_review_api(request):
         existing_photos = AmenityPhoto.objects.filter(amenity=amenity).exists()
         review_photos = []
         for index, photo_file in enumerate(photo_files):
-            review_photos.append(AmenityPhoto.objects.create(
-                amenity=amenity,
-                photo=photo_file,
-                uploaded_by=user,
-                is_primary=not existing_photos and index == 0,
-                caption=f"Review photo by {user.email}",
-            ))
+            review_photos.append(
+                AmenityPhoto.objects.create(
+                    amenity=amenity,
+                    photo=photo_file,
+                    uploaded_by=user,
+                    is_primary=not existing_photos and index == 0,
+                    caption=f"Review photo by {user.email}",
+                )
+            )
 
         response_data = serialize_amenity_review(
             review,
