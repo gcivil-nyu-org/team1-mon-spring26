@@ -88,7 +88,7 @@ def get_cluster_grid_size(zoom):
 
 def cluster_amenities(amenities, zoom):
     """
-    Performs grid-based clustering on a queryset of amenities.
+    Performs grid-based clustering on a queryset of amenities.12
     """
     grid_size = get_cluster_grid_size(zoom)
 
@@ -1197,31 +1197,34 @@ def chat_events_sse(request):
             ).aggregate(max_id=Max("id"))
             last_id = last_id_dict.get("max_id") or 0
 
-        try:
-            new_msgs = list(
-                Message.objects.filter(
-                    chat__participants__user_id=user_id, id__gt=last_id
-                ).order_by("id")
-            )
+        # Continuously stream events
+        while True:
+            try:
+                new_msgs = list(
+                    Message.objects.filter(
+                        chat__participants__user_id=user_id, id__gt=last_id
+                    ).order_by("id")
+                )
 
-            if new_msgs:
-                last_id = new_msgs[-1].id
-                other_msgs = [m for m in new_msgs if m.sender_id != user_id]
-                if other_msgs:
-                    yield f":{pad}\nid: {last_id}\nretry: 3000\ndata: \
-                        {json.dumps({'type': 'new_message',
-                                     'chat_id': other_msgs[-1].chat_id})}\n\n"
-                    if is_apple_device:
-                        time.sleep(0.5)
-                    return
+                if new_msgs:
+                    last_id = new_msgs[-1].id
+                    other_msgs = [m for m in new_msgs if m.sender_id != user_id]
+                    if other_msgs:
+                        event_data = json.dumps(
+                            {"type": "new_message", "chat_id": other_msgs[-1].chat_id}
+                        )
+                        yield f":{pad}\nid: {last_id}\nretry: 3000\ndata: {event_data}\n\n"  # noqa: E501
+                        if is_apple_device:
+                            time.sleep(0.5)
 
-            yield f":{pad}\nid: {last_id}\nretry: 3000\n: keep-alive\n\n"
-            if is_apple_device:
-                time.sleep(0.5)
-        except Exception:
-            yield "retry: 3000\n: keep-alive\n\n"
-            if is_apple_device:
-                time.sleep(0.5)
+                # Always send keep-alive to keep connection open
+                yield f":{pad}\nid: {last_id}\nretry: 3000\n: keep-alive\n\n"
+
+                # Wait before checking for new messages again
+                time.sleep(1)
+            except Exception:
+                yield "retry: 3000\n: keep-alive\n\n"
+                time.sleep(1)
 
     response = StreamingHttpResponse(
         event_stream(), content_type="text/event-stream; charset=utf-8"

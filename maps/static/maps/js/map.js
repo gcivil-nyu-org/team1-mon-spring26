@@ -1848,6 +1848,12 @@ function fetchCurrentUser() {
 function setCurrentUser(data) {
     currentUser = normalizeAuthUser(data);
     updateUserUI();
+    
+    // Check for pending messages if user is authenticated
+    if (currentUser && currentUser.is_authenticated && typeof checkPendingMessages === 'function') {
+        console.log('[Map] User authenticated, checking for pending messages');
+        checkPendingMessages();
+    }
 }
 
 // submit login/register form data and handle auth errors.
@@ -2008,10 +2014,18 @@ function updateUserUI() {
         userMenu.style.display = 'inline-flex';
         avatarImage.src = currentUser.avatar_url || '/static/maps/default-avatar.svg';
         userMenuEmail.textContent = currentUser.email || '';
+        // Show chats link for authenticated users
+        if (typeof ensureChatsLinkVisible === 'function') {
+            ensureChatsLinkVisible();
+        }
     } else {
         btn.style.display = '';
         userMenu.style.display = 'none';
         userMenuEmail.textContent = '';
+        // Hide chats link for unauthenticated users
+        if (typeof hideChatsLink === 'function') {
+            hideChatsLink();
+        }
     }
 
     if (currentDetailAmenity) {

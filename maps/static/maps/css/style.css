@@ -1179,6 +1179,27 @@ body.profile-review-sheet-open { overflow: hidden; }
     color: var(--text-3);
 }
 
+.chat-item-pending {
+    background: var(--surface2);
+    border-left: 3px solid #2563eb;
+}
+
+.chat-item-pending:hover {
+    background: var(--surface3);
+}
+
+.chat-pending-badge {
+    display: inline-block;
+    background: #dc2626;
+    color: white;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+    text-transform: uppercase;
+}
+
 .empty-chats {
     padding: 40px 20px;
     text-align: center;
