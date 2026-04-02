@@ -35,7 +35,6 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from decimal import Decimal, InvalidOperation
 import json
-import time
 
 
 def normalize_longitude(lon):
@@ -1171,48 +1170,40 @@ def chat_events_sse(request):
     # Resolve user ID outside the generator to prevent lazy-evaluation
     # issues after closing the database connection inside the loop.
     user_id = request.user.id
+    last_event_id = request.headers.get("Last-Event-ID")
 
     def event_stream():
         from django.db.models import Max
         import json
 
-        # Get initial max ID
-        last_id_dict = Message.objects.filter(
-            chat__participants__user_id=user_id
-        ).aggregate(max_id=Max("id"))
-        last_id = last_id_dict.get("max_id") or 0
+        if last_event_id and last_event_id.isdigit():
+            last_id = int(last_event_id)
+        else:
+            # Initial connection: get the current max ID
+            last_id_dict = Message.objects.filter(
+                chat__participants__user_id=user_id
+            ).aggregate(max_id=Max("id"))
+            last_id = last_id_dict.get("max_id") or 0
 
-        pad = " " * 2048
+        try:
+            new_msgs = list(
+                Message.objects.filter(
+                    chat__participants__user_id=user_id, id__gt=last_id
+                ).order_by("id")
+            )
 
-        # Keep connection open and poll every 3 seconds
-        while True:
-            try:
-                # Eagerly evaluate the list to prevent dual-query race conditions
-                new_msgs = list(
-                    Message.objects.filter(
-                        chat__participants__user_id=user_id, id__gt=last_id
-                    ).order_by("id")
-                )
+            if new_msgs:
+                last_id = new_msgs[-1].id
+                other_msgs = [m for m in new_msgs if m.sender_id != user_id]
+                if other_msgs:
+                    yield f"id: {last_id}\nretry: 3000\ndata: {json.dumps(
+                        {'type': 'new_message', 'chat_id': other_msgs[-1].chat_id}
+                        )}\n\n"
+                    return
 
-                if new_msgs:
-                    last_id = new_msgs[-1].id
-                    # Only push an event if there's a message from someone else
-                    other_msgs = [m for m in new_msgs if m.sender_id != user_id]
-                    if other_msgs:
-                        yield f"data: {json.dumps(
-                            {'type': 'new_message', 'chat_id': other_msgs[-1].chat_id}
-                            )}\n\n"
-                    else:
-                        # Ignore our own messages
-                        yield f": keep-alive{pad}\n\n"
-                else:
-                    # Keep the connection alive to prevent browser/server timeouts
-                    yield f": keep-alive{pad}\n\n"
-            except Exception:
-                # Suppress DB disconnect errors; it will retry
-                yield f": keep-alive{pad}\n\n"
-
-            time.sleep(3)
+            yield f"id: {last_id}\nretry: 3000\n: keep-alive\n\n"
+        except Exception:
+            yield "retry: 3000\n: keep-alive\n\n"
 
     response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"
