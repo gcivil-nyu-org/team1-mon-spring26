@@ -470,7 +470,9 @@ def serialize_auth_user(user):
     }
 
 
-def serialize_amenity_review(review, photo_url=None, photo_urls=None, current_user=None):
+def serialize_amenity_review(
+    review, photo_url=None, photo_urls=None, current_user=None
+):
     current_user_vote = getattr(review, "user_vote", 0)
     if not (current_user and current_user.is_authenticated):
         current_user_vote = 0
@@ -1164,7 +1166,9 @@ def chat_events_sse(request):
                     # Only push an event if there's a message from someone else
                     other_msgs = [m for m in new_msgs if m.sender_id != user_id]
                     if other_msgs:
-                        yield f"data: {json.dumps({'type': 'new_message', 'chat_id': other_msgs[-1].chat_id})}\n\n"
+                        yield f"data: {json.dumps(
+                            {'type': 'new_message', 'chat_id': other_msgs[-1].chat_id}
+                            )}\n\n"
                     else:
                         # Ignore our own messages
                         yield ": keep-alive\n\n"
