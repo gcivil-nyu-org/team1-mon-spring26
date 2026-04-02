@@ -108,8 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/auth/me/');
             const data = await res.json();
             if (data.is_authenticated) {
-                // DISABLED: SSE causing API performance issues - commenting out for now
-                /*
+                // SSE enabled for chat notifications
                 console.log('[Notifications] User authenticated, connecting to SSE stream...');
                 sseSource = new EventSource('/api/chats/events/');
                 
@@ -163,7 +162,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         sseSource.close();
                     }
                 };
-                */
             }
         } catch (e) {
             console.error('SSE initialization failed', e);
@@ -172,14 +170,12 @@ document.addEventListener('DOMContentLoaded', () => {
     
     checkAuthAndInit();
 
-    // DISABLED: SSE is disabled - no need to close connection on unload
-    /*
+    // SSE - close connection on unload
     // Explicitly close the SSE connection when leaving the page
     // to prevent the browser's 6-connection limit from stalling navigation.
     window.addEventListener('beforeunload', () => {
         if (sseSource) sseSource.close();
     });
-    */
     
     window.addEventListener('pagehide', () => {
         if (sseSource) sseSource.close();
