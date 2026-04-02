@@ -466,10 +466,16 @@ def serialize_auth_user(user):
     }
 
 
-def serialize_amenity_review(review, photo_url=None, current_user=None):
+def serialize_amenity_review(
+    review, photo_url=None, photo_urls=None, current_user=None
+):
     current_user_vote = getattr(review, "user_vote", 0)
     if not (current_user and current_user.is_authenticated):
         current_user_vote = 0
+
+    # Support both single photo_url (backward compatibility) and multiple photo_urls
+    if photo_urls is None:
+        photo_urls = [photo_url] if photo_url else []
 
     return {
         "id": review.id,
@@ -481,7 +487,8 @@ def serialize_amenity_review(review, photo_url=None, current_user=None):
         "vote_score": int(getattr(review, "vote_score", 0)),
         "user_vote": int(current_user_vote or 0),
         "review_text": review.review_text,
-        "photo_url": photo_url,
+        "photo_url": photo_url,  # Keep for backward compatibility
+        "photo_urls": photo_urls,  # New field for multiple photos
         "created_at": review.created_at.isoformat(),
     }
 
@@ -831,13 +838,13 @@ def create_review_api(request):
             amenity_id = request.POST.get("amenity_id")
             rating = request.POST.get("rating", 5)
             review_text = request.POST.get("review_text", "").strip()
-            photo_file = request.FILES.get("photo")
+            photo_files = request.FILES.getlist("photos")
         else:
             data = json.loads(request.body)
             amenity_id = data.get("amenity_id")
             rating = data.get("rating", 5)
             review_text = data.get("review_text", "").strip()
-            photo_file = None
+            photo_files = []
 
         if not amenity_id:
             return JsonResponse({"error": "amenity_id required"}, status=400)
@@ -850,13 +857,22 @@ def create_review_api(request):
         if not (1 <= rating <= 5):
             return JsonResponse({"error": "Rating must be between 1 and 5"}, status=400)
 
-        if photo_file:
+        if len(photo_files) > 5:
+            return JsonResponse(
+                {"error": "Maximum 5 photos allowed per review"}, status=400
+            )
+
+        # Validate all photo files
+        max_file_size = 5 * 1024 * 1024  # 5MB
+        for photo_file in photo_files:
             content_type = photo_file.content_type or ""
             if not content_type.startswith("image/"):
-                return JsonResponse({"error": "Photo must be an image"}, status=400)
-            if photo_file.size > 5 * 1024 * 1024:
+                return JsonResponse({"error": "All files must be images"}, status=400)
+            if photo_file.size > max_file_size:
+                max_size_mb = max_file_size // (1024 * 1024)
                 return JsonResponse(
-                    {"error": "Photo must be 5MB or smaller"}, status=400
+                    {"error": f"Each photo must be {max_size_mb}MB or smaller"},
+                    status=400,
                 )
 
         try:
@@ -876,19 +892,25 @@ def create_review_api(request):
             amenity=amenity, user=user, rating=rating, review_text=review_text
         )
 
-        review_photo = None
-        if photo_file:
+        # Create AmenityPhoto objects for each uploaded photo
+        review_photo_urls = []
+        is_first_photo = not AmenityPhoto.objects.filter(amenity=amenity).exists()
+
+        for photo_file in photo_files:
             review_photo = AmenityPhoto.objects.create(
                 amenity=amenity,
+                review=review,
                 photo=photo_file,
                 uploaded_by=user,
-                is_primary=not AmenityPhoto.objects.filter(amenity=amenity).exists(),
+                is_primary=is_first_photo,
                 caption=f"Review photo by {user.email}",
             )
+            review_photo_urls.append(review_photo.photo.url)
+            is_first_photo = False
 
         response_data = serialize_amenity_review(
             review,
-            photo_url=review_photo.photo.url if review_photo else None,
+            photo_urls=review_photo_urls,
             current_user=request.user,
         )
         response_data["message"] = "Review created successfully"
