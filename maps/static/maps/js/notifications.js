@@ -25,29 +25,81 @@ document.addEventListener('DOMContentLoaded', () => {
     document.head.appendChild(style);
 
     let sseSource = null;
+    let audioContext = null;
+
+    // Initialize AudioContext on first user interaction (required for Safari/Mac)
+    function initAudioContext() {
+        try {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContext || audioContext) return;
+            
+            audioContext = new AudioContext();
+            console.log('[Notifications] AudioContext initialized');
+            
+            // Try to resume if it was suspended
+            if (audioContext.state === 'suspended') {
+                audioContext.resume().then(() => {
+                    console.log('[Notifications] AudioContext resumed on init');
+                });
+            }
+        } catch (e) {
+            console.warn('[Notifications] Failed to initialize AudioContext:', e);
+        }
+    }
+
+    // Set up listeners to initialize AudioContext on any user interaction
+    ['click', 'keydown', 'touchstart', 'mousedown'].forEach(event => {
+        document.addEventListener(event, initAudioContext, { once: true });
+    });
 
     function playNotificationSound() {
         try {
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            if (!AudioContext) return;
-            const ctx = new AudioContext();
-            const osc = ctx.createOscillator();
-            const gainNode = ctx.createGain();
+            let ctx = audioContext;
             
-            osc.connect(gainNode);
-            gainNode.connect(ctx.destination);
+            if (!ctx) {
+                // Fallback: create a new context if not pre-initialized
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (!AudioContext) {
+                    console.log('[Notifications] AudioContext not available');
+                    return;
+                }
+                ctx = new AudioContext();
+                console.log('[Notifications] Created new AudioContext for sound');
+            }
             
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(600, ctx.currentTime);
+            // Resume audio context if suspended (common on Safari/Mac)
+            if (ctx.state === 'suspended') {
+                console.log('[Notifications] AudioContext suspended, resuming...');
+                ctx.resume().then(() => {
+                    playSound(ctx);
+                }).catch(err => {
+                    console.error('[Notifications] Failed to resume AudioContext:', err);
+                });
+            } else {
+                playSound(ctx);
+            }
             
-            gainNode.gain.setValueAtTime(0, ctx.currentTime);
-            gainNode.gain.linearRampToValueAtTime(0.15, ctx.currentTime + 0.02);
-            gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-            
-            osc.start(ctx.currentTime);
-            osc.stop(ctx.currentTime + 0.3);
+            function playSound(audioCtx) {
+                const osc = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                
+                osc.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+                
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0.15, audioCtx.currentTime + 0.02);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+                
+                osc.start(audioCtx.currentTime);
+                osc.stop(audioCtx.currentTime + 0.3);
+                
+                console.log('[Notifications] Notification sound played');
+            }
         } catch (e) {
-            // Browser might block audio if user hasn't interacted with the page yet
+            console.warn('[Notifications] Failed to play notification sound:', e);
         }
     }
 
@@ -56,9 +108,24 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/auth/me/');
             const data = await res.json();
             if (data.is_authenticated) {
+                // SSE enabled for chat notifications
+                console.log('[Notifications] User authenticated, connecting to SSE stream...');
                 sseSource = new EventSource('/api/chats/events/');
+                
+                sseSource.onopen = () => {
+                    console.log('[Notifications] SSE connection opened');
+                };
+                
+                sseSource.onerror = (err) => {
+                    console.error('[Notifications] SSE connection error:', err);
+                    if (sseSource.readyState === EventSource.CLOSED) {
+                        console.log('[Notifications] SSE connection closed');
+                    }
+                };
+                
                 sseSource.onmessage = (event) => {
                     const msgData = JSON.parse(event.data);
+                    console.log('[Notifications] SSE message received:', msgData.type);
                     if (msgData.type === 'new_message') {
                         const chatsLink = document.querySelector('a[href^="/chats/"]');
                         if (chatsLink) {
@@ -80,7 +147,17 @@ document.addEventListener('DOMContentLoaded', () => {
                         playNotificationSound();
                         
                         // Dispatch global event so the Chats app can hook into it safely
-                        window.dispatchEvent(new CustomEvent('chat:new_message'));
+                        try {
+                            const event = new CustomEvent('chat:new_message', { 
+                                detail: msgData,
+                                bubbles: true,
+                                cancelable: false 
+                            });
+                            window.dispatchEvent(event);
+                            console.log('[Notifications] Dispatched chat:new_message event', msgData);
+                        } catch (e) {
+                            console.error('[Notifications] Failed to dispatch chat:new_message event:', e);
+                        }
                     } else if (msgData.error === 'unauthorized') {
                         sseSource.close();
                     }
@@ -93,9 +170,14 @@ document.addEventListener('DOMContentLoaded', () => {
     
     checkAuthAndInit();
 
+    // SSE - close connection on unload
     // Explicitly close the SSE connection when leaving the page
     // to prevent the browser's 6-connection limit from stalling navigation.
     window.addEventListener('beforeunload', () => {
+        if (sseSource) sseSource.close();
+    });
+    
+    window.addEventListener('pagehide', () => {
         if (sseSource) sseSource.close();
     });
 });

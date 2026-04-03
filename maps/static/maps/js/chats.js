@@ -11,6 +11,13 @@ const ChatsApp = (() => {
     let participantEmails = [];
     let amenitySearchTimer = null;
 
+    // Set up event listener EARLY to avoid race conditions on Mac/Safari
+    // This must happen before any SSE events are dispatched
+    window.addEventListener('chat:new_message', () => {
+        console.log('[ChatsApp] New message event received');
+        refreshActiveChat();
+    }, { passive: true });
+
     // Initialize the app
     async function init() {
         // Check if user is authenticated
@@ -114,11 +121,6 @@ const ChatsApp = (() => {
         document.getElementById('participant-tags-input')?.addEventListener('click', () => {
             document.getElementById('participant-email-input')?.focus();
         });
-
-        // Listen for new messages from the SSE stream
-        window.addEventListener('chat:new_message', () => {
-            refreshActiveChat();
-        });
     }
 
     async function loadChats() {
@@ -141,6 +143,19 @@ const ChatsApp = (() => {
     function displayChatsList(chats) {
         const chatsList = document.getElementById('chats-list');
         
+        // Get pending chat IDs from sessionStorage
+        let pendingChatIds = [];
+        try {
+            const pending = sessionStorage.getItem('pendingChatIds');
+            if (pending) {
+                pendingChatIds = JSON.parse(pending);
+                sessionStorage.removeItem('pendingChatIds'); // Clear after reading
+                console.log('[ChatsApp] Pending chat IDs:', pendingChatIds);
+            }
+        } catch (e) {
+            console.error('[ChatsApp] Error reading pending chats:', e);
+        }
+        
         if (chats.length === 0) {
             chatsList.innerHTML = `
                 <div class="empty-chats">
@@ -152,23 +167,38 @@ const ChatsApp = (() => {
             return;
         }
 
-        chatsList.innerHTML = chats.map(chat => `
-            <div class="chat-item" data-chat-id="${chat.id}">
-                <div class="chat-item-header">
-                    <div class="chat-item-name">${escapeHtml(chat.name)}</div>
-                    <div class="chat-item-time">${formatTime(new Date(chat.last_message_at))}</div>
+        chatsList.innerHTML = chats.map(chat => {
+            const isPending = pendingChatIds.includes(chat.id);
+            const pendingBadge = isPending ? '<span class="chat-pending-badge">New</span>' : '';
+            const pendingClass = isPending ? ' chat-item-pending' : '';
+            
+            return `
+                <div class="chat-item${pendingClass}" data-chat-id="${chat.id}">
+                    <div class="chat-item-header">
+                        <div class="chat-item-name">${escapeHtml(chat.name)} ${pendingBadge}</div>
+                        <div class="chat-item-time">${formatTime(new Date(chat.last_message_at))}</div>
+                    </div>
+                    <div class="chat-item-preview">
+                        ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
+                    </div>
+                    ${chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
                 </div>
-                <div class="chat-item-preview">
-                    ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
-                </div>
-                ${chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
-            </div>
-        `).join('');
+            `;
+        }).join('');
 
         // Add click listeners
         document.querySelectorAll('.chat-item').forEach(item => {
             item.addEventListener('click', () => {
                 const chatId = item.dataset.chatId;
+                
+                // Remove the "New" badge and pending styling when clicking
+                const badge = item.querySelector('.chat-pending-badge');
+                if (badge) {
+                    badge.remove();
+                    console.log('[ChatsApp] Removed pending badge from chat:', chatId);
+                }
+                item.classList.remove('chat-item-pending');
+                
                 openChat(chatId);
             });
         });

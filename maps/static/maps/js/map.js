@@ -13,7 +13,12 @@ const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0
 const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const tileUrl = isLocalhost ? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' : '/tiles/{z}/{x}/{y}.png';
 L.tileLayer(tileUrl, {
-    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    maxZoom: 19,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    className: 'leaflet-tile-osm',
+    keepBuffer: 2,
+    updateWhenZooming: false,
+    updateWhenIdle: true
 }).addTo(map);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 
@@ -1848,6 +1853,12 @@ function fetchCurrentUser() {
 function setCurrentUser(data) {
     currentUser = normalizeAuthUser(data);
     updateUserUI();
+    
+    // Check for pending messages if user is authenticated
+    if (currentUser && currentUser.is_authenticated && typeof checkPendingMessages === 'function') {
+        console.log('[Map] User authenticated, checking for pending messages');
+        checkPendingMessages();
+    }
 }
 
 // submit login/register form data and handle auth errors.
@@ -2008,10 +2019,18 @@ function updateUserUI() {
         userMenu.style.display = 'inline-flex';
         avatarImage.src = currentUser.avatar_url || '/static/maps/default-avatar.svg';
         userMenuEmail.textContent = currentUser.email || '';
+        // Show chats link for authenticated users
+        if (typeof ensureChatsLinkVisible === 'function') {
+            ensureChatsLinkVisible();
+        }
     } else {
         btn.style.display = '';
         userMenu.style.display = 'none';
         userMenuEmail.textContent = '';
+        // Hide chats link for unauthenticated users
+        if (typeof hideChatsLink === 'function') {
+            hideChatsLink();
+        }
     }
 
     if (currentDetailAmenity) {

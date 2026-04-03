@@ -57,6 +57,7 @@ urlpatterns = [
     ),
     # Chat endpoints
     path("api/chats/", views.get_user_chats_api, name="get_user_chats_api"),
+    # SSE auto notify chats
     path("api/chats/events/", views.chat_events_sse, name="chat_events_sse"),
     path(
         "api/chats/messages/", views.get_chat_messages_api, name="get_chat_messages_api"

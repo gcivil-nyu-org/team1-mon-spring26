@@ -9,3 +9,4 @@ django-storages
 django-allauth
 PyJWT
 cryptography
+gevent
