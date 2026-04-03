@@ -10,6 +10,7 @@ from django.contrib.gis.geos import Polygon, GEOSGeometry
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.db.models import Max
+from django.db import connection
 from .models import (
     AmenityType,
     Amenity,
@@ -109,7 +110,6 @@ def cluster_amenities(amenities, zoom):
         ) as sub
         GROUP BY snapped_location
     """
-    from django.db import connection
 
     with connection.cursor() as cursor:
         cursor.execute(
@@ -1224,8 +1224,8 @@ def chat_events_sse(request):
                     if msg.sender_id != user_id:  # ignore sent by user
                         event_id += 1
                         event_data = json.dumps(
-                                {"type": "new_message", "chat_id": msg.chat_id}
-                                )
+                            {"type": "new_message", "chat_id": msg.chat_id}
+                        )
                         yield f"id: {event_id}\ndata: {event_data}\n\n"
                         found_new = True
 
