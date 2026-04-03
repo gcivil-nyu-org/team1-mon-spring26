@@ -1165,7 +1165,7 @@ def chat_events_sse(request):
     """SSE endpoint for chat notifications.
     Uses a hybrid approach:
     - Caches user's chat IDs at connection start (one query)
-    - Polls infrequently (every 15 seconds) for new messages
+    - Polls (every 3 seconds) for new messages
     - Fetches minimal data (id, sender_id, chat_id only)
     - No connection pooling issues because of the long intervals
     """
@@ -1209,7 +1209,7 @@ def chat_events_sse(request):
             try:
                 event_id += 1
 
-                # Query once every 15 seconds (much less aggressive)
+                # Query once every 3 seconds
                 new_msgs = (
                     Message.objects.filter(chat_id__in=user_chat_ids, id__gt=last_id)
                     .only("id", "sender_id", "chat_id")
@@ -1237,12 +1237,12 @@ def chat_events_sse(request):
                 yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
 
                 # interval: x seconds between checks
-                sleep(2)
+                sleep(3)
             except Exception:
                 # connection.close()  # Release DB connection on error too
                 event_id += 1
                 yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
-                sleep(2)
+                sleep(3)
 
     response = StreamingHttpResponse(
         event_stream(), content_type="text/event-stream; charset=utf-8"
