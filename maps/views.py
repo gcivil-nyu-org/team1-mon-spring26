@@ -1218,22 +1218,27 @@ def chat_events_sse(request):
                     .order_by("id")[:1]
                 )
 
-                if new_msgs:
-                    msg = new_msgs.first()
+                found_new = False
+                for msg in new_msgs:
                     last_id = msg.id
-
-                    # Only send notification if not sent by current user
-                    if msg.sender_id != user_id:
-                        event_data = json.dumps(
-                            {"type": "new_message", "chat_id": msg.chat_id}
-                        )
+                    if msg.sender_id != user_id:  # ignore sent by user
                         event_id += 1
+                        event_data = json.dumps(
+                                {"type": "new_message", "chat_id": msg.chat_id}
+                                )
                         yield f"id: {event_id}\ndata: {event_data}\n\n"
-                        counter = 1
-                else:
-                    if counter % 10 == 0:
-                        # at least 30 sec since last chat/keep-alive
+                        found_new = True
+
+                # heartbeat logic
+                if not found_new:
+                    if counter >= 10:
                         yield ": keep-alive\n\n"
+                        counter = 1
+                    else:
+                        counter += 1
+                else:
+                    # reset counter as we just sent
+                    counter = 1
 
                 connection.close()  # Release DB con before yielding/sleeping
                 # interval: x seconds between checks
@@ -1241,8 +1246,6 @@ def chat_events_sse(request):
             except Exception:
                 connection.close()  # Release DB connection on error too
                 counter += 1
-                # send keep-alive just in case
-                # yield f"id: {event_id}\n: keep-alive\n\n"
                 sleep(3)
 
     response = StreamingHttpResponse(
