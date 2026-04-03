@@ -124,7 +124,7 @@ if APP_ENV:
             "OPTIONS": {
                 # Use pgbouncer's transaction pooling mode
                 # See https://www.pgbouncer.org/config.html#server-pooler-mode
-                "sslmode": "require",
+                # "sslmode": "require",
                 "connect_timeout": 10,
             },
         }
