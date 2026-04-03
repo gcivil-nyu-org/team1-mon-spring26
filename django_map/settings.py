@@ -125,7 +125,12 @@ if os.environ.get("RDS_HOSTNAME"):
                 # Use pgbouncer's transaction pooling mode
                 # See https://www.pgbouncer.org/config.html#server-pooler-mode
                 # "sslmode": "require",
-                "connect_timeout": 10,
+                # "connect_timeout": 10,
+                "pool": {
+                    "min_size": 2,
+                    "max_size": 20,  # Adjust based on your expected concurrency per worker
+                    "timeout": 10,   # Seconds to wait for a connection
+                },
             },
         }
     }
