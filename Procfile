@@ -1,1 +1,1 @@
-web: gunicorn --worker-class gevent --workers 3 django_map.wsgi
+web: gunicorn --config gunicorn_config.py django_map.wsgi
