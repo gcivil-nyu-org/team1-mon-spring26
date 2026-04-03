@@ -1180,7 +1180,7 @@ def chat_events_sse(request):
 
     def event_stream():
 
-        # Get user's chat IDs ONCE at connection start
+        # Get user's chat IDs at connection start
         user_chat_ids = list(
             ChatParticipant.objects.filter(user_id=user_id).values_list(
                 "chat_id", flat=True
@@ -1232,10 +1232,18 @@ def chat_events_sse(request):
                 # heartbeat logic
                 if not found_new:
                     if counter >= 10:
+                        # update user's chat IDs periodically
+                        user_chat_ids = list(
+                            ChatParticipant.objects.filter(user_id=user_id).values_list(
+                                "chat_id", flat=True
+                            )
+                        )
+                        # send keep-alive
                         yield ": keep-alive\n\n"
                         counter = 1
                     else:
                         counter += 1
+
                 else:
                     # reset counter as we just sent
                     counter = 1
