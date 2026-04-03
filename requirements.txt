@@ -9,5 +9,5 @@ django-allauth
 PyJWT
 cryptography
 gevent
-psycopg2-binary
-psycogreen
+psycopg[binary]
+psycopg-pool
