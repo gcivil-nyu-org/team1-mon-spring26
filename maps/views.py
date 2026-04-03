@@ -9,6 +9,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.contrib.gis.geos import Polygon, GEOSGeometry
 from django.db import transaction
 from django.core.exceptions import ValidationError
+from django.db.models import Max
 from .models import (
     AmenityType,
     Amenity,
@@ -1178,7 +1179,6 @@ def chat_events_sse(request):
     user_id = request.user.id
 
     def event_stream():
-        from django.db.models import Max
 
         # Get user's chat IDs ONCE at connection start
         user_chat_ids = list(
@@ -1204,11 +1204,13 @@ def chat_events_sse(request):
         last_id = last_id_dict.get("max_id") or 0
         event_id = 0
 
+        # set retry ONCE at start
+        yield "retry: 60000\n\n"
+
         # Poll infrequently for new messages
+        counter = 1
         while True:
             try:
-                event_id += 1
-
                 # Query once every 3 seconds
                 new_msgs = (
                     Message.objects.filter(chat_id__in=user_chat_ids, id__gt=last_id)
@@ -1217,7 +1219,7 @@ def chat_events_sse(request):
                 )
 
                 if new_msgs:
-                    msg = new_msgs[0]
+                    msg = new_msgs.first()
                     last_id = msg.id
 
                     # Only send notification if not sent by current user
@@ -1225,21 +1227,22 @@ def chat_events_sse(request):
                         event_data = json.dumps(
                             {"type": "new_message", "chat_id": msg.chat_id}
                         )
-                        connection.close()  # Release DB con  before yield/sleep
-                        yield f"id: {event_id}\nretry: 60000\ndata: {event_data}\n\n"
-                        continue
+                        event_id += 1
+                        yield f"id: {event_id}\ndata: {event_data}\n\n"
+                        counter = 1
+                else:
+                    if counter % 10 == 0:
+                        # at least 30 sec since last chat/keep-alive
+                        yield ": keep-alive\n\n"
 
                 connection.close()  # Release DB con before yielding/sleeping
-
-                # Send keep-alive
-                yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
-
                 # interval: x seconds between checks
                 sleep(3)
             except Exception:
                 connection.close()  # Release DB connection on error too
-                event_id += 1
-                yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
+                counter += 1
+                # send keep-alive just in case
+                # yield f"id: {event_id}\n: keep-alive\n\n"
                 sleep(3)
 
     response = StreamingHttpResponse(
