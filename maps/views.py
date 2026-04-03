@@ -35,7 +35,7 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from decimal import Decimal, InvalidOperation
 import json
-from gevent import sleep  # unblocks db during yield/wait
+from time import sleep  # auto patched by gunicorn for non-block
 
 def normalize_longitude(lon):
     """Normalize a longitude to the range [-180, 180]."""
