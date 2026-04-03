@@ -556,7 +556,7 @@ aside.detail-panel.open { width: var(--detail-w) !important; }
 
 .rating-histo { display: flex; flex-direction: column; gap: 2px; }
 .rating-histo-row { display: grid; grid-template-columns: 20px 1fr 24px; align-items: center; gap: 6px; }
-.rating-histo-label { font-size: 11px; color: var(--text-3); font-weight: 500; }
+.rating-histo-label { font-size: 11px; color: var(--text-3); font-weight: 500; white-space: nowrap; }
 .rating-histo-bar-wrap { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
 .rating-histo-bar { height: 100%; background: #f59e0b; border-radius: 3px; }
 .rating-histo-count { font-size: 11px; color: var(--text-3); text-align: right; font-family: var(--mono); }
