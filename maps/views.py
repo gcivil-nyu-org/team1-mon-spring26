@@ -35,7 +35,7 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from decimal import Decimal, InvalidOperation
 import json
-
+from gevent import sleep  # unblocks db during yield/wait
 
 def normalize_longitude(lon):
     """Normalize a longitude to the range [-180, 180]."""
@@ -1178,8 +1178,6 @@ def chat_events_sse(request):
 
     def event_stream():
         from django.db.models import Max
-        import json
-        import time
 
         # Get user's chat IDs ONCE at connection start
         user_chat_ids = list(
@@ -1195,7 +1193,7 @@ def chat_events_sse(request):
                 event_id += 1
                 # connection.close()  # Release DB connection during sleep
                 yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
-                time.sleep(60)
+                sleep(60)
             return
 
         # Get initial max ID
@@ -1237,14 +1235,13 @@ def chat_events_sse(request):
                 # Send keep-alive
                 yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
 
-                # Long interval: 15 seconds between checks
-                # 100 concurrent users = ~6.7 queries/second (vs hundreds before)
-                time.sleep(2)
+                # interval: x seconds between checks
+                sleep(2)
             except Exception:
                 # connection.close()  # Release DB connection on error too
                 event_id += 1
                 yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
-                time.sleep(2)
+                sleep(2)
 
     response = StreamingHttpResponse(
         event_stream(), content_type="text/event-stream; charset=utf-8"
