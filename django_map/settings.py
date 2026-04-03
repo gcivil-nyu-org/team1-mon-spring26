@@ -105,7 +105,7 @@ if not DB_USER:
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
 
-if os.environ.get("RDS_DB_NAME", None):
+if APP_ENV:
     # on AWS, use RDS pgbouncer proxy
     DATABASES = {
         "default": {
