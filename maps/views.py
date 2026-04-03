@@ -37,6 +37,7 @@ from decimal import Decimal, InvalidOperation
 import json
 from time import sleep  # auto patched by gunicorn for non-block
 
+
 def normalize_longitude(lon):
     """Normalize a longitude to the range [-180, 180]."""
     while lon < -180:
