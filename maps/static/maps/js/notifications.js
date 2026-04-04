@@ -110,14 +110,31 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.is_authenticated) {
                 // SSE enabled for chat notifications
                 console.log('[Notifications] User authenticated, connecting to SSE stream...');
-                sseSource = new EventSource('/api/chats/events/');
+                
+                if (sseSource) {
+                    sseSource.close();
+                }
+                
+                let sseUrl = '/api/chats/events/';
+                if (window.location.port === '8000') {
+                    sseUrl = `${window.location.protocol}//${window.location.hostname}:8001/api/chats/events/`;
+                }
+                
+                let isReconnect = false;
+                sseSource = new EventSource(sseUrl, { withCredentials: true });
                 
                 sseSource.onopen = () => {
                     console.log('[Notifications] SSE connection opened');
+                    if (isReconnect) {
+                        console.log('[Notifications] SSE reconnected, dispatching sync event');
+                        window.dispatchEvent(new CustomEvent('chat:reconnected'));
+                    }
+                    isReconnect = false;
                 };
                 
                 sseSource.onerror = (err) => {
                     console.error('[Notifications] SSE connection error:', err);
+                    isReconnect = true;
                     if (sseSource.readyState === EventSource.CLOSED) {
                         console.log('[Notifications] SSE connection closed');
                     }
@@ -130,6 +147,15 @@ document.addEventListener('DOMContentLoaded', () => {
                         const chatsLink = document.querySelector('a[href^="/chats/"]');
                         if (chatsLink) {
                             if (msgData.chat_id) {
+                                // Add to pending chats list for the UI badge
+                                try {
+                                    const pending = JSON.parse(sessionStorage.getItem('pendingChatIds') || '[]');
+                                    if (!pending.includes(msgData.chat_id)) {
+                                        pending.push(msgData.chat_id);
+                                        sessionStorage.setItem('pendingChatIds', JSON.stringify(pending));
+                                    }
+                                } catch (e) {}
+                                
                                 chatsLink.href = `/chats/?chat_id=${msgData.chat_id}`;
                             }
                             chatsLink.classList.remove('nav-highlight-anim');
@@ -169,6 +195,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     checkAuthAndInit();
+
+    // Expose globally so auth.js can trigger it after login/register
+    window.initNotificationsSSE = checkAuthAndInit;
+    
+    window.closeNotificationsSSE = () => {
+        if (sseSource) {
+            sseSource.close();
+            sseSource = null;
+            console.log('[Notifications] SSE connection closed explicitly');
+        }
+    };
 
     // SSE - close connection on unload
     // Explicitly close the SSE connection when leaving the page

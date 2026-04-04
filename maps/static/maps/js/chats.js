@@ -12,13 +12,50 @@ const ChatsApp = (() => {
     let amenitySearchTimer = null;
     let userSearchTimer = null;
     let activeUserSearchInput = null;
+    let chatsAbortController = null;
+    let messagesAbortController = null;
+    let pendingChatIds = [];
 
     // Set up event listener EARLY to avoid race conditions on Mac/Safari
     // This must happen before any SSE events are dispatched
-    window.addEventListener('chat:new_message', () => {
+    window.addEventListener('chat:new_message', (e) => {
         console.log('[ChatsApp] New message event received');
-        refreshActiveChat();
+        const msgData = e.detail;
+        
+        // Thundering Herd optimization: If the payload contains the message, 
+        // inject it directly into the DOM instead of firing N+1 API queries!
+        if (msgData.message && currentChat && currentChat.id == msgData.chat_id) {
+            // Abort any in-flight message fetches so they don't overwrite this new message
+            if (messagesAbortController) messagesAbortController.abort();
+
+            const messagesContainer = document.getElementById('chat-messages');
+            const emptyState = messagesContainer?.querySelector('.empty-messages');
+            if (emptyState) emptyState.remove();
+            
+            const msgHtml = `
+                <div class="message ${msgData.message.sender_email === currentUser.email ? 'message-own' : 'message-other'}">
+                    <div class="message-header">
+                        <strong>${escapeHtml(msgData.message.sender_email)}</strong>
+                        <span class="message-time">${formatTime(new Date(msgData.message.created_at))}</span>
+                    </div>
+                    <div class="message-content">${escapeHtml(msgData.message.content)}</div>
+                </div>
+            `;
+            messagesContainer?.insertAdjacentHTML('beforeend', msgHtml);
+            scrollToBottom();
+            
+            // Silently refresh the sidebar list in the background
+            loadChats();
+        } else {
+            refreshActiveChat();
+        }
     }, { passive: true });
+
+    // Handle reconnection by syncing the chat state
+    window.addEventListener('chat:reconnected', () => {
+        console.log('[ChatsApp] Connection restored, refreshing state');
+        refreshActiveChat();
+    });
 
     // Initialize the app
     async function init() {
@@ -139,8 +176,13 @@ const ChatsApp = (() => {
     }
 
     async function loadChats() {
+        // Abort previous in-flight requests to prevent older slow requests from overwriting newer ones
+        if (chatsAbortController) chatsAbortController.abort();
+        chatsAbortController = new AbortController();
+
         try {
-            const response = await fetch('/api/chats/');
+            // Append cache-buster so browsers don't silently return stale history
+            const response = await fetch(`/api/chats/?t=${Date.now()}`, { signal: chatsAbortController.signal });
             const data = await response.json();
 
             if (!response.ok) {
@@ -151,6 +193,7 @@ const ChatsApp = (() => {
             allChats = data.chats || [];
             displayChatsList(allChats);
         } catch (error) {
+            if (error.name === 'AbortError') return;
             console.error('Error loading chats:', error);
         }
     }
@@ -158,17 +201,22 @@ const ChatsApp = (() => {
     function displayChatsList(chats) {
         const chatsList = document.getElementById('chats-list');
         
-        // Get pending chat IDs from sessionStorage
-        let pendingChatIds = [];
+        // Merge pending chat IDs from sessionStorage into memory
         try {
             const pending = sessionStorage.getItem('pendingChatIds');
             if (pending) {
-                pendingChatIds = JSON.parse(pending);
-                sessionStorage.removeItem('pendingChatIds'); // Clear after reading
-                console.log('[ChatsApp] Pending chat IDs:', pendingChatIds);
+                const parsed = JSON.parse(pending);
+                parsed.forEach(id => {
+                    if (!pendingChatIds.includes(id)) pendingChatIds.push(id);
+                });
+                sessionStorage.removeItem('pendingChatIds');
             }
         } catch (e) {
             console.error('[ChatsApp] Error reading pending chats:', e);
+        }
+        
+        if (currentChat) {
+            pendingChatIds = pendingChatIds.filter(id => id != currentChat.id);
         }
         
         // Filter out hidden chats
@@ -259,6 +307,8 @@ const ChatsApp = (() => {
                 }
                 item.classList.remove('chat-item-pending');
                 
+                pendingChatIds = pendingChatIds.filter(id => id != chatId);
+                
                 openChat(chatId);
             });
         });
@@ -302,6 +352,15 @@ const ChatsApp = (() => {
                 amenity_name: null,
                 participant_count: null,
             };
+        }
+        
+        // Remove from pending lists safely
+        pendingChatIds = pendingChatIds.filter(id => id != chatId);
+        const chatItem = document.querySelector(`.chat-item[data-chat-id="${chatId}"]`);
+        if (chatItem) {
+            const pendingBadge = chatItem.querySelector('.chat-pending-badge');
+            if (pendingBadge) pendingBadge.remove();
+            chatItem.classList.remove('chat-item-pending');
         }
 
         // Clear the global "New" notification badge now that we are viewing a chat
@@ -366,8 +425,13 @@ const ChatsApp = (() => {
     }
 
     async function loadChatMessages(chatId, page = 1) {
+        // Abort previous in-flight requests so old messages don't wipe out the newest data
+        if (messagesAbortController) messagesAbortController.abort();
+        messagesAbortController = new AbortController();
+
         try {
-            const response = await fetch(`/api/chats/messages/?chat_id=${chatId}&page=${page}`);
+            // Append cache-buster so browsers don't silently return stale history
+            const response = await fetch(`/api/chats/messages/?chat_id=${chatId}&page=${page}&t=${Date.now()}`, { signal: messagesAbortController.signal });
             const data = await response.json();
 
             if (!response.ok) {
@@ -378,6 +442,7 @@ const ChatsApp = (() => {
             displayMessages(data.messages);
             scrollToBottom();
         } catch (error) {
+            if (error.name === 'AbortError') return;
             console.error('Error loading messages:', error);
         }
     }
@@ -407,6 +472,13 @@ const ChatsApp = (() => {
 
         if (!content || !currentChat) return;
 
+        // Clear input immediately to prevent double-sends and allow rapid typing
+        input.value = '';
+        input.focus();
+
+        // Abort any in-flight message loads so they don't wipe out our local append!
+        if (messagesAbortController) messagesAbortController.abort();
+
         try {
             const response = await fetch('/api/chats/send/', {
                 method: 'POST',
@@ -423,14 +495,33 @@ const ChatsApp = (() => {
             const data = await response.json();
 
             if (response.ok) {
-                input.value = '';
-                await loadChatMessages(currentChat.id);
-                await loadChats();
+                // Append the message locally instead of reloading the entire thread
+                // to avoid async race conditions that overwrite the screen!
+                const messagesContainer = document.getElementById('chat-messages');
+                const emptyState = messagesContainer?.querySelector('.empty-messages');
+                if (emptyState) emptyState.remove();
+                
+                const msgHtml = `
+                    <div class="message message-own">
+                        <div class="message-header">
+                            <strong>${escapeHtml(data.sender_email)}</strong>
+                            <span class="message-time">${formatTime(new Date(data.created_at))}</span>
+                        </div>
+                        <div class="message-content">${escapeHtml(data.content)}</div>
+                    </div>
+                `;
+                messagesContainer?.insertAdjacentHTML('beforeend', msgHtml);
+                scrollToBottom();
+                
+                // Silently update the chat list
+                loadChats();
             } else {
+                input.value = content; // restore on failure
                 alert('Error sending message: ' + (data.error || 'Unknown error'));
             }
         } catch (error) {
             console.error('Error sending message:', error);
+            input.value = content; // restore on failure
             alert('Error sending message');
         }
     }

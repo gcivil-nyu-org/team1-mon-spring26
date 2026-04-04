@@ -333,6 +333,11 @@ async function handleLoginSubmit(e) {
             } else {
                 console.log('[Auth] fetchCurrentUser not available (not on map page)');
             }
+            
+            // Start SSE stream for new session
+            if (window.initNotificationsSSE) {
+                window.initNotificationsSSE();
+            }
         } else {
             if (errorEl) {
                 errorEl.textContent = data.error || 'Login failed';
@@ -387,6 +392,11 @@ async function handleRegisterSubmit(e) {
                 if (typeof fetchCurrentUser === 'function') {
                     fetchCurrentUser();
                 }
+                
+                // Start SSE stream for new session
+                if (window.initNotificationsSSE) {
+                    window.initNotificationsSSE();
+                }
             } else {
                 if (errorEl) {
                     errorEl.textContent = 'Account created but login failed';
@@ -423,3 +433,11 @@ function getCookie(name) {
     }
     return cookieValue;
 }
+
+// Listen for SSE reconnections to ensure no messages were missed while offline
+window.addEventListener('chat:reconnected', () => {
+    console.log('[Auth] Connection restored, checking pending messages');
+    if (typeof checkPendingMessages === 'function') {
+        checkPendingMessages();
+    }
+});

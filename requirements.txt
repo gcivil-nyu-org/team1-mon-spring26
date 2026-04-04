@@ -11,3 +11,5 @@ cryptography
 gevent
 psycopg[binary]
 psycopg-pool
+starlette
+uvicorn[standard]
