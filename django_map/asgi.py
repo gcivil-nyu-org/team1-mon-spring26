@@ -92,11 +92,11 @@ async def listen_to_pg():
     port = str(os.environ.get("RDS_PORT", "5432"))
     dbname = os.environ.get("RDS_DB_NAME", os.environ.get("DB_NAME", "amenities"))
     username = os.environ.get("RDS_USERNAME", os.environ.get("DB_USERNAME", ""))
-    if os.environ.get("APP_ENV"):
+    if os.environ.get("APP_ENV") and host != "localhost":
         username = f"{dbname}_{os.environ.get('APP_ENV')}"
-                              
-    password = os.environ.get("RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword"))
-
+    password = os.environ.get(
+        "RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword")
+    )
 
     dsn = f"dbname={dbname} user={username} password={password} host={host} port={port}"  # noqa: E501
 
