@@ -60,7 +60,7 @@ def compress_image(uploaded_file, max_dimension=1024, quality=80):
     """
     try:
         img = Image.open(uploaded_file)
-        
+
         # Preserve original EXIF orientation (prevent sideways mobile photos)
         img = ImageOps.exif_transpose(img)
 
@@ -78,12 +78,14 @@ def compress_image(uploaded_file, max_dimension=1024, quality=80):
             img = img.convert("RGB")
 
         # Resize maintaining aspect ratio
-        resample_filter = getattr(Image.Resampling, 'LANCZOS', getattr(Image, 'LANCZOS', 1))
+        resample_filter = getattr(
+            Image.Resampling, "LANCZOS", getattr(Image, "LANCZOS", 1)
+        )
         img.thumbnail((max_dimension, max_dimension), resample_filter)
 
         # Save to buffer
         output = io.BytesIO()
-        img.save(output, format='JPEG', quality=quality, optimize=True)
+        img.save(output, format="JPEG", quality=quality, optimize=True)
         output.seek(0)
 
         # Replace extension with .jpg
@@ -91,12 +93,17 @@ def compress_image(uploaded_file, max_dimension=1024, quality=80):
         new_name = f"{base_name}.jpg"
 
         return InMemoryUploadedFile(
-            output, 'ImageField', new_name, 'image/jpeg',
-            output.getbuffer().nbytes, None
+            output,
+            "ImageField",
+            new_name,
+            "image/jpeg",
+            output.getbuffer().nbytes,
+            None,
         )
     except Exception:
-        # If anything fails (e.g. invalid file), return original to let size validation handle it
+        # If failure, return original to let size validation handle it
         return uploaded_file
+
 
 def map_view(request):
     """Render the main map view."""
@@ -951,16 +958,16 @@ def create_review_api(request):
             file_content_type = photo_file.content_type or ""
             if not file_content_type.startswith("image/"):
                 return JsonResponse({"error": "Photo must be an image"}, status=400)
-            
+
             # Compress review photos to 1024x1024 maximum
             photo_file = compress_image(photo_file, max_dimension=1024)
-            
+
             if photo_file.size > 5 * 1024 * 1024:
                 return JsonResponse(
                     {"error": "Photo must be 5MB or smaller"}, status=400
                 )
             processed_photos.append(photo_file)
-            
+
         photo_files = processed_photos
 
         try:
@@ -1255,7 +1262,7 @@ def chat_events_sse(request):
             last_id = last_id_dict.get("max_id") or 0
         else:
             last_id = 0
-            
+
         event_id = 0
 
         # set retry ONCE at start
@@ -1265,7 +1272,7 @@ def chat_events_sse(request):
         counter = 1
         hardcount = 0
         while True:
-            try:                
+            try:
                 # Query chat list every ~ 15 seconds
                 if hardcount == 5:
                     # update user's chat IDs periodically
@@ -1281,7 +1288,9 @@ def chat_events_sse(request):
                 # Query once every 3 seconds
                 if user_chat_ids:
                     new_msgs = (
-                        Message.objects.filter(chat_id__in=user_chat_ids, id__gt=last_id)
+                        Message.objects.filter(
+                            chat_id__in=user_chat_ids, id__gt=last_id
+                        )
                         .only("id", "sender_id", "chat_id")
                         .order_by("id")[:1]
                     )
@@ -1301,7 +1310,7 @@ def chat_events_sse(request):
 
                 # heartbeat logic
                 if not found_new:
-                    if counter >= 10:                        
+                    if counter >= 10:
                         # send keep-alive
                         yield ": keep-alive\n\n"
                         counter = 1
@@ -1354,8 +1363,12 @@ def get_user_chats_api(request):
             if chat.chat_type == "direct":
                 # Find the other participant to get their avatar
                 other_p = next(
-                    (p for p in chat.participants.all() if p.user_id != request.user.id),
-                    None
+                    (
+                        p
+                        for p in chat.participants.all()
+                        if p.user_id != request.user.id
+                    ),
+                    None,
                 )
                 if other_p and getattr(other_p.user, "avatar_url", None):
                     avatar_url = other_p.user.avatar_url
@@ -1755,6 +1768,7 @@ def amenity_search_api(request):
         }
     )
 
+
 @require_http_methods(["GET"])
 @login_required(login_url="/?auth_required=1")
 def user_search_api(request):
@@ -1766,14 +1780,16 @@ def user_search_api(request):
         return JsonResponse({"users": []})
 
     # Search matching users by email or username, excluding the current user
-    users = CustomUser.objects.filter(
-        Q(email__icontains=q) | Q(username__icontains=q),
-        is_active=True
-    ).exclude(id=request.user.id).order_by("email")[:limit]
+    users = (
+        CustomUser.objects.filter(
+            Q(email__icontains=q) | Q(username__icontains=q), is_active=True
+        )
+        .exclude(id=request.user.id)
+        .order_by("email")[:limit]
+    )
 
-    return JsonResponse({
-        "users": [serialize_auth_user(u) for u in users]
-    })
+    return JsonResponse({"users": [serialize_auth_user(u) for u in users]})
+
 
 @require_http_methods(["GET"])
 def get_amenity_reviewers_api(request):
