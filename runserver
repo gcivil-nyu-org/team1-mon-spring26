@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Function to safely shut down both servers
+cleanup() {
+    echo -e "\n[Shutdown] Stopping servers..."
+    kill $DJANGO_PID $UVICORN_PID 2>/dev/null
+    wait $DJANGO_PID $UVICORN_PID 2>/dev/null
+    echo "[Shutdown] Both servers stopped."
+    exit 0
+}
+
+# Catch Ctrl+C (SIGINT) and terminal kill (SIGTERM)
+trap cleanup SIGINT SIGTERM
+
+echo "[Startup] Starting Django WSGI server..."
+python manage.py runserver &
+DJANGO_PID=$!
+
+sleep 2
+
+echo "[Startup] Starting Starlette ASGI server (Uvicorn)..."
+uvicorn django_map.asgi:application --port 8001 --reload &
+UVICORN_PID=$!
+
+echo -e "\n[Running] Both servers are running. Press Ctrl+C to stop."
+
+# Wait indefinitely until interrupted
+wait $DJANGO_PID $UVICORN_PID

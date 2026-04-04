@@ -26,6 +26,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let sseSource = null;
     let audioContext = null;
+    let reconnectDelay = 1000;
+    const MAX_RECONNECT_DELAY = 60000;
+    let reconnectTimeout = null;
+    let isReconnect = false;
 
     // Initialize AudioContext on first user interaction (required for Safari/Mac)
     function initAudioContext() {
@@ -104,22 +108,54 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function checkAuthAndInit() {
+        if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
+        }
+        
         try {
             const res = await fetch('/api/auth/me/');
             const data = await res.json();
             if (data.is_authenticated) {
                 // SSE enabled for chat notifications
                 console.log('[Notifications] User authenticated, connecting to SSE stream...');
-                sseSource = new EventSource('/api/chats/events/');
+                
+                if (sseSource) {
+                    sseSource.close();
+                }
+                
+                let sseUrl = '/api/chats/events/';
+                if (window.location.port === '8000') {
+                    sseUrl = `${window.location.protocol}//${window.location.hostname}:8001/api/chats/events/`;
+                }
+                
+                sseSource = new EventSource(sseUrl, { withCredentials: true });
                 
                 sseSource.onopen = () => {
                     console.log('[Notifications] SSE connection opened');
+                    reconnectDelay = 1000; // Reset backoff on successful connection
+                    if (isReconnect) {
+                        console.log('[Notifications] SSE reconnected, dispatching sync event');
+                        window.dispatchEvent(new CustomEvent('chat:reconnected'));
+                    }
+                    isReconnect = false;
                 };
                 
                 sseSource.onerror = (err) => {
                     console.error('[Notifications] SSE connection error:', err);
-                    if (sseSource.readyState === EventSource.CLOSED) {
-                        console.log('[Notifications] SSE connection closed');
+                    isReconnect = true;
+                    
+                    // Force close the broken native socket to prevent memory leaks
+                    if (sseSource) {
+                        sseSource.close();
+                        sseSource = null;
+                    }
+                    
+                    // Trigger exponential backoff reconnection
+                    if (!reconnectTimeout) {
+                        console.log(`[Notifications] Scheduling reconnect in ${reconnectDelay}ms...`);
+                        reconnectTimeout = setTimeout(checkAuthAndInit, reconnectDelay);
+                        reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
                     }
                 };
                 
@@ -130,6 +166,15 @@ document.addEventListener('DOMContentLoaded', () => {
                         const chatsLink = document.querySelector('a[href^="/chats/"]');
                         if (chatsLink) {
                             if (msgData.chat_id) {
+                                // Add to pending chats list for the UI badge
+                                try {
+                                    const pending = JSON.parse(sessionStorage.getItem('pendingChatIds') || '[]');
+                                    if (!pending.includes(msgData.chat_id)) {
+                                        pending.push(msgData.chat_id);
+                                        sessionStorage.setItem('pendingChatIds', JSON.stringify(pending));
+                                    }
+                                } catch (e) {}
+                                
                                 chatsLink.href = `/chats/?chat_id=${msgData.chat_id}`;
                             }
                             chatsLink.classList.remove('nav-highlight-anim');
@@ -159,16 +204,45 @@ document.addEventListener('DOMContentLoaded', () => {
                             console.error('[Notifications] Failed to dispatch chat:new_message event:', e);
                         }
                     } else if (msgData.error === 'unauthorized') {
-                        sseSource.close();
+                        if (sseSource) {
+                            sseSource.close();
+                            sseSource = null;
+                        }
+                        if (reconnectTimeout) {
+                            clearTimeout(reconnectTimeout);
+                            reconnectTimeout = null;
+                        }
                     }
                 };
             }
         } catch (e) {
             console.error('SSE initialization failed', e);
+            isReconnect = true;
+            
+            if (!reconnectTimeout) {
+                console.log(`[Notifications] Network error, retrying in ${reconnectDelay}ms...`);
+                reconnectTimeout = setTimeout(checkAuthAndInit, reconnectDelay);
+                reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+            }
         }
     }
     
     checkAuthAndInit();
+
+    // Expose globally so auth.js can trigger it after login/register
+    window.initNotificationsSSE = checkAuthAndInit;
+    
+    window.closeNotificationsSSE = () => {
+        if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
+        }
+        if (sseSource) {
+            sseSource.close();
+            sseSource = null;
+            console.log('[Notifications] SSE connection closed explicitly');
+        }
+    };
 
     // SSE - close connection on unload
     // Explicitly close the SSE connection when leaving the page

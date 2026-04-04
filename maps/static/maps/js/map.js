@@ -1859,6 +1859,11 @@ function setCurrentUser(data) {
         console.log('[Map] User authenticated, checking for pending messages');
         checkPendingMessages();
     }
+
+        // Start SSE stream for new session
+        if (currentUser && currentUser.is_authenticated && window.initNotificationsSSE) {
+            window.initNotificationsSSE();
+        }
 }
 
 // submit login/register form data and handle auth errors.
@@ -1938,6 +1943,11 @@ function logoutUser() {
 
             currentUser = null;
             updateUserUI();
+                
+                // Close SSE connection on logout
+                if (window.closeNotificationsSSE) {
+                    window.closeNotificationsSSE();
+                }
             return null;
         })
         .catch(() => {

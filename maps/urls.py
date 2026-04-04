@@ -57,8 +57,6 @@ urlpatterns = [
     ),
     # Chat endpoints
     path("api/chats/", views.get_user_chats_api, name="get_user_chats_api"),
-    # SSE auto notify chats
-    path("api/chats/events/", views.chat_events_sse, name="chat_events_sse"),
     path(
         "api/chats/messages/", views.get_chat_messages_api, name="get_chat_messages_api"
     ),
@@ -74,6 +72,7 @@ urlpatterns = [
     ),
     path("api/chats/leave/", views.leave_chat_api, name="leave_chat_api"),
     path("api/amenities/search/", views.amenity_search_api, name="amenity_search_api"),
+    path("api/users/search/", views.user_search_api, name="user_search_api"),
     path(
         "api/amenities/reviewers/",
         views.get_amenity_reviewers_api,

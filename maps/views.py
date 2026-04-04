@@ -1,5 +1,5 @@
 from django.shortcuts import render
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import authenticate, login, logout
@@ -9,6 +9,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.contrib.gis.geos import Polygon, GEOSGeometry
 from django.db import transaction
 from django.core.exceptions import ValidationError
+from django.db import connection
 from .models import (
     AmenityType,
     Amenity,
@@ -35,6 +36,10 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from decimal import Decimal, InvalidOperation
 import json
+import os
+import io
+from PIL import Image, ImageOps
+from django.core.files.uploadedfile import InMemoryUploadedFile
 
 
 def normalize_longitude(lon):
@@ -44,6 +49,59 @@ def normalize_longitude(lon):
     while lon > 180:
         lon -= 360
     return lon
+
+
+def compress_image(uploaded_file, max_dimension=1024, quality=80):
+    """
+    Resizes and compresses an uploaded image to save storage and bandwidth.
+    Converts the image to JPEG format.
+    """
+    try:
+        img = Image.open(uploaded_file)
+
+        # Preserve original EXIF orientation (prevent sideways mobile photos)
+        img = ImageOps.exif_transpose(img)
+
+        # Convert to RGB to ensure we can save it as JPEG
+        if img.mode in ("RGBA", "P", "LA"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "RGBA":
+                background.paste(img, mask=img.split()[3])
+            elif img.mode == "LA":
+                background.paste(img, mask=img.split()[1])
+            else:
+                background.paste(img)
+            img = background
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        # Resize maintaining aspect ratio
+        resample_filter = getattr(
+            Image.Resampling, "LANCZOS", getattr(Image, "LANCZOS", 1)
+        )
+        img.thumbnail((max_dimension, max_dimension), resample_filter)
+
+        # Save to buffer
+        output = io.BytesIO()
+        img.save(output, format="JPEG", quality=quality, optimize=True)
+        output.seek(0)
+
+        # Replace extension with .jpg
+        base_name, _ = os.path.splitext(uploaded_file.name)
+        new_name = f"{base_name}.jpg"
+
+        return InMemoryUploadedFile(
+            output,
+            "ImageField",
+            new_name,
+            "image/jpeg",
+            output.getbuffer().nbytes,
+            None,
+        )
+    except Exception:
+        # If anything fails (e.g. invalid file),
+        # return original to let size validation handle it
+        return uploaded_file
 
 
 def map_view(request):
@@ -107,7 +165,6 @@ def cluster_amenities(amenities, zoom):
         ) as sub
         GROUP BY snapped_location
     """
-    from django.db import connection
 
     with connection.cursor() as cursor:
         cursor.execute(
@@ -699,6 +756,9 @@ def update_profile_api(request):
         if not content_type.startswith("image/"):
             return JsonResponse({"error": "Avatar must be an image"}, status=400)
 
+        # Automatically compress avatars to a maximum of 512x512
+        avatar_file = compress_image(avatar_file, max_dimension=512)
+
         if avatar_file.size > 2 * 1024 * 1024:
             return JsonResponse(
                 {"error": "Avatar must be 2MB or smaller"},
@@ -892,14 +952,22 @@ def create_review_api(request):
         if len(photo_files) > 5:
             return JsonResponse({"error": "Maximum of 5 photos allowed"}, status=400)
 
+        processed_photos = []
         for photo_file in photo_files:
             file_content_type = photo_file.content_type or ""
             if not file_content_type.startswith("image/"):
                 return JsonResponse({"error": "Photo must be an image"}, status=400)
+
+            # Compress review photos to 1024x1024 maximum
+            photo_file = compress_image(photo_file, max_dimension=1024)
+
             if photo_file.size > 5 * 1024 * 1024:
                 return JsonResponse(
                     {"error": "Photo must be 5MB or smaller"}, status=400
                 )
+            processed_photos.append(photo_file)
+
+        photo_files = processed_photos
 
         try:
             amenity = Amenity.objects.get(id=amenity_id)
@@ -1159,103 +1227,6 @@ def get_amenity_reviews_api(request):
 
 @csrf_exempt
 @require_http_methods(["GET"])
-@transaction.non_atomic_requests
-def chat_events_sse(request):
-    """SSE endpoint for chat notifications.
-    Uses a hybrid approach:
-    - Caches user's chat IDs at connection start (one query)
-    - Polls infrequently (every 15 seconds) for new messages
-    - Fetches minimal data (id, sender_id, chat_id only)
-    - No connection pooling issues because of the long intervals
-    """
-    if not request.user.is_authenticated:
-        return StreamingHttpResponse(
-            'data: {"error": "unauthorized"}\n\n',
-            content_type="text/event-stream; charset=utf-8",
-        )
-
-    user_id = request.user.id
-
-    def event_stream():
-        from django.db.models import Max
-        import json
-        import time
-
-        # Get user's chat IDs ONCE at connection start
-        user_chat_ids = list(
-            ChatParticipant.objects.filter(user_id=user_id).values_list(
-                "chat_id", flat=True
-            )
-        )
-
-        if not user_chat_ids:
-            # User has no chats, send keep-alive indefinitely
-            event_id = 0
-            while True:
-                event_id += 1
-                # connection.close()  # Release DB connection during sleep
-                yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
-                time.sleep(60)
-            return
-
-        # Get initial max ID
-        last_id_dict = Message.objects.filter(chat_id__in=user_chat_ids).aggregate(
-            max_id=Max("id")
-        )
-        last_id = last_id_dict.get("max_id") or 0
-        event_id = 0
-
-        # Poll infrequently for new messages
-        while True:
-            try:
-                event_id += 1
-
-                # Query once every 15 seconds (much less aggressive)
-                new_msgs = (
-                    Message.objects.filter(chat_id__in=user_chat_ids, id__gt=last_id)
-                    .only("id", "sender_id", "chat_id")
-                    .order_by("id")[:1]
-                )
-
-                if new_msgs:
-                    msg = new_msgs[0]
-                    last_id = msg.id
-
-                    # Only send notification if not sent by current user
-                    if msg.sender_id != user_id:
-                        event_data = json.dumps(
-                            {"type": "new_message", "chat_id": msg.chat_id}
-                        )
-                        # connection.close()  # Release DB con  before yield/sleep
-                        yield f"id: {event_id}\nretry: 60000\ndata: {event_data}\n\n"
-                        continue
-
-                    # connection.close()  # Release DB con before yielding/sleeping
-                else:
-                    # connection.close()  # Ensure con closed when no new messages
-                    pass
-                # Send keep-alive
-                yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
-
-                # Long interval: 15 seconds between checks
-                # 100 concurrent users = ~6.7 queries/second (vs hundreds before)
-                time.sleep(2)
-            except Exception:
-                # connection.close()  # Release DB connection on error too
-                event_id += 1
-                yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
-                time.sleep(2)
-
-    response = StreamingHttpResponse(
-        event_stream(), content_type="text/event-stream; charset=utf-8"
-    )
-    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    response["X-Accel-Buffering"] = "no"
-    return response
-
-
-@csrf_exempt
-@require_http_methods(["GET"])
 def get_user_chats_api(request):
     """Get all chats for the current user."""
     try:
@@ -1276,11 +1247,29 @@ def get_user_chats_api(request):
             # Get the last message
             last_message = chat.messages.last()
 
+            avatar_url = None
+            if chat.chat_type == "direct":
+                # Find the other participant to get their avatar
+                other_p = next(
+                    (
+                        p
+                        for p in chat.participants.all()
+                        if p.user_id != request.user.id
+                    ),
+                    None,
+                )
+                if other_p and getattr(other_p.user, "avatar_url", None):
+                    avatar_url = other_p.user.avatar_url
+            else:
+                if chat.created_by and getattr(chat.created_by, "avatar_url", None):
+                    avatar_url = chat.created_by.avatar_url
+
             chats_data.append(
                 {
                     "id": chat.id,
                     "chat_type": chat.chat_type,
                     "name": chat.get_display_name(request.user),
+                    "avatar_url": avatar_url,
                     "amenity_id": chat.amenity_id,
                     "amenity_name": chat.amenity.name if chat.amenity else None,
                     "created_by_email": chat.created_by.email,
@@ -1335,7 +1324,7 @@ def get_chat_messages_api(request):
             )
 
         # Get messages with pagination
-        messages = chat.messages.select_related("sender").order_by("-created_at")
+        messages = chat.messages.select_related("sender").order_by("-created_at", "-id")
         total_count = messages.count()
         start_idx = (page - 1) * page_size
         end_idx = start_idx + page_size
@@ -1416,6 +1405,30 @@ def send_message_api(request):
         chat.last_message_at = message.created_at
         chat.save(update_fields=["last_message_at"])
 
+        # NOTIFY all other participants
+        payload = json.dumps(
+            {
+                "type": "new_message",
+                "chat_id": chat.id,
+                "message": {
+                    "id": message.id,
+                    "sender_email": message.sender.email,
+                    "content": message.content,
+                    "created_at": message.created_at.isoformat(),
+                },
+            }
+        )
+
+        def send_notification():
+            with connection.cursor() as cursor:
+                for p in chat.participants.exclude(user=request.user):
+                    wrapped = json.dumps({"user_id": p.user_id, "payload": payload})
+                    cursor.execute(
+                        "SELECT pg_notify('global_chat_events', %s)", [wrapped]
+                    )
+
+        transaction.on_commit(send_notification)
+
         return JsonResponse(
             {
                 "id": message.id,
@@ -1487,6 +1500,16 @@ def create_direct_chat_api(request):
         ChatParticipant.objects.create(chat=chat, user=request.user)
         ChatParticipant.objects.create(chat=chat, user=recipient)
 
+        # NOTIFY the recipient
+        payload = json.dumps({"type": "new_message", "chat_id": chat.id})
+
+        def send_notification():
+            with connection.cursor() as cursor:
+                wrapped = json.dumps({"user_id": recipient.id, "payload": payload})
+                cursor.execute("SELECT pg_notify('global_chat_events', %s)", [wrapped])
+
+        transaction.on_commit(send_notification)
+
         return JsonResponse(
             {
                 "id": chat.id,
@@ -1556,6 +1579,22 @@ def create_group_chat_api(request):
         # Add participants
         for participant in participants:
             ChatParticipant.objects.create(chat=chat, user=participant)
+
+        # NOTIFY other participants
+        payload = json.dumps({"type": "new_message", "chat_id": chat.id})
+
+        def send_notification():
+            with connection.cursor() as cursor:
+                for participant in participants:
+                    if participant.id != request.user.id:
+                        wrapped = json.dumps(
+                            {"user_id": participant.id, "payload": payload}
+                        )
+                        cursor.execute(
+                            "SELECT pg_notify('global_chat_events', %s)", [wrapped]
+                        )
+
+        transaction.on_commit(send_notification)
 
         return JsonResponse(
             {
@@ -1666,6 +1705,28 @@ def amenity_search_api(request):
             ]
         }
     )
+
+
+@require_http_methods(["GET"])
+@login_required(login_url="/?auth_required=1")
+def user_search_api(request):
+    """Search users by email or username for chat autocomplete."""
+    q = request.GET.get("q", "").strip()
+    limit = min(int(request.GET.get("limit", 10)), 20)
+
+    if len(q) < 2:
+        return JsonResponse({"users": []})
+
+    # Search matching users by email or username, excluding the current user
+    users = (
+        CustomUser.objects.filter(
+            Q(email__icontains=q) | Q(username__icontains=q), is_active=True
+        )
+        .exclude(id=request.user.id)
+        .order_by("email")[:limit]
+    )
+
+    return JsonResponse({"users": [serialize_auth_user(u) for u in users]})
 
 
 @require_http_methods(["GET"])
