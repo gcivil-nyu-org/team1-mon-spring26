@@ -128,10 +128,12 @@ async def listen_to_pg():
 middleware = [
     Middleware(
         CORSMiddleware,
+        # Matches any subdomain of amenity.help (e.g., feature.amenity.help)
+        # and the root domain amenity.help itself.
+        allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)?amenity\.help",
         allow_origins=[
             "http://localhost:8000",
             "http://127.0.0.1:8000",
-            "https://amenity.help",
         ],
         allow_credentials=True,
         allow_methods=["GET"],
