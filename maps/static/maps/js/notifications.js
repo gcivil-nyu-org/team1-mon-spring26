@@ -26,6 +26,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let sseSource = null;
     let audioContext = null;
+    let reconnectDelay = 1000;
+    const MAX_RECONNECT_DELAY = 60000;
+    let reconnectTimeout = null;
+    let isReconnect = false;
 
     // Initialize AudioContext on first user interaction (required for Safari/Mac)
     function initAudioContext() {
@@ -104,6 +108,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function checkAuthAndInit() {
+        if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
+        }
+        
         try {
             const res = await fetch('/api/auth/me/');
             const data = await res.json();
@@ -120,11 +129,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     sseUrl = `${window.location.protocol}//${window.location.hostname}:8001/api/chats/events/`;
                 }
                 
-                let isReconnect = false;
                 sseSource = new EventSource(sseUrl, { withCredentials: true });
                 
                 sseSource.onopen = () => {
                     console.log('[Notifications] SSE connection opened');
+                    reconnectDelay = 1000; // Reset backoff on successful connection
                     if (isReconnect) {
                         console.log('[Notifications] SSE reconnected, dispatching sync event');
                         window.dispatchEvent(new CustomEvent('chat:reconnected'));
@@ -135,8 +144,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 sseSource.onerror = (err) => {
                     console.error('[Notifications] SSE connection error:', err);
                     isReconnect = true;
-                    if (sseSource.readyState === EventSource.CLOSED) {
-                        console.log('[Notifications] SSE connection closed');
+                    
+                    // Force close the broken native socket to prevent memory leaks
+                    if (sseSource) {
+                        sseSource.close();
+                        sseSource = null;
+                    }
+                    
+                    // Trigger exponential backoff reconnection
+                    if (!reconnectTimeout) {
+                        console.log(`[Notifications] Scheduling reconnect in ${reconnectDelay}ms...`);
+                        reconnectTimeout = setTimeout(checkAuthAndInit, reconnectDelay);
+                        reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
                     }
                 };
                 
@@ -185,12 +204,26 @@ document.addEventListener('DOMContentLoaded', () => {
                             console.error('[Notifications] Failed to dispatch chat:new_message event:', e);
                         }
                     } else if (msgData.error === 'unauthorized') {
-                        sseSource.close();
+                        if (sseSource) {
+                            sseSource.close();
+                            sseSource = null;
+                        }
+                        if (reconnectTimeout) {
+                            clearTimeout(reconnectTimeout);
+                            reconnectTimeout = null;
+                        }
                     }
                 };
             }
         } catch (e) {
             console.error('SSE initialization failed', e);
+            isReconnect = true;
+            
+            if (!reconnectTimeout) {
+                console.log(`[Notifications] Network error, retrying in ${reconnectDelay}ms...`);
+                reconnectTimeout = setTimeout(checkAuthAndInit, reconnectDelay);
+                reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+            }
         }
     }
     
@@ -200,6 +233,10 @@ document.addEventListener('DOMContentLoaded', () => {
     window.initNotificationsSSE = checkAuthAndInit;
     
     window.closeNotificationsSSE = () => {
+        if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
+        }
         if (sseSource) {
             sseSource.close();
             sseSource = null;
