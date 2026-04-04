@@ -10,6 +10,8 @@ const ChatsApp = (() => {
     let selectedAmenityId = null;
     let participantEmails = [];
     let amenitySearchTimer = null;
+    let userSearchTimer = null;
+    let activeUserSearchInput = null;
 
     // Set up event listener EARLY to avoid race conditions on Mac/Safari
     // This must happen before any SSE events are dispatched
@@ -121,6 +123,19 @@ const ChatsApp = (() => {
         document.getElementById('participant-tags-input')?.addEventListener('click', () => {
             document.getElementById('participant-email-input')?.focus();
         });
+
+        // User search autocomplete for both direct and group chats
+        document.getElementById('direct-recipient-email')?.addEventListener('input', onUserSearchInput);
+        document.getElementById('direct-recipient-email')?.addEventListener('keydown', (e) => {
+            if (handleUserDropdownKeyboard(e)) return;
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                createDirectChat();
+            }
+        });
+        document.getElementById('direct-recipient-email')?.addEventListener('blur', () => setTimeout(closeUserDropdown, 150));
+        document.getElementById('participant-email-input')?.addEventListener('input', onUserSearchInput);
+        document.getElementById('participant-email-input')?.addEventListener('blur', () => setTimeout(closeUserDropdown, 150));
     }
 
     async function loadChats() {
@@ -156,39 +171,84 @@ const ChatsApp = (() => {
             console.error('[ChatsApp] Error reading pending chats:', e);
         }
         
-        if (chats.length === 0) {
-            chatsList.innerHTML = `
-                <div class="empty-chats">
-                    <div class="empty-icon">💬</div>
-                    <div class="empty-text">No chats yet</div>
-                    <button class="btn-secondary" onclick="ChatsApp.openNewChatModal()">Start a conversation</button>
-                </div>
-            `;
+        // Filter out hidden chats
+        let hiddenChats = {};
+        try {
+            hiddenChats = JSON.parse(localStorage.getItem('hiddenChats') || '{}');
+        } catch (e) {}
+
+        let hiddenChatsUpdated = false;
+        const visibleChats = chats.filter(chat => {
+            if (hiddenChats[chat.id]) {
+                if (hiddenChats[chat.id] === chat.last_message_at) {
+                    return false; // Still hidden
+                } else {
+                    // New message arrived, unhide it!
+                    delete hiddenChats[chat.id];
+                    hiddenChatsUpdated = true;
+                    return true;
+                }
+            }
+            return true;
+        });
+
+        if (hiddenChatsUpdated) {
+            localStorage.setItem('hiddenChats', JSON.stringify(hiddenChats));
+        }
+        
+        if (visibleChats.length === 0) {
+            if (chats.length > 0) {
+                chatsList.innerHTML = `
+                    <div class="empty-chats">
+                        <div class="empty-icon">🙈</div>
+                        <div class="empty-text">All chats are hidden</div>
+                        <button class="btn-secondary" onclick="localStorage.removeItem('hiddenChats'); ChatsApp.loadChats();">Unhide all</button>
+                    </div>
+                `;
+            } else {
+                chatsList.innerHTML = `
+                    <div class="empty-chats">
+                        <div class="empty-icon">💬</div>
+                        <div class="empty-text">No chats yet</div>
+                        <button class="btn-secondary" onclick="ChatsApp.openNewChatModal()">Start a conversation</button>
+                    </div>
+                `;
+            }
             return;
         }
 
-        chatsList.innerHTML = chats.map(chat => {
+        chatsList.innerHTML = visibleChats.map(chat => {
             const isPending = pendingChatIds.includes(chat.id);
             const pendingBadge = isPending ? '<span class="chat-pending-badge">New</span>' : '';
             const pendingClass = isPending ? ' chat-item-pending' : '';
             
             return `
-                <div class="chat-item${pendingClass}" data-chat-id="${chat.id}">
-                    <div class="chat-item-header">
-                        <div class="chat-item-name">${escapeHtml(chat.name)} ${pendingBadge}</div>
-                        <div class="chat-item-time">${formatTime(new Date(chat.last_message_at))}</div>
+                <div class="chat-item${pendingClass}" data-chat-id="${chat.id}" style="display: flex; gap: 12px; align-items: center;">
+                    <div class="chat-item-avatar-wrapper" style="flex-shrink: 0;">
+                        <img src="${chat.avatar_url || '/static/maps/default-avatar.svg'}" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--surface, #fff);" alt="Avatar" onerror="this.src='/static/maps/default-avatar.svg'">
                     </div>
-                    <div class="chat-item-preview">
-                        ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
+                    <div class="chat-item-content" style="flex-grow: 1; min-width: 0;">
+                        <div class="chat-item-header">
+                            <div class="chat-item-name">${escapeHtml(chat.name)} ${pendingBadge}</div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <div class="chat-item-time">${formatTime(new Date(chat.last_message_at))}</div>
+                                <button class="chat-item-hide-btn" data-chat-id="${chat.id}" data-last-msg="${chat.last_message_at}" title="Hide chat" style="background: none; border: none; color: var(--text-3, #999); cursor: pointer; padding: 0 4px; font-size: 16px; line-height: 1; border-radius: 4px;">&times;</button>
+                            </div>
+                        </div>
+                        <div class="chat-item-preview">
+                            ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
+                        </div>
+                        ${chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
                     </div>
-                    ${chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
                 </div>
             `;
         }).join('');
 
         // Add click listeners
         document.querySelectorAll('.chat-item').forEach(item => {
-            item.addEventListener('click', () => {
+            item.addEventListener('click', (e) => {
+                if (e.target.closest('.chat-item-hide-btn')) return;
+
                 const chatId = item.dataset.chatId;
                 
                 // Remove the "New" badge and pending styling when clicking
@@ -201,6 +261,28 @@ const ChatsApp = (() => {
                 
                 openChat(chatId);
             });
+        });
+
+        // Add hide button listeners
+        document.querySelectorAll('.chat-item-hide-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation(); // Don't trigger the chat open logic
+                const chatId = btn.dataset.chatId;
+                const lastMsg = btn.dataset.lastMsg;
+                
+                let hidden = {};
+                try {
+                    hidden = JSON.parse(localStorage.getItem('hiddenChats') || '{}');
+                } catch (err) {}
+                
+                hidden[chatId] = lastMsg;
+                localStorage.setItem('hiddenChats', JSON.stringify(hidden));
+                
+                displayChatsList(chats); // Re-render immediately
+            });
+            
+            btn.addEventListener('mouseenter', () => btn.style.color = 'var(--text-1, #111)');
+            btn.addEventListener('mouseleave', () => btn.style.color = 'var(--text-3, #999)');
         });
     }
 
@@ -355,6 +437,15 @@ const ChatsApp = (() => {
 
     function openNewChatModal() {
         document.getElementById('new-chat-modal').style.display = 'flex';
+        
+        setTimeout(() => {
+            const activeTab = document.querySelector('.modal-tab-content.active');
+            if (activeTab && activeTab.id === 'group-chat-tab') {
+                document.getElementById('group-chat-name')?.focus();
+            } else {
+                document.getElementById('direct-recipient-email')?.focus();
+            }
+        }, 50);
     }
 
     function closeNewChatModal() {
@@ -375,6 +466,7 @@ const ChatsApp = (() => {
         participantEmails = [];
         renderParticipantTags();
         closeAmenityDropdown();
+        closeUserDropdown();
     }
 
     function switchModalTab(tabName) {
@@ -389,6 +481,15 @@ const ChatsApp = (() => {
         // Show selected tab
         document.getElementById(tabName)?.classList.add('active');
         document.querySelector(`[data-tab="${tabName}"]`)?.classList.add('active');
+
+        // Auto-focus appropriate input on tab change
+        setTimeout(() => {
+            if (tabName === 'group-chat-tab') {
+                document.getElementById('group-chat-name')?.focus();
+            } else {
+                document.getElementById('direct-recipient-email')?.focus();
+            }
+        }, 50);
     }
 
     async function createDirectChat() {
@@ -542,7 +643,150 @@ const ChatsApp = (() => {
         if (dropdown) dropdown.classList.remove('open');
     }
 
+    function onUserSearchInput(e) {
+        const q = e.target.value.trim();
+        activeUserSearchInput = e.target;
+
+        if (q.length < 2) {
+            closeUserDropdown();
+            return;
+        }
+
+        clearTimeout(userSearchTimer);
+        userSearchTimer = setTimeout(() => searchUsers(q), 250);
+    }
+
+    async function searchUsers(q) {
+        try {
+            const res = await fetch(`/api/users/search/?q=${encodeURIComponent(q)}&limit=6`);
+            const data = await res.json();
+            renderUserDropdown(data.users || []);
+        } catch {
+            closeUserDropdown();
+        }
+    }
+
+    function renderUserDropdown(users) {
+        let dropdown = document.getElementById('user-dropdown');
+        if (!dropdown) {
+            dropdown = document.createElement('div');
+            dropdown.id = 'user-dropdown';
+            dropdown.style.cssText = `
+                position: absolute; background: var(--surface, #fff);
+                border: 1px solid var(--border, #e8e8e5); border-radius: 8px;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.12); z-index: 9999;
+                max-height: 220px; overflow-y: auto; display: none;
+            `;
+            document.body.appendChild(dropdown);
+        }
+
+        if (!activeUserSearchInput) return;
+
+        if (users.length === 0) {
+            dropdown.innerHTML = '<div style="padding: 12px 16px; color: var(--text-3, #999); font-size: 13px;">No users found</div>';
+        } else {
+            dropdown.innerHTML = users.map(u => `
+                <div class="user-dropdown-item" data-email="${escapeHtml(u.email)}" style="padding: 10px 16px; cursor: pointer; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border, #e8e8e5); transition: background 0.15s;">
+                    <img src="${u.avatar_url}" style="width: 32px; height: 32px; border-radius: 50%; object-fit: cover; background: #eee;">
+                    <div style="display: flex; flex-direction: column;">
+                        <span style="font-weight: 600; font-size: 14px; color: var(--text-1, #111);">${escapeHtml(u.username || u.email)}</span>
+                        ${u.username && u.username !== u.email ? `<span style="font-size: 12px; color: var(--text-3, #999);">${escapeHtml(u.email)}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+
+            dropdown.querySelectorAll('.user-dropdown-item').forEach(item => {
+                item.addEventListener('mousedown', (e) => {
+                    e.preventDefault(); // Prevent blur from firing before selecting
+                    selectUserItem(item.dataset.email);
+                });
+                item.addEventListener('mouseenter', () => {
+                    dropdown.querySelectorAll('.user-dropdown-item').forEach(i => {
+                        i.style.backgroundColor = 'transparent';
+                        i.classList.remove('highlighted');
+                    });
+                    item.style.backgroundColor = 'var(--accent-lt, #f0f4f8)';
+                    item.classList.add('highlighted');
+                });
+                item.addEventListener('mouseleave', () => {
+                    item.style.backgroundColor = 'transparent';
+                    item.classList.remove('highlighted');
+                });
+            });
+        }
+
+        // Bind correctly relative to whichever input element is currently focused
+        const rect = activeUserSearchInput.getBoundingClientRect();
+        dropdown.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+        dropdown.style.left = (rect.left + window.scrollX) + 'px';
+        dropdown.style.width = rect.width + 'px';
+        dropdown.style.display = 'block';
+    }
+
+    function selectUserItem(email) {
+        if (activeUserSearchInput) {
+            if (activeUserSearchInput.id === 'participant-email-input') {
+                addParticipantTag(email);
+                activeUserSearchInput.value = '';
+            } else {
+                activeUserSearchInput.value = email;
+            }
+        }
+        closeUserDropdown();
+    }
+
+    function handleUserDropdownKeyboard(e) {
+        const dropdown = document.getElementById('user-dropdown');
+        if (!dropdown || dropdown.style.display === 'none') return false;
+
+        const items = Array.from(dropdown.querySelectorAll('.user-dropdown-item'));
+        if (items.length === 0) return false;
+
+        let currentIndex = items.findIndex(item => item.classList.contains('highlighted'));
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (currentIndex >= 0) items[currentIndex].classList.remove('highlighted');
+            currentIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+            items[currentIndex].classList.add('highlighted');
+            updateDropdownHighlight(items, currentIndex);
+            return true;
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (currentIndex >= 0) items[currentIndex].classList.remove('highlighted');
+            currentIndex = currentIndex <= 0 ? items.length - 1 : currentIndex - 1;
+            items[currentIndex].classList.add('highlighted');
+            updateDropdownHighlight(items, currentIndex);
+            return true;
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const selectedItem = currentIndex >= 0 ? items[currentIndex] : items[0];
+            selectUserItem(selectedItem.dataset.email);
+            return true;
+        }
+
+        return false;
+    }
+
+    function updateDropdownHighlight(items, index) {
+        items.forEach((item, idx) => {
+            if (idx === index) {
+                item.style.backgroundColor = 'var(--accent-lt, #f0f4f8)';
+                item.scrollIntoView({ block: 'nearest' });
+            } else {
+                item.style.backgroundColor = 'transparent';
+            }
+        });
+    }
+
+    function closeUserDropdown() {
+        const dropdown = document.getElementById('user-dropdown');
+        if (dropdown) dropdown.style.display = 'none';
+    }
+
     function onParticipantKeydown(e) {
+        if (handleUserDropdownKeyboard(e)) return;
+
         if (e.key === 'Enter' || e.key === ',') {
             e.preventDefault();
             const input = e.target;

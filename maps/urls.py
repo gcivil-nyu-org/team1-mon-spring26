@@ -74,6 +74,7 @@ urlpatterns = [
     ),
     path("api/chats/leave/", views.leave_chat_api, name="leave_chat_api"),
     path("api/amenities/search/", views.amenity_search_api, name="amenity_search_api"),
+    path("api/users/search/", views.user_search_api, name="user_search_api"),
     path(
         "api/amenities/reviewers/",
         views.get_amenity_reviewers_api,

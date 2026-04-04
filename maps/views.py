@@ -38,6 +38,10 @@ from django.db.models.functions import Coalesce
 from decimal import Decimal, InvalidOperation
 import json
 from time import sleep  # auto patched by gunicorn for non-block
+import os
+import io
+from PIL import Image, ImageOps
+from django.core.files.uploadedfile import InMemoryUploadedFile
 
 
 def normalize_longitude(lon):
@@ -48,6 +52,51 @@ def normalize_longitude(lon):
         lon -= 360
     return lon
 
+
+def compress_image(uploaded_file, max_dimension=1024, quality=80):
+    """
+    Resizes and compresses an uploaded image to save storage and bandwidth.
+    Converts the image to JPEG format.
+    """
+    try:
+        img = Image.open(uploaded_file)
+        
+        # Preserve original EXIF orientation (prevent sideways mobile photos)
+        img = ImageOps.exif_transpose(img)
+
+        # Convert to RGB to ensure we can save it as JPEG
+        if img.mode in ("RGBA", "P", "LA"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "RGBA":
+                background.paste(img, mask=img.split()[3])
+            elif img.mode == "LA":
+                background.paste(img, mask=img.split()[1])
+            else:
+                background.paste(img)
+            img = background
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        # Resize maintaining aspect ratio
+        resample_filter = getattr(Image.Resampling, 'LANCZOS', getattr(Image, 'LANCZOS', 1))
+        img.thumbnail((max_dimension, max_dimension), resample_filter)
+
+        # Save to buffer
+        output = io.BytesIO()
+        img.save(output, format='JPEG', quality=quality, optimize=True)
+        output.seek(0)
+
+        # Replace extension with .jpg
+        base_name, _ = os.path.splitext(uploaded_file.name)
+        new_name = f"{base_name}.jpg"
+
+        return InMemoryUploadedFile(
+            output, 'ImageField', new_name, 'image/jpeg',
+            output.getbuffer().nbytes, None
+        )
+    except Exception:
+        # If anything fails (e.g. invalid file), return original to let size validation handle it
+        return uploaded_file
 
 def map_view(request):
     """Render the main map view."""
@@ -701,6 +750,9 @@ def update_profile_api(request):
         if not content_type.startswith("image/"):
             return JsonResponse({"error": "Avatar must be an image"}, status=400)
 
+        # Automatically compress avatars to a maximum of 512x512
+        avatar_file = compress_image(avatar_file, max_dimension=512)
+
         if avatar_file.size > 2 * 1024 * 1024:
             return JsonResponse(
                 {"error": "Avatar must be 2MB or smaller"},
@@ -894,14 +946,22 @@ def create_review_api(request):
         if len(photo_files) > 5:
             return JsonResponse({"error": "Maximum of 5 photos allowed"}, status=400)
 
+        processed_photos = []
         for photo_file in photo_files:
             file_content_type = photo_file.content_type or ""
             if not file_content_type.startswith("image/"):
                 return JsonResponse({"error": "Photo must be an image"}, status=400)
+            
+            # Compress review photos to 1024x1024 maximum
+            photo_file = compress_image(photo_file, max_dimension=1024)
+            
             if photo_file.size > 5 * 1024 * 1024:
                 return JsonResponse(
                     {"error": "Photo must be 5MB or smaller"}, status=400
                 )
+            processed_photos.append(photo_file)
+            
+        photo_files = processed_photos
 
         try:
             amenity = Amenity.objects.get(id=amenity_id)
@@ -1187,21 +1247,15 @@ def chat_events_sse(request):
             )
         )
 
-        if not user_chat_ids:
-            # User has no chats, send keep-alive indefinitely
-            event_id = 0
-            while True:
-                event_id += 1
-                connection.close()  # Release DB connection during sleep
-                yield f"id: {event_id}\nretry: 60000\n: keep-alive\n\n"
-                sleep(60)
-            return
-
         # Get initial max ID
-        last_id_dict = Message.objects.filter(chat_id__in=user_chat_ids).aggregate(
-            max_id=Max("id")
-        )
-        last_id = last_id_dict.get("max_id") or 0
+        if user_chat_ids:
+            last_id_dict = Message.objects.filter(chat_id__in=user_chat_ids).aggregate(
+                max_id=Max("id")
+            )
+            last_id = last_id_dict.get("max_id") or 0
+        else:
+            last_id = 0
+            
         event_id = 0
 
         # set retry ONCE at start
@@ -1209,14 +1263,30 @@ def chat_events_sse(request):
 
         # Poll infrequently for new messages
         counter = 1
+        hardcount = 0
         while True:
-            try:
+            try:                
+                # Query chat list every ~ 15 seconds
+                if hardcount == 5:
+                    # update user's chat IDs periodically
+                    user_chat_ids = list(
+                        ChatParticipant.objects.filter(user_id=user_id).values_list(
+                            "chat_id", flat=True
+                        )
+                    )
+                    hardcount = 0
+                else:
+                    hardcount += 1
+
                 # Query once every 3 seconds
-                new_msgs = (
-                    Message.objects.filter(chat_id__in=user_chat_ids, id__gt=last_id)
-                    .only("id", "sender_id", "chat_id")
-                    .order_by("id")[:1]
-                )
+                if user_chat_ids:
+                    new_msgs = (
+                        Message.objects.filter(chat_id__in=user_chat_ids, id__gt=last_id)
+                        .only("id", "sender_id", "chat_id")
+                        .order_by("id")[:1]
+                    )
+                else:
+                    new_msgs = []
 
                 found_new = False
                 for msg in new_msgs:
@@ -1231,13 +1301,7 @@ def chat_events_sse(request):
 
                 # heartbeat logic
                 if not found_new:
-                    if counter >= 10:
-                        # update user's chat IDs periodically
-                        user_chat_ids = list(
-                            ChatParticipant.objects.filter(user_id=user_id).values_list(
-                                "chat_id", flat=True
-                            )
-                        )
+                    if counter >= 10:                        
                         # send keep-alive
                         yield ": keep-alive\n\n"
                         counter = 1
@@ -1286,11 +1350,25 @@ def get_user_chats_api(request):
             # Get the last message
             last_message = chat.messages.last()
 
+            avatar_url = None
+            if chat.chat_type == "direct":
+                # Find the other participant to get their avatar
+                other_p = next(
+                    (p for p in chat.participants.all() if p.user_id != request.user.id),
+                    None
+                )
+                if other_p and getattr(other_p.user, "avatar_url", None):
+                    avatar_url = other_p.user.avatar_url
+            else:
+                if chat.created_by and getattr(chat.created_by, "avatar_url", None):
+                    avatar_url = chat.created_by.avatar_url
+
             chats_data.append(
                 {
                     "id": chat.id,
                     "chat_type": chat.chat_type,
                     "name": chat.get_display_name(request.user),
+                    "avatar_url": avatar_url,
                     "amenity_id": chat.amenity_id,
                     "amenity_name": chat.amenity.name if chat.amenity else None,
                     "created_by_email": chat.created_by.email,
@@ -1677,6 +1755,25 @@ def amenity_search_api(request):
         }
     )
 
+@require_http_methods(["GET"])
+@login_required(login_url="/?auth_required=1")
+def user_search_api(request):
+    """Search users by email or username for chat autocomplete."""
+    q = request.GET.get("q", "").strip()
+    limit = min(int(request.GET.get("limit", 10)), 20)
+
+    if len(q) < 2:
+        return JsonResponse({"users": []})
+
+    # Search matching users by email or username, excluding the current user
+    users = CustomUser.objects.filter(
+        Q(email__icontains=q) | Q(username__icontains=q),
+        is_active=True
+    ).exclude(id=request.user.id).order_by("email")[:limit]
+
+    return JsonResponse({
+        "users": [serialize_auth_user(u) for u in users]
+    })
 
 @require_http_methods(["GET"])
 def get_amenity_reviewers_api(request):
