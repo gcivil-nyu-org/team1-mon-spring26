@@ -88,12 +88,9 @@ async def chat_events_sse(request):
 async def listen_to_pg():
     """Background task holding 1 single connection open per Uvicorn worker."""
     db_settings = settings.DATABASES["default"]
-    host = db_settings.get("HOST", "localhost")
-    port = str(db_settings.get("PORT", "5432"))
-
+    host = db_settings.get("RDS_HOSTNAME", "localhost")
     # Bypass PgBouncer transaction pooling for LISTEN/NOTIFY
-    if port == "6432":
-        port = "5432"
+    port = str(db_settings.get("RDS_PORT", "5432"))
 
     dsn = f"dbname={db_settings.get('NAME', '')} user={db_settings.get('USER', '')} password={db_settings.get('PASSWORD', '')} host={host} port={port}"  # noqa: E501
 
