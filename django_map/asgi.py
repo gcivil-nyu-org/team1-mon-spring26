@@ -128,7 +128,7 @@ async def listen_to_pg():
 middleware = [
     Middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:8000", "http://127.0.0.1:8000"],
+        allow_origins=["http://localhost:8000", "http://127.0.0.1:8000", "https://amenity.help"],
         allow_credentials=True,
         allow_methods=["GET"],
         allow_headers=["*"],
