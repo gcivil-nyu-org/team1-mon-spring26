@@ -1,5 +1,5 @@
 from django.shortcuts import render
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import authenticate, login, logout
@@ -9,7 +9,6 @@ from django.contrib.auth.password_validation import validate_password
 from django.contrib.gis.geos import Polygon, GEOSGeometry
 from django.db import transaction
 from django.core.exceptions import ValidationError
-from django.db.models import Max
 from django.db import connection
 from .models import (
     AmenityType,
@@ -37,7 +36,6 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from decimal import Decimal, InvalidOperation
 import json
-from time import sleep  # auto patched by gunicorn for non-block
 import os
 import io
 from PIL import Image, ImageOps
@@ -60,7 +58,7 @@ def compress_image(uploaded_file, max_dimension=1024, quality=80):
     """
     try:
         img = Image.open(uploaded_file)
-        
+
         # Preserve original EXIF orientation (prevent sideways mobile photos)
         img = ImageOps.exif_transpose(img)
 
@@ -78,12 +76,14 @@ def compress_image(uploaded_file, max_dimension=1024, quality=80):
             img = img.convert("RGB")
 
         # Resize maintaining aspect ratio
-        resample_filter = getattr(Image.Resampling, 'LANCZOS', getattr(Image, 'LANCZOS', 1))
+        resample_filter = getattr(
+            Image.Resampling, "LANCZOS", getattr(Image, "LANCZOS", 1)
+        )
         img.thumbnail((max_dimension, max_dimension), resample_filter)
 
         # Save to buffer
         output = io.BytesIO()
-        img.save(output, format='JPEG', quality=quality, optimize=True)
+        img.save(output, format="JPEG", quality=quality, optimize=True)
         output.seek(0)
 
         # Replace extension with .jpg
@@ -91,12 +91,18 @@ def compress_image(uploaded_file, max_dimension=1024, quality=80):
         new_name = f"{base_name}.jpg"
 
         return InMemoryUploadedFile(
-            output, 'ImageField', new_name, 'image/jpeg',
-            output.getbuffer().nbytes, None
+            output,
+            "ImageField",
+            new_name,
+            "image/jpeg",
+            output.getbuffer().nbytes,
+            None,
         )
     except Exception:
-        # If anything fails (e.g. invalid file), return original to let size validation handle it
+        # If anything fails (e.g. invalid file),
+        # return original to let size validation handle it
         return uploaded_file
+
 
 def map_view(request):
     """Render the main map view."""
@@ -951,16 +957,16 @@ def create_review_api(request):
             file_content_type = photo_file.content_type or ""
             if not file_content_type.startswith("image/"):
                 return JsonResponse({"error": "Photo must be an image"}, status=400)
-            
+
             # Compress review photos to 1024x1024 maximum
             photo_file = compress_image(photo_file, max_dimension=1024)
-            
+
             if photo_file.size > 5 * 1024 * 1024:
                 return JsonResponse(
                     {"error": "Photo must be 5MB or smaller"}, status=400
                 )
             processed_photos.append(photo_file)
-            
+
         photo_files = processed_photos
 
         try:
@@ -1245,8 +1251,12 @@ def get_user_chats_api(request):
             if chat.chat_type == "direct":
                 # Find the other participant to get their avatar
                 other_p = next(
-                    (p for p in chat.participants.all() if p.user_id != request.user.id),
-                    None
+                    (
+                        p
+                        for p in chat.participants.all()
+                        if p.user_id != request.user.id
+                    ),
+                    None,
                 )
                 if other_p and getattr(other_p.user, "avatar_url", None):
                     avatar_url = other_p.user.avatar_url
@@ -1396,22 +1406,26 @@ def send_message_api(request):
         chat.save(update_fields=["last_message_at"])
 
         # NOTIFY all other participants
-        payload = json.dumps({
-            "type": "new_message", 
-            "chat_id": chat.id,
-            "message": {
-                "id": message.id,
-                "sender_email": message.sender.email,
-                "content": message.content,
-                "created_at": message.created_at.isoformat(),
+        payload = json.dumps(
+            {
+                "type": "new_message",
+                "chat_id": chat.id,
+                "message": {
+                    "id": message.id,
+                    "sender_email": message.sender.email,
+                    "content": message.content,
+                    "created_at": message.created_at.isoformat(),
+                },
             }
-        })
-        
+        )
+
         def send_notification():
             with connection.cursor() as cursor:
                 for p in chat.participants.exclude(user=request.user):
                     wrapped = json.dumps({"user_id": p.user_id, "payload": payload})
-                    cursor.execute("SELECT pg_notify('global_chat_events', %s)", [wrapped])
+                    cursor.execute(
+                        "SELECT pg_notify('global_chat_events', %s)", [wrapped]
+                    )
 
         transaction.on_commit(send_notification)
 
@@ -1488,7 +1502,7 @@ def create_direct_chat_api(request):
 
         # NOTIFY the recipient
         payload = json.dumps({"type": "new_message", "chat_id": chat.id})
-        
+
         def send_notification():
             with connection.cursor() as cursor:
                 wrapped = json.dumps({"user_id": recipient.id, "payload": payload})
@@ -1568,14 +1582,18 @@ def create_group_chat_api(request):
 
         # NOTIFY other participants
         payload = json.dumps({"type": "new_message", "chat_id": chat.id})
-        
+
         def send_notification():
             with connection.cursor() as cursor:
                 for participant in participants:
                     if participant.id != request.user.id:
-                        wrapped = json.dumps({"user_id": participant.id, "payload": payload})
-                        cursor.execute("SELECT pg_notify('global_chat_events', %s)", [wrapped])
-                        
+                        wrapped = json.dumps(
+                            {"user_id": participant.id, "payload": payload}
+                        )
+                        cursor.execute(
+                            "SELECT pg_notify('global_chat_events', %s)", [wrapped]
+                        )
+
         transaction.on_commit(send_notification)
 
         return JsonResponse(
@@ -1688,6 +1706,7 @@ def amenity_search_api(request):
         }
     )
 
+
 @require_http_methods(["GET"])
 @login_required(login_url="/?auth_required=1")
 def user_search_api(request):
@@ -1699,14 +1718,16 @@ def user_search_api(request):
         return JsonResponse({"users": []})
 
     # Search matching users by email or username, excluding the current user
-    users = CustomUser.objects.filter(
-        Q(email__icontains=q) | Q(username__icontains=q),
-        is_active=True
-    ).exclude(id=request.user.id).order_by("email")[:limit]
+    users = (
+        CustomUser.objects.filter(
+            Q(email__icontains=q) | Q(username__icontains=q), is_active=True
+        )
+        .exclude(id=request.user.id)
+        .order_by("email")[:limit]
+    )
 
-    return JsonResponse({
-        "users": [serialize_auth_user(u) for u in users]
-    })
+    return JsonResponse({"users": [serialize_auth_user(u) for u in users]})
+
 
 @require_http_methods(["GET"])
 def get_amenity_reviewers_api(request):

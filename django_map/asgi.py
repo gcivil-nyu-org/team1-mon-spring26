@@ -9,10 +9,6 @@ https://docs.djangoproject.com/en/6.0/howto/deployment/asgi/
 
 import os
 import django
-
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_map.settings")
-django.setup()
-
 import json
 import asyncio
 import psycopg
@@ -25,28 +21,35 @@ from starlette.responses import StreamingResponse
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_map.settings")
+django.setup()
+
+
 # Global Pub/Sub Memory: Maps user_id (str) to a set of asyncio.Queues
 active_connections = {}
+
 
 async def get_user_id_from_session(request):
     session_key = request.cookies.get(settings.SESSION_COOKIE_NAME)
     if not session_key:
         return None
-    
+
     from django.contrib.sessions.models import Session
+
     try:
         session = await sync_to_async(Session.objects.get)(session_key=session_key)
         data = session.get_decoded()
-        return str(data.get('_auth_user_id'))
+        return str(data.get("_auth_user_id"))
     except Session.DoesNotExist:
         return None
+
 
 async def chat_events_sse(request):
     user_id = await get_user_id_from_session(request)
     if not user_id:
         return StreamingResponse(
             iter(['data: {"error": "unauthorized"}\n\n']),
-            media_type="text/event-stream"
+            media_type="text/event-stream",
         )
 
     queue = asyncio.Queue()
@@ -74,35 +77,40 @@ async def chat_events_sse(request):
             if not active_connections[user_id]:
                 del active_connections[user_id]
 
-    response = StreamingResponse(event_generator(), media_type="text/event-stream; charset=utf-8")
+    response = StreamingResponse(
+        event_generator(), media_type="text/event-stream; charset=utf-8"
+    )
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["X-Accel-Buffering"] = "no"
     return response
 
+
 async def listen_to_pg():
     """Background task holding 1 single connection open per Uvicorn worker."""
-    db_settings = settings.DATABASES['default']
-    host = db_settings.get('HOST', 'localhost')
-    port = str(db_settings.get('PORT', '5432'))
-    
+    db_settings = settings.DATABASES["default"]
+    host = db_settings.get("HOST", "localhost")
+    port = str(db_settings.get("PORT", "5432"))
+
     # Bypass PgBouncer transaction pooling for LISTEN/NOTIFY
     if port == "6432":
         port = "5432"
-        
-    dsn = f"dbname={db_settings.get('NAME', '')} user={db_settings.get('USER', '')} password={db_settings.get('PASSWORD', '')} host={host} port={port}"
-    
+
+    dsn = f"dbname={db_settings.get('NAME', '')} user={db_settings.get('USER', '')} password={db_settings.get('PASSWORD', '')} host={host} port={port}"  # noqa: E501
+
     while True:
         try:
-            async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+            async with await psycopg.AsyncConnection.connect(
+                dsn, autocommit=True
+            ) as conn:
                 async with conn.cursor() as cur:
                     await cur.execute("LISTEN global_chat_events")
-                
+
                 async for notify in conn.notifies():
                     try:
                         event_data = json.loads(notify.payload)
                         target_user_id = str(event_data.get("user_id"))
                         payload_str = event_data.get("payload")
-                        
+
                         # Fan-out to all browser tabs connected under this user_id
                         if target_user_id in active_connections:
                             for q in active_connections[target_user_id]:
@@ -115,6 +123,7 @@ async def listen_to_pg():
             print("[SSE] Postgres Connection Error:", e)
             await asyncio.sleep(5)  # Reconnect delay
 
+
 # Allow frontend running on port 8000 to connect locally and send cookies
 middleware = [
     Middleware(
@@ -126,10 +135,16 @@ middleware = [
     )
 ]
 
+
 @asynccontextmanager
 async def lifespan(app):
     app.state.bg_task = asyncio.create_task(listen_to_pg())
     yield
     app.state.bg_task.cancel()
 
-application = Starlette(routes=[Route("/api/chats/events/", chat_events_sse)], middleware=middleware, lifespan=lifespan)
+
+application = Starlette(
+    routes=[Route("/api/chats/events/", chat_events_sse)],
+    middleware=middleware,
+    lifespan=lifespan,
+)
