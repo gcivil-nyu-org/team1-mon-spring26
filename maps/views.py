@@ -781,14 +781,17 @@ def serialize_profile_review(review):
     Serialize one review for the profile page.
     The photo is inferred from the amenity photo uploaded by the same user.
     """
-    review_photo_urls = []
+    review_photos = []
 
     # Reuse prefetched amenity photos when available.
     # The current data model stores review photos on AmenityPhoto,
     # not directly on Review.
     for photo in review.amenity.photos.all():
         if photo.uploaded_by_id == review.user_id:
-            review_photo_urls.append(photo.photo.url)
+            review_photos.append(photo)
+
+    review_photo_urls = [photo.photo.url for photo in review_photos]
+    review_photo_ids = [photo.id for photo in review_photos]
 
     return {
         "id": review.id,
@@ -798,7 +801,9 @@ def serialize_profile_review(review):
         "amenity_type": review.amenity.amenity_type.name,
         "rating": review.rating,
         "review_text": review.review_text,
+        "photo_id": review_photo_ids[0] if review_photo_ids else None,
         "photo_url": review_photo_urls[0] if review_photo_urls else None,
+        "photo_ids": review_photo_ids,
         "photo_urls": review_photo_urls,
         "created_at": review.created_at.isoformat(),
         "updated_at": review.updated_at.isoformat(),
@@ -991,6 +996,7 @@ def create_review_api(request):
         for i, photo_file in enumerate(photo_files):
             review_photo = AmenityPhoto.objects.create(
                 amenity=amenity,
+                review=review,
                 photo=photo_file,
                 uploaded_by=user,
                 is_primary=(is_first and i == 0),
@@ -1154,6 +1160,50 @@ def review_detail_api(request, review_id):
 
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["DELETE"])
+def review_photo_detail_api(request, review_id, photo_id):
+    """
+    Delete one photo attached to the current user's own review.
+    """
+    try:
+        try:
+            review = (
+                Review.objects.filter(id=review_id, user=request.user)
+                .select_related("amenity")
+                .prefetch_related("amenity__photos")
+                .get()
+            )
+        except Review.DoesNotExist:
+            return JsonResponse({"error": "Review not found"}, status=404)
+
+        photo = AmenityPhoto.objects.filter(
+            id=photo_id,
+            amenity_id=review.amenity_id,
+            uploaded_by=request.user,
+        ).filter(Q(review=review) | Q(review__isnull=True)).first()
+
+        if not photo:
+            return JsonResponse({"error": "Photo not found"}, status=404)
+
+        photo.delete()
+
+        refreshed_review = (
+            Review.objects.filter(id=review.id)
+            .select_related("amenity")
+            .prefetch_related("amenity__photos")
+            .get()
+        )
+
+        response_data = serialize_profile_review(refreshed_review)
+        response_data["message"] = "Review photo deleted successfully"
+        return JsonResponse(response_data, status=200)
+
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 

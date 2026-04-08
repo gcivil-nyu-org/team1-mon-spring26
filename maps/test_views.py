@@ -598,6 +598,7 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(
             reviews[0]["amenity_type"], self.amenity_active.amenity_type.name
         )
+        self.assertIsNotNone(reviews[0]["photo_id"])
         self.assertIsNotNone(reviews[0]["photo_url"])
 
     def test_review_detail_api_patch_updates_own_review(self):
@@ -635,6 +636,64 @@ class ViewsCoverageTest(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertFalse(Review.objects.filter(id=review.id).exists())
+
+    def test_review_photo_detail_api_delete_removes_photo_but_keeps_review(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=4,
+            review_text="Original",
+        )
+        photo = SimpleUploadedFile(
+            "review-photo.jpg", b"file_content", content_type="image/jpeg"
+        )
+        review_photo = AmenityPhoto.objects.create(
+            amenity=self.amenity_active,
+            uploaded_by=self.test_user,
+            photo=photo,
+            review=review,
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.delete(
+            reverse(
+                "maps:review_photo_detail_api",
+                args=[review.id, review_photo.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Review.objects.filter(id=review.id).exists())
+        self.assertFalse(AmenityPhoto.objects.filter(id=review_photo.id).exists())
+
+    def test_review_photo_detail_api_delete_handles_legacy_unlinked_photo(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=5,
+            review_text="Legacy photo review",
+        )
+        photo = SimpleUploadedFile(
+            "legacy-review-photo.jpg", b"file_content", content_type="image/jpeg"
+        )
+        legacy_photo = AmenityPhoto.objects.create(
+            amenity=self.amenity_active,
+            uploaded_by=self.test_user,
+            photo=photo,
+            review=None,
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.delete(
+            reverse(
+                "maps:review_photo_detail_api",
+                args=[review.id, legacy_photo.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Review.objects.filter(id=review.id).exists())
+        self.assertFalse(AmenityPhoto.objects.filter(id=legacy_photo.id).exists())
 
     # --- Auth API Tests ---
     def test_register_api(self):

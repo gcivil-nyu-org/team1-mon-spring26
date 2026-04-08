@@ -455,6 +455,15 @@ document.addEventListener('DOMContentLoaded', () => {
                                 src="${escapeHtml(review.photo_url)}"
                                 alt="Review photo"
                             >
+                            ${review.photo_id ? `
+                                <button
+                                    type="button"
+                                    class="profile-review-sheet-secondary js-sheet-delete-photo"
+                                    data-photo-id="${review.photo_id}"
+                                >
+                                    Remove photo
+                                </button>
+                            ` : ''}
                         </div>
                     ` : ''}
                 </section>
@@ -485,11 +494,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 >${escapeHtml(review.review_text || '')}</textarea>
 
                 ${review.photo_url ? `
-                    <img
-                        class="profile-review-sheet-photo-thumb"
-                        src="${escapeHtml(review.photo_url)}"
-                        alt="Review photo"
-                    >
+                    <div class="profile-review-sheet-media-block">
+                        <img
+                            class="profile-review-sheet-photo-thumb"
+                            src="${escapeHtml(review.photo_url)}"
+                            alt="Review photo"
+                        >
+                        ${review.photo_id ? `
+                            <button
+                                type="button"
+                                class="profile-review-sheet-secondary js-sheet-delete-photo"
+                                data-photo-id="${review.photo_id}"
+                            >
+                                Remove photo
+                            </button>
+                        ` : ''}
+                    </div>
                 ` : ''}
 
                 <div class="profile-review-sheet-actions">
@@ -650,6 +670,33 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function deleteActiveReviewPhoto(photoId) {
+        if (!state.activeReviewId || !photoId) return;
+
+        try {
+            const response = await fetch(`${pageRoot.dataset.updateReviewBase}${state.activeReviewId}/photos/${photoId}/`, {
+                method: 'DELETE',
+                credentials: 'same-origin',
+            });
+
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                showToast(body.error || 'Unable to delete this photo.', 'error');
+                return;
+            }
+
+            state.reviews = state.reviews.map(review => (
+                review.id === state.activeReviewId ? body : review
+            ));
+
+            renderReviews();
+            renderReviewSheet();
+            showToast(body.message || 'Review photo deleted successfully.', 'success');
+        } catch (error) {
+            showToast('Network error while deleting the photo.', 'error');
+        }
+    }
+
     function openReviewSheet(reviewId) {
         if (!reviewSheet) return;
 
@@ -752,6 +799,15 @@ document.addEventListener('DOMContentLoaded', () => {
             if (event.target.closest('.js-sheet-header-delete')) {
                 setReviewSheetMenuOpen(false);
                 setReviewSheetMode('confirm_delete');
+                return;
+            }
+
+            const deletePhotoButton = event.target.closest('.js-sheet-delete-photo');
+            if (deletePhotoButton) {
+                const photoId = Number(deletePhotoButton.dataset.photoId);
+                if (!Number.isFinite(photoId)) return;
+
+                deleteActiveReviewPhoto(photoId);
                 return;
             }
 
