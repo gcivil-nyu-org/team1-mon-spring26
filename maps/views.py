@@ -790,8 +790,18 @@ def serialize_profile_review(review):
         if photo.uploaded_by_id == review.user_id:
             review_photos.append(photo)
 
-    review_photo_urls = [photo.photo.url for photo in review_photos]
-    review_photo_ids = [photo.id for photo in review_photos]
+    review_photo_ids = []
+    review_photo_urls = []
+    for photo in review_photos:
+        # Some legacy or malformed AmenityPhoto rows may not have a file
+        # attached. Skip those rows so one bad photo does not break profile.
+        try:
+            photo_url = photo.photo.url
+        except ValueError:
+            continue
+
+        review_photo_ids.append(photo.id)
+        review_photo_urls.append(photo_url)
 
     return {
         "id": review.id,

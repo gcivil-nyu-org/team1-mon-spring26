@@ -341,6 +341,29 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["reviews_count"], 1)
 
+    def test_profile_reviews_api_skips_photos_without_file(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=4,
+            review_text="Review with malformed photo row",
+        )
+        AmenityPhoto.objects.create(
+            amenity=self.amenity_active,
+            review=review,
+            uploaded_by=self.test_user,
+            photo="",
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:profile_reviews_api"))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data["reviews"]), 1)
+        self.assertEqual(data["reviews"][0]["photo_urls"], [])
+        self.assertIsNone(data["reviews"][0]["photo_url"])
+
     def test_profile_favorites_api_requires_login(self):
         response = self.client.get(reverse("maps:profile_favorites_api"))
         self.assertEqual(response.status_code, 302)
