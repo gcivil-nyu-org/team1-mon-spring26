@@ -1182,11 +1182,15 @@ def review_photo_detail_api(request, review_id, photo_id):
         except Review.DoesNotExist:
             return JsonResponse({"error": "Review not found"}, status=404)
 
-        photo = AmenityPhoto.objects.filter(
-            id=photo_id,
-            amenity_id=review.amenity_id,
-            uploaded_by=request.user,
-        ).filter(Q(review=review) | Q(review__isnull=True)).first()
+        photo = (
+            AmenityPhoto.objects.filter(
+                id=photo_id,
+                amenity_id=review.amenity_id,
+                uploaded_by=request.user,
+            )
+            .filter(Q(review=review) | Q(review__isnull=True))
+            .first()
+        )
 
         if not photo:
             return JsonResponse({"error": "Photo not found"}, status=404)
