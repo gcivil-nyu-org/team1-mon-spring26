@@ -849,7 +849,8 @@ body.viewport-switching aside.sidebar, body.viewport-switching aside.detail-pane
 .profile-display-star { color: var(--border2); font-size: 16px; line-height: 1; }
 .profile-display-star.is-lit { color: #f59e0b; }
 .profile-review-text { font-size: 15px; color: var(--text-1); line-height: 1.65; margin-bottom: 14px; white-space: pre-wrap; }
-.profile-review-photo { width: 100%; max-width: 280px; border-radius: 12px; display: block; margin-bottom: 14px; border: 1px solid var(--border); }
+.profile-review-photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.profile-review-photo { width: 100%; height: 110px; object-fit: cover; border-radius: 12px; display: block; border: 1px solid var(--border); }
 .profile-empty-title { font-size: 16px; font-weight: 600; color: var(--text-2); margin: 0; }
 .profile-empty-copy { font-size: 14px; color: var(--text-3); margin: 0 auto; line-height: 1.6; max-width: 56ch; }
 .profile-empty-link, .profile-edit-link, .profile-edit-cancel, .profile-edit-save, .profile-review-sheet-secondary, .profile-review-sheet-danger, .profile-review-sheet-primary {
@@ -961,6 +962,8 @@ body.profile-review-sheet-open { overflow: hidden; }
 .profile-review-sheet-copy-subtle { font-size: 14px; color: var(--text-2); line-height: 1.5; }
 .profile-review-sheet-media-block { margin: 6px -16px -16px; }
 .profile-review-sheet-photo { width: calc(100% + 32px); max-width: none; border-radius: 0; border: none; display: block; }
+.profile-review-sheet-photo-list { display: grid; gap: 14px; }
+.profile-review-sheet-photo-item { display: grid; gap: 8px; }
 .profile-review-sheet-form { display: grid; gap: 16px; }
 .profile-review-sheet-textarea {
     width: 100%; border: 1px solid var(--border2); border-radius: 10px; font-family: var(--font); font-size: 15px;
@@ -1003,6 +1006,7 @@ body.profile-review-sheet-open { overflow: hidden; }
     .profile-review-sheet-photo { width: calc(100% + 36px); }
     .profile-review-sheet-actions { justify-content: stretch; }
     .profile-review-sheet-secondary, .profile-review-sheet-primary, .profile-review-sheet-danger { width: 100%; }
+    .profile-review-photo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* ── SETTINGS PAGE: FORM ELEMENTS ── */
