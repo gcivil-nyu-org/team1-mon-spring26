@@ -577,10 +577,20 @@ class ViewsCoverageTest(TestCase):
         photo = SimpleUploadedFile(
             "profile-review.jpg", b"file_content", content_type="image/jpeg"
         )
-        AmenityPhoto.objects.create(
+        photo2 = SimpleUploadedFile(
+            "profile-review-2.jpg", b"file_content_2", content_type="image/jpeg"
+        )
+        first_photo = AmenityPhoto.objects.create(
             amenity=self.amenity_active,
             uploaded_by=self.test_user,
             photo=photo,
+            review=own_review,
+        )
+        second_photo = AmenityPhoto.objects.create(
+            amenity=self.amenity_active,
+            uploaded_by=self.test_user,
+            photo=photo2,
+            review=own_review,
         )
 
         self.client.force_login(self.test_user)
@@ -600,6 +610,11 @@ class ViewsCoverageTest(TestCase):
         )
         self.assertIsNotNone(reviews[0]["photo_id"])
         self.assertIsNotNone(reviews[0]["photo_url"])
+        self.assertEqual(len(reviews[0]["photo_ids"]), 2)
+        self.assertCountEqual(
+            reviews[0]["photo_ids"], [first_photo.id, second_photo.id]
+        )
+        self.assertEqual(len(reviews[0]["photo_urls"]), 2)
 
     def test_review_detail_api_patch_updates_own_review(self):
         review = Review.objects.create(

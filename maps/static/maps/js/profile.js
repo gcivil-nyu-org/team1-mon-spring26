@@ -174,6 +174,77 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
     }
 
+    function getReviewPhotos(review) {
+        const urls = Array.isArray(review.photo_urls)
+            ? review.photo_urls.filter(url => typeof url === 'string' && url.trim())
+            : [];
+        const ids = Array.isArray(review.photo_ids) ? review.photo_ids : [];
+
+        if (urls.length) {
+            return urls.map((url, index) => {
+                const idValue = Number(ids[index]);
+                return {
+                    url,
+                    id: Number.isFinite(idValue) ? idValue : null,
+                };
+            });
+        }
+
+        const fallbackUrl = typeof review.photo_url === 'string' ? review.photo_url.trim() : '';
+        if (!fallbackUrl) return [];
+
+        const fallbackId = Number(review.photo_id);
+        return [{
+            url: fallbackUrl,
+            id: Number.isFinite(fallbackId) ? fallbackId : null,
+        }];
+    }
+
+    function renderReviewCardPhotos(review) {
+        const photos = getReviewPhotos(review);
+        if (!photos.length) return '';
+
+        return `
+            <div class="profile-review-photo-grid">
+                ${photos.map((photo, index) => `
+                    <img
+                        class="profile-review-photo"
+                        src="${escapeHtml(photo.url)}"
+                        alt="Review photo ${index + 1}"
+                    >
+                `).join('')}
+            </div>
+        `;
+    }
+
+    function renderReviewSheetPhotos(review, useThumbSize = false) {
+        const photos = getReviewPhotos(review);
+        if (!photos.length) return '';
+
+        return `
+            <div class="profile-review-sheet-photo-list">
+                ${photos.map((photo, index) => `
+                    <div class="profile-review-sheet-photo-item">
+                        <img
+                            class="${useThumbSize ? 'profile-review-sheet-photo-thumb' : 'profile-review-sheet-photo'}"
+                            src="${escapeHtml(photo.url)}"
+                            alt="Review photo ${index + 1}"
+                        >
+                        ${photo.id ? `
+                            <button
+                                type="button"
+                                class="profile-review-sheet-secondary js-sheet-delete-photo"
+                                data-photo-id="${photo.id}"
+                            >
+                                Remove photo
+                            </button>
+                        ` : ''}
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+
     function renderCurrentUserRow(showMenu = true) {
         const reviewerName = String(pageRoot.dataset.currentUserName || '').trim() || 'You';
         const avatarUrl = String(pageRoot.dataset.currentUserAvatar || '').trim();
@@ -258,9 +329,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 <p class="profile-review-text">${escapeHtml(review.review_text || 'No written comment.')}</p>
 
-                ${review.photo_url ? `
-                    <img class="profile-review-photo" src="${escapeHtml(review.photo_url)}" alt="Review photo">
-                ` : ''}
+                ${renderReviewCardPhotos(review)}
             </article>
         `;
     }
@@ -448,24 +517,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <p class="profile-review-sheet-copy">${escapeHtml(reviewText)}</p>
                     </div>
 
-                    ${review.photo_url ? `
-                        <div class="profile-review-sheet-media-block">
-                            <img
-                                class="profile-review-sheet-photo"
-                                src="${escapeHtml(review.photo_url)}"
-                                alt="Review photo"
-                            >
-                            ${review.photo_id ? `
-                                <button
-                                    type="button"
-                                    class="profile-review-sheet-secondary js-sheet-delete-photo"
-                                    data-photo-id="${review.photo_id}"
-                                >
-                                    Remove photo
-                                </button>
-                            ` : ''}
-                        </div>
-                    ` : ''}
+                    ${renderReviewSheetPhotos(review, false)}
                 </section>
             `;
             return;
@@ -493,24 +545,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     placeholder="Share your experience at this location..."
                 >${escapeHtml(review.review_text || '')}</textarea>
 
-                ${review.photo_url ? `
-                    <div class="profile-review-sheet-media-block">
-                        <img
-                            class="profile-review-sheet-photo-thumb"
-                            src="${escapeHtml(review.photo_url)}"
-                            alt="Review photo"
-                        >
-                        ${review.photo_id ? `
-                            <button
-                                type="button"
-                                class="profile-review-sheet-secondary js-sheet-delete-photo"
-                                data-photo-id="${review.photo_id}"
-                            >
-                                Remove photo
-                            </button>
-                        ` : ''}
-                    </div>
-                ` : ''}
+                ${renderReviewSheetPhotos(review, true)}
 
                 <div class="profile-review-sheet-actions">
                     <button type="button" class="profile-review-sheet-secondary js-sheet-cancel-edit">Cancel</button>
