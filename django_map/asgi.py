@@ -12,6 +12,7 @@ import django
 import json
 import asyncio
 import psycopg
+import logging
 from contextlib import asynccontextmanager
 from django.conf import settings
 from asgiref.sync import sync_to_async
@@ -24,6 +25,7 @@ from starlette.middleware.cors import CORSMiddleware
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_map.settings")
 django.setup()
 
+logger = logging.getLogger(__name__)
 
 # Global Pub/Sub Memory: Maps user_id (str) to a set of asyncio.Queues
 active_connections = {}
@@ -118,12 +120,12 @@ async def listen_to_pg():
                         if target_user_id in active_connections:
                             for q in active_connections[target_user_id]:
                                 q.put_nowait(payload_str)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.error("[SSE] Error processing notify: %s", e)
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print("[SSE] Postgres Connection Error:", e)
+            logger.error("[SSE] Postgres Connection Error: %s", e)
             await asyncio.sleep(5)  # Reconnect delay
 
 

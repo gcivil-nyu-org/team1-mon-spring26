@@ -104,8 +104,9 @@ if not DB_USER:
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-
-if os.environ.get("RDS_HOSTNAME"):
+# if running as root(=0), we are in pre-deploy and should use RDS DB directly
+RUNNING_AS = os.getuid()
+if os.environ.get("RDS_HOSTNAME") and RUNNING_AS != 0:
     # on AWS, use RDS pgbouncer proxy
     DATABASES = {
         "default": {
