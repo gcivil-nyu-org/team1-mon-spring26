@@ -96,15 +96,16 @@ resource "aws_iam_role" "github_actions_role" {
         Action = "sts:AssumeRoleWithWebIdentity"
         Effect = "Allow"
         Principal = {
+          # Make sure this ARN matches your OIDC provider name
           Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/://githubusercontent.com"
         }
         Condition = {
           StringEquals = {
-            "://githubusercontent.com:aud" = "sts.amazonaws.com"
+            "://githubusercontent.com:aud": "://amazonaws.com"
           }
+          # CHANGE THIS LINE: Use StringLike and the asterisk wildcard
           StringLike = {
-            # Only allow your specific repo to use this role
-            "://githubusercontent.com:sub" = "repo:YOUR_ORG/YOUR_REPO:*"
+            "://githubusercontent.com:sub": "repo:YOUR_ORG/YOUR_REPO:*"
           }
         }
       }
