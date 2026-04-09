@@ -1,5 +1,6 @@
 import json
 from django.test import TestCase, Client, override_settings
+from django.test.client import BOUNDARY, MULTIPART_CONTENT, encode_multipart
 from django.urls import reverse
 from django.contrib.gis.geos import Point
 from django.core import mail
@@ -679,6 +680,22 @@ class ViewsCoverageTest(TestCase):
             reviews[0]["photo_ids"], [first_photo.id, second_photo.id]
         )
         self.assertEqual(len(reviews[0]["photo_urls"]), 2)
+        self.assertEqual(reviews[0]["vote_score"], 0)
+
+    def test_profile_reviews_api_returns_vote_score(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=5,
+            review_text="My review",
+        )
+        ReviewVote.objects.create(review=review, user=self.test_user2, value=1)
+        ReviewVote.objects.create(review=review, user=self.test_user3, value=1)
+
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:profile_reviews_api"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["reviews"][0]["vote_score"], 2)
 
     def test_review_detail_api_patch_updates_own_review(self):
         review = Review.objects.create(
@@ -700,6 +717,49 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(review.rating, 5)
         self.assertEqual(review.review_text, "Updated")
         self.assertEqual(response.json()["message"], "Review updated successfully")
+
+    def test_review_detail_api_patch_accepts_multipart_and_adds_photos(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=4,
+            review_text="Original",
+        )
+        photo1 = SimpleUploadedFile(
+            "review-photo-1.jpg", b"file_content_1", content_type="image/jpeg"
+        )
+        photo2 = SimpleUploadedFile(
+            "review-photo-2.jpg", b"file_content_2", content_type="image/jpeg"
+        )
+        payload = encode_multipart(
+            BOUNDARY,
+            {
+                "rating": "5",
+                "review_text": "Updated with photos",
+                "photos": [photo1, photo2],
+            },
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.generic(
+            "PATCH",
+            reverse("maps:review_detail_api", args=[review.id]),
+            payload,
+            content_type=MULTIPART_CONTENT,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        review.refresh_from_db()
+        self.assertEqual(review.rating, 5)
+        self.assertEqual(review.review_text, "Updated with photos")
+        self.assertEqual(
+            AmenityPhoto.objects.filter(
+                review=review, uploaded_by=self.test_user
+            ).count(),
+            2,
+        )
+        self.assertEqual(len(response.json()["photo_urls"]), 2)
+        self.assertEqual(response.json()["vote_score"], 0)
 
     def test_review_detail_api_delete_removes_own_review(self):
         review = Review.objects.create(

@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.shortcuts import render
 from django.http import JsonResponse
+from django.http.multipartparser import MultiPartParser, MultiPartParserError
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import authenticate, login, logout
@@ -822,6 +823,7 @@ def serialize_profile_review(review):
         "amenity_prop_name": review.amenity.prop_name,
         "amenity_type": review.amenity.amenity_type.name,
         "rating": review.rating,
+        "vote_score": int(getattr(review, "vote_score", 0)),
         "review_text": review.review_text,
         "photo_id": review_photo_ids[0] if review_photo_ids else None,
         "photo_url": review_photo_urls[0] if review_photo_urls else None,
@@ -830,6 +832,22 @@ def serialize_profile_review(review):
         "created_at": review.created_at.isoformat(),
         "updated_at": review.updated_at.isoformat(),
     }
+
+
+def annotate_reviews_with_vote_score(queryset):
+    return queryset.annotate(
+        vote_score=Coalesce(Sum("votes__value"), Value(0), output_field=IntegerField())
+    )
+
+
+def parse_multipart_request(request):
+    parser = MultiPartParser(
+        request.META,
+        request,
+        request.upload_handlers,
+        encoding=request.encoding,
+    )
+    return parser.parse()
 
 
 def serialize_profile_favorite(favorite):
@@ -855,8 +873,8 @@ def profile_reviews_api(request):
     Return all reviews written by the current user for the profile page.
     """
     reviews = (
-        Review.objects.filter(user=request.user)
-        .select_related("amenity")
+        annotate_reviews_with_vote_score(Review.objects.filter(user=request.user))
+        .select_related("amenity", "amenity__amenity_type")
         .prefetch_related("amenity__photos")
         .order_by("-updated_at", "-created_at")
     )
@@ -1210,7 +1228,7 @@ def review_detail_api(request, review_id):
         try:
             review = (
                 Review.objects.filter(id=review_id, user=request.user)
-                .select_related("amenity")
+                .select_related("amenity", "amenity__amenity_type")
                 .prefetch_related("amenity__photos")
                 .get()
             )
@@ -1224,9 +1242,23 @@ def review_detail_api(request, review_id):
                 status=200,
             )
 
-        data = json.loads(request.body)
-        rating = data.get("rating", review.rating)
-        review_text = data.get("review_text", review.review_text)
+        content_type = request.content_type or ""
+        if content_type.startswith("multipart/form-data"):
+            try:
+                data, files = parse_multipart_request(request)
+            except MultiPartParserError:
+                return JsonResponse({"error": "Invalid multipart payload"}, status=400)
+
+            rating = data.get("rating", review.rating)
+            review_text = data.get("review_text", review.review_text)
+            photo_files = files.getlist("photos")
+            if not photo_files and "photo" in files:
+                photo_files = files.getlist("photo")
+        else:
+            data = json.loads(request.body)
+            rating = data.get("rating", review.rating)
+            review_text = data.get("review_text", review.review_text)
+            photo_files = []
 
         try:
             rating = int(rating)
@@ -1243,13 +1275,54 @@ def review_detail_api(request, review_id):
                 status=400,
             )
 
+        current_photo_count = (
+            AmenityPhoto.objects.filter(
+                amenity_id=review.amenity_id,
+                uploaded_by=request.user,
+            )
+            .filter(Q(review=review) | Q(review__isnull=True))
+            .count()
+        )
+
+        if current_photo_count + len(photo_files) > 5:
+            return JsonResponse(
+                {"error": "You can upload up to 5 photos per review."},
+                status=400,
+            )
+
+        processed_photos = []
+        for photo_file in photo_files:
+            file_content_type = photo_file.content_type or ""
+            if not file_content_type.startswith("image/"):
+                return JsonResponse({"error": "Photo must be an image"}, status=400)
+
+            photo_file = compress_image(photo_file, max_dimension=1024)
+            if photo_file.size > 5 * 1024 * 1024:
+                return JsonResponse(
+                    {"error": "Photo must be 5MB or smaller"}, status=400
+                )
+            processed_photos.append(photo_file)
+
         review.rating = rating
         review.review_text = review_text
         review.save(update_fields=["rating", "review_text", "updated_at"])
 
+        is_first_amenity_photo = not AmenityPhoto.objects.filter(
+            amenity=review.amenity
+        ).exists()
+        for index, photo_file in enumerate(processed_photos):
+            AmenityPhoto.objects.create(
+                amenity=review.amenity,
+                review=review,
+                photo=photo_file,
+                uploaded_by=request.user,
+                is_primary=(is_first_amenity_photo and index == 0),
+                caption=f"Review photo by {request.user.email}",
+            )
+
         refreshed_review = (
-            Review.objects.filter(id=review.id)
-            .select_related("amenity")
+            annotate_reviews_with_vote_score(Review.objects.filter(id=review.id))
+            .select_related("amenity", "amenity__amenity_type")
             .prefetch_related("amenity__photos")
             .get()
         )
@@ -1275,7 +1348,7 @@ def review_photo_detail_api(request, review_id, photo_id):
         try:
             review = (
                 Review.objects.filter(id=review_id, user=request.user)
-                .select_related("amenity")
+                .select_related("amenity", "amenity__amenity_type")
                 .prefetch_related("amenity__photos")
                 .get()
             )
@@ -1298,8 +1371,8 @@ def review_photo_detail_api(request, review_id, photo_id):
         photo.delete()
 
         refreshed_review = (
-            Review.objects.filter(id=review.id)
-            .select_related("amenity")
+            annotate_reviews_with_vote_score(Review.objects.filter(id=review.id))
+            .select_related("amenity", "amenity__amenity_type")
             .prefetch_related("amenity__photos")
             .get()
         )
