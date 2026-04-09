@@ -383,6 +383,36 @@ class ViewsCoverageTest(TestCase):
         self.assertIn("favorites", data)
         self.assertEqual(len(data["favorites"]), 1)
         self.assertEqual(data["favorites"][0]["amenity_id"], self.amenity_active.id)
+        self.assertTrue(data["favorites"][0]["notify_on_updates"])
+
+    def test_favorite_notification_preference_api_updates_flag(self):
+        favorite = Favorite.objects.create(
+            user=self.test_user, amenity=self.amenity_active
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:favorite_notification_preference_api", args=[favorite.id]),
+            data=json.dumps({"notify_on_updates": False}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        favorite.refresh_from_db()
+        self.assertFalse(favorite.notify_on_updates)
+
+    def test_favorite_notification_preference_api_rejects_non_boolean(self):
+        favorite = Favorite.objects.create(
+            user=self.test_user, amenity=self.amenity_active
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:favorite_notification_preference_api", args=[favorite.id]),
+            data=json.dumps({"notify_on_updates": "yes"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_toggle_favorite_api_add_and_remove(self):
         self.client.force_login(self.test_user)
@@ -447,6 +477,7 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.context["profile_user"], self.test_user)
         self.assertContains(response, "Profile")
         self.assertContains(response, "Account")
+        self.assertContains(response, "Notifications")
 
     def test_update_profile_api_updates_profile(self):
         self.client.force_login(self.test_user)
