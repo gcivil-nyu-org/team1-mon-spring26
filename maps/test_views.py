@@ -386,7 +386,9 @@ class ViewsCoverageTest(TestCase):
         self.assertTrue(data["favorites"][0]["notify_on_updates"])
 
     def test_favorite_notification_preference_api_updates_flag(self):
-        favorite = Favorite.objects.create(user=self.test_user, amenity=self.amenity_active)
+        favorite = Favorite.objects.create(
+            user=self.test_user, amenity=self.amenity_active
+        )
 
         self.client.force_login(self.test_user)
         response = self.client.post(
@@ -400,7 +402,9 @@ class ViewsCoverageTest(TestCase):
         self.assertFalse(favorite.notify_on_updates)
 
     def test_favorite_notification_preference_api_rejects_non_boolean(self):
-        favorite = Favorite.objects.create(user=self.test_user, amenity=self.amenity_active)
+        favorite = Favorite.objects.create(
+            user=self.test_user, amenity=self.amenity_active
+        )
 
         self.client.force_login(self.test_user)
         response = self.client.post(
