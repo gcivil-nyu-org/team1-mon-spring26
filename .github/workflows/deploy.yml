@@ -1,0 +1,35 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      - name: Deploy via AWS Systems Manager (SSM)
+        run: |
+          aws ssm send-command \
+            --targets "Key=tag:App,Values=NycNow" "Key=tag:Environment,Values=${{ vars.APP_ENV || 'feature' }}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploying latest application code" \
+            --parameters 'commands=[
+              "su - ec2-user -c \"if [ ! -d /home/ec2-user/app/.git ]; then git clone https://github.com/${{ github.repository }}.git /home/ec2-user/app; else cd /home/ec2-user/app && git pull origin ${{ github.ref_name }}; fi\"",
+              "su - ec2-user -c \"cd /home/ec2-user/app && if [ ! -d venv ]; then python3 -m venv venv; fi\"",
+              "su - ec2-user -c \"cd /home/ec2-user/app && source venv/bin/activate && pip install -r requirements.txt\"",
+              "su - ec2-user -c \"cd /home/ec2-user/app && source venv/bin/activate && python manage.py collectstatic --noinput\"",
+              "su - ec2-user -c \"cd /home/ec2-user/app && source venv/bin/activate && python manage.py migrate\"",
+              "sudo bash /home/ec2-user/app/scripts/configure_pgbouncer.sh",
+              "sudo systemctl enable pgbouncer",
+              "sudo systemctl restart django-wsgi django-asgi nginx pgbouncer"
+            ]' \
+            --timeout-seconds 600
