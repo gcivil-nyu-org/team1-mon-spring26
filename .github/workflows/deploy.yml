@@ -8,6 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: feature
     # 1. Required permissions for OIDC to work
     permissions:
       id-token: write
