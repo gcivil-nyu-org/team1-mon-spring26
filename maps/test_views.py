@@ -6,6 +6,8 @@ from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils.html import escape
 from unittest.mock import patch
+from django.utils import timezone
+from datetime import timedelta
 
 from maps.models import (
     AmenityType,
@@ -18,6 +20,7 @@ from maps.models import (
     Chat,
     ChatParticipant,
     Message,
+    AvailabilityReport,
 )
 from maps.views import normalize_longitude, get_cluster_grid_size
 
@@ -1730,3 +1733,67 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("total_reviews", data)
+
+    def test_get_availability_status_empty(self):
+        response = self.client.get(
+            f"/api/amenities/{self.amenity_active.id}/availability/"
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["available"], 0)
+        self.assertEqual(data["unavailable"], 0)
+        self.assertEqual(data["total"], 0)
+        self.assertIsNone(data["user_vote"])
+
+    def test_post_availability_report(self):
+        response = self.client.post(
+            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            data='{"is_available": true}',
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["available"], 1)
+        self.assertEqual(data["unavailable"], 0)
+        self.assertEqual(data["user_vote"], "available")
+        self.assertEqual(AvailabilityReport.objects.count(), 1)
+
+    def test_change_availability_vote(self):
+        self.client.post(
+            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            data='{"is_available": true}',
+            content_type="application/json",
+        )
+        self.client.post(
+            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            data='{"is_available": false}',
+            content_type="application/json",
+        )
+        self.assertEqual(AvailabilityReport.objects.count(), 1)
+        self.assertFalse(AvailabilityReport.objects.first().is_available)
+
+    def test_expired_availability_reports_excluded(self):
+        report = AvailabilityReport.objects.create(
+            amenity=self.amenity_active,
+            is_available=True,
+            session_key="old-session",
+        )
+        old_time = timezone.now() - timedelta(hours=4)
+        AvailabilityReport.objects.filter(pk=report.pk).update(reported_at=old_time)
+        response = self.client.get(
+            f"/api/amenities/{self.amenity_active.id}/availability/"
+        )
+        self.assertEqual(response.json()["total"], 0)
+
+    def test_availability_invalid_amenity_returns_404(self):
+        response = self.client.get("/api/amenities/99999/availability/")
+        self.assertEqual(response.status_code, 404)
+
+    def test_availability_missing_is_available_field(self):
+        response = self.client.post(
+            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            data="{}",
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
