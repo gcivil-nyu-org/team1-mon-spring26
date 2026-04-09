@@ -20,7 +20,7 @@ sleep 2
 warp-cli --accept-tos registration new || true
 # Exclude all IPv6 traffic from the tunnel so native IPv6 (like your SSH connection) routes directly
 # Trying older and newer v2024+ CLI syntaxes since Cloudflare changed the command
-warp-cli tunnel ip add-range ::/0
+warp-cli --accept-tos tunnel ip add-range ::/0
 warp-cli --accept-tos connect || true
 sleep 5 # Give the daemon a few seconds to establish the IPv4 tunnel
 
