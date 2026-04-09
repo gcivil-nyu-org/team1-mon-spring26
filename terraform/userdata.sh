@@ -74,7 +74,7 @@ update_cloudflare_record() {
     URL_PATH="$CF_API_URL/$RECORD_ID"
   fi
 
-  RESULT=$(curl -s -X $HTTP_METHOD "$URL_PATH" -H "Authorization: Bearer $${CF_API_TOKEN}" -H "Content-Type: application/json" --data "{\"type\":\"$record_type\",\"name\":\"$${CF_RECORD_NAME}\",\"content\":\"$ip_address\",\"ttl\":1,\"proxied\":true}")
+  RESULT=$(curl -s -X $HTTP_METHOD "$URL_PATH" -H "Authorization: Bearer $${CF_API_TOKEN}" -H "Content-Type: application/json" --data "{\"type\":\"$record_type\",\"name\":\"$${CF_RECORD_NAME}\",\"content\":\"$ip_address\",\"ttl\":1,\"proxied\":false}")
   echo "Cloudflare API Response: $RESULT"
 }
 
@@ -82,5 +82,55 @@ update_cloudflare_record "AAAA" "$${IPV6}"
 
 # 6. Restart AWS SSM Agent to instantly register over the new WARP IPv4 tunnel
 systemctl restart amazon-ssm-agent
+
+# 7. Provision Systemd Services and Nginx
+cat << 'EOF' > /etc/systemd/system/django-wsgi.service
+[Unit]
+Description=Gunicorn daemon for Django WSGI
+After=network.target
+
+[Service]
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/app
+EnvironmentFile=/home/ec2-user/app/.env
+ExecStart=/home/ec2-user/app/venv/bin/gunicorn django_map.wsgi:application -c gunicorn_config.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat << 'EOF' > /etc/systemd/system/django-asgi.service
+[Unit]
+Description=Uvicorn daemon for Django ASGI (SSE)
+After=network.target
+
+[Service]
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/app
+EnvironmentFile=/home/ec2-user/app/.env
+ExecStart=/home/ec2-user/app/venv/bin/uvicorn django_map.asgi:application --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat << 'EOF' > /etc/nginx/conf.d/django.conf
+server {
+    listen 80;
+    server_name amenity.help *.amenity.help localhost;
+    location /static/ { alias /home/ec2-user/app/static/; access_log off; expires 30d; add_header Cache-Control "public, max-age=2592000"; }
+    location / { proxy_pass http://127.0.0.1:8000; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto https; }
+    location /api/chats/events/ { proxy_pass http://127.0.0.1:8001; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto https; proxy_set_header Connection ""; proxy_http_version 1.1; proxy_read_timeout 86400s; proxy_send_timeout 86400s; proxy_buffering off; proxy_cache off; chunked_transfer_encoding on; }
+}
+EOF
+
+systemctl daemon-reload
+systemctl enable django-wsgi django-asgi nginx
 
 # (GitHub Actions handles the rest on its next run!)
