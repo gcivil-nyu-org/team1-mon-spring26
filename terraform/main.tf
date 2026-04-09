@@ -103,9 +103,9 @@ resource "aws_iam_role" "github_actions_role" {
           StringEquals = {
             "://githubusercontent.com:aud": "://amazonaws.com"
           }
-          # CHANGE THIS LINE: Use StringLike and the asterisk wildcard
+          # Use StringLike and the asterisk wildcard
           StringLike = {
-            "://githubusercontent.com:sub": "repo:YOUR_ORG/YOUR_REPO:*"
+            "://githubusercontent.com:sub": "repo:ajslezak/team1-mon-spring26:*"
           }
         }
       }
