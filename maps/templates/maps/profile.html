@@ -21,6 +21,7 @@
         class="profile-page-shell"
         data-reviews-url="{% url 'maps:profile_reviews_api' %}{% if profile_user != request.user %}?user={{ profile_user.email }}{% endif %}"
         data-favorites-url="{% url 'maps:profile_favorites_api' %}{% if profile_user != request.user %}?user={{ profile_user.email }}{% endif %}"
+        data-favorite-notification-base="/api/favorites/"
         data-map-url="{% url 'maps:map' %}"
         data-logout-url="{% url 'maps:logout_api' %}"
         data-update-review-base="/api/reviews/"

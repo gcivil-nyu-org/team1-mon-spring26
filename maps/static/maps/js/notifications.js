@@ -107,6 +107,26 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function showToast(msg, type = 'info', duration = 2800) {
+        const existing = document.getElementById('app-toast');
+        if (existing) existing.remove();
+
+        const toast = document.createElement('div');
+        toast.id = 'app-toast';
+        toast.className = `app-toast is-${type}`;
+        toast.textContent = msg;
+        document.body.appendChild(toast);
+
+        requestAnimationFrame(() => {
+            toast.classList.add('is-visible');
+        });
+
+        setTimeout(() => {
+            toast.classList.remove('is-visible');
+            setTimeout(() => toast.remove(), 300);
+        }, duration);
+    }
+
     async function checkAuthAndInit() {
         if (reconnectTimeout) {
             clearTimeout(reconnectTimeout);
@@ -203,6 +223,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         } catch (e) {
                             console.error('[Notifications] Failed to dispatch chat:new_message event:', e);
                         }
+                    } else if (msgData.type === 'amenity_review_added') {
+                        const amenityName = msgData.amenity_name || 'a favorited amenity';
+                        const actorEmail = msgData.actor_email || 'Another user';
+                        showToast(`${actorEmail} added a review for ${amenityName}.`, 'info');
+                        playNotificationSound();
                     } else if (msgData.error === 'unauthorized') {
                         if (sseSource) {
                             sseSource.close();

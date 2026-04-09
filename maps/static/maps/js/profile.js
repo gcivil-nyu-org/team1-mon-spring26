@@ -363,6 +363,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderFavoriteCard(favorite) {
         const amenityDisplayName = favorite.amenity_prop_name || favorite.amenity_name || 'Amenity';
         const address = String(favorite.address || '').trim();
+        const isChecked = favorite.notify_on_updates !== false;
 
         return `
             <article class="profile-review-card">
@@ -376,6 +377,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
 
                 ${address ? `<p class="profile-review-text">${escapeHtml(address)}</p>` : ''}
+
+                <label class="favorite-notify-row">
+                    <input
+                        class="favorite-notify-checkbox js-favorite-notify-toggle"
+                        type="checkbox"
+                        data-favorite-id="${favorite.id}"
+                        ${isChecked ? 'checked' : ''}
+                    >
+                    <span>Notify me when new reviews are added</span>
+                </label>
 
                 <a class="profile-empty-link" href="${escapeHtml(buildFavoriteMapUrl(favorite))}">
                     View on map
@@ -616,6 +627,60 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             favoritesState.textContent = 'Network error while loading favorites.';
         }
+    }
+
+    async function updateFavoriteNotificationPreference(favoriteId, notifyOnUpdates, checkbox) {
+        const originalChecked = !notifyOnUpdates;
+        checkbox.disabled = true;
+
+        try {
+            const response = await fetch(`${pageRoot.dataset.favoriteNotificationBase}${favoriteId}/notifications/`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    notify_on_updates: notifyOnUpdates,
+                }),
+            });
+
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                checkbox.checked = originalChecked;
+                showToast(body.error || 'Unable to update notification preference.', 'error');
+                return;
+            }
+
+            state.favorites = state.favorites.map(favorite => (
+                favorite.id === favoriteId
+                    ? { ...favorite, notify_on_updates: notifyOnUpdates }
+                    : favorite
+            ));
+        } catch (error) {
+            checkbox.checked = originalChecked;
+            showToast('Network error while updating notification preference.', 'error');
+        } finally {
+            checkbox.disabled = false;
+        }
+    }
+
+    function setupFavoriteActions() {
+        if (!favoritesList) return;
+
+        favoritesList.addEventListener('change', event => {
+            const toggle = event.target.closest('.js-favorite-notify-toggle');
+            if (!toggle) return;
+
+            const favoriteId = Number(toggle.dataset.favoriteId);
+            if (!Number.isFinite(favoriteId)) {
+                toggle.checked = !toggle.checked;
+                showToast('Invalid favorite selection.', 'error');
+                return;
+            }
+
+            updateFavoriteNotificationPreference(favoriteId, toggle.checked, toggle);
+        });
     }
 
     function setupReviewActions() {
@@ -898,6 +963,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupLogout();
     setupTabs();
     setupReviewActions();
+    setupFavoriteActions();
     setupReviewSheet();
     setActiveTab('reviews');
 });

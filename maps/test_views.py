@@ -383,6 +383,32 @@ class ViewsCoverageTest(TestCase):
         self.assertIn("favorites", data)
         self.assertEqual(len(data["favorites"]), 1)
         self.assertEqual(data["favorites"][0]["amenity_id"], self.amenity_active.id)
+        self.assertTrue(data["favorites"][0]["notify_on_updates"])
+
+    def test_favorite_notification_preference_api_updates_flag(self):
+        favorite = Favorite.objects.create(user=self.test_user, amenity=self.amenity_active)
+
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:favorite_notification_preference_api", args=[favorite.id]),
+            data=json.dumps({"notify_on_updates": False}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        favorite.refresh_from_db()
+        self.assertFalse(favorite.notify_on_updates)
+
+    def test_favorite_notification_preference_api_rejects_non_boolean(self):
+        favorite = Favorite.objects.create(user=self.test_user, amenity=self.amenity_active)
+
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:favorite_notification_preference_api", args=[favorite.id]),
+            data=json.dumps({"notify_on_updates": "yes"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_toggle_favorite_api_add_and_remove(self):
         self.client.force_login(self.test_user)
@@ -447,6 +473,7 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.context["profile_user"], self.test_user)
         self.assertContains(response, "Profile")
         self.assertContains(response, "Account")
+        self.assertContains(response, "Notifications")
 
     def test_update_profile_api_updates_profile(self):
         self.client.force_login(self.test_user)
@@ -929,6 +956,61 @@ class ViewsCoverageTest(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response_not_found.status_code, 404)
+
+    def test_create_review_api_notifies_only_opted_in_favorites(self):
+        opted_in_user = CustomUser.objects.create_user(
+            email="opted-in@example.com",
+            username="opted-in",
+            password="password123",
+        )
+        opted_out_user = CustomUser.objects.create_user(
+            email="opted-out@example.com",
+            username="opted-out",
+            password="password123",
+        )
+
+        Favorite.objects.create(
+            user=opted_in_user,
+            amenity=self.amenity_active,
+            notify_on_updates=True,
+        )
+        Favorite.objects.create(
+            user=opted_out_user,
+            amenity=self.amenity_active,
+            notify_on_updates=False,
+        )
+
+        self.client.force_login(self.test_user)
+
+        with patch("maps.views.connection.vendor", "postgresql"), patch(
+            "maps.views.transaction.on_commit", side_effect=lambda fn: fn()
+        ), patch("maps.views.connection.cursor") as mock_cursor:
+            response = self.client.post(
+                reverse("maps:create_review_api"),
+                data=json.dumps(
+                    {
+                        "amenity_id": self.amenity_active.id,
+                        "rating": 5,
+                        "review_text": "Fresh update",
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        self.assertEqual(response.status_code, 201)
+
+        execute_calls = (
+            mock_cursor.return_value.__enter__.return_value.execute.call_args_list
+        )
+        self.assertEqual(len(execute_calls), 1)
+
+        wrapped_payload = execute_calls[0].args[1][0]
+        envelope = json.loads(wrapped_payload)
+        self.assertEqual(envelope["user_id"], opted_in_user.id)
+
+        payload = json.loads(envelope["payload"])
+        self.assertEqual(payload["type"], "amenity_review_added")
+        self.assertEqual(payload["amenity_id"], self.amenity_active.id)
 
     def test_review_vote_api_toggle_and_change(self):
         reviewer = CustomUser.objects.create_user(

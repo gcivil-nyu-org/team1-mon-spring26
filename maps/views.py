@@ -835,6 +835,7 @@ def serialize_profile_favorite(favorite):
         "address": amenity.address,
         "latitude": amenity.location.y,
         "longitude": amenity.location.x,
+        "notify_on_updates": favorite.notify_on_updates,
         "created_at": favorite.created_at.isoformat(),
     }
 
@@ -881,6 +882,40 @@ def profile_favorites_api(request):
 
 @csrf_exempt
 @login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST"])
+def favorite_notification_preference_api(request, favorite_id):
+    try:
+        favorite = Favorite.objects.get(id=favorite_id, user=request.user)
+    except Favorite.DoesNotExist:
+        return JsonResponse({"error": "Favorite not found"}, status=404)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    notify_on_updates = data.get("notify_on_updates")
+    if not isinstance(notify_on_updates, bool):
+        return JsonResponse(
+            {"error": "notify_on_updates must be a boolean"},
+            status=400,
+        )
+
+    favorite.notify_on_updates = notify_on_updates
+    favorite.save(update_fields=["notify_on_updates"])
+
+    return JsonResponse(
+        {
+            "favorite_id": favorite.id,
+            "notify_on_updates": favorite.notify_on_updates,
+            "message": "Favorite notification preference updated",
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
 @require_http_methods(["POST", "DELETE"])
 def toggle_favorite_api(request, amenity_id):
     try:
@@ -897,6 +932,7 @@ def toggle_favorite_api(request, amenity_id):
             {
                 "amenity_id": amenity.id,
                 "is_favorited": True,
+                "notify_on_updates": favorite.notify_on_updates,
                 "message": "Added to favorites" if created else "Already favorited",
             },
             status=200,
@@ -1017,6 +1053,48 @@ def create_review_api(request):
                 caption=f"Review photo by {user.email}",
             )
             review_photos.append(review_photo)
+
+        # Notify users who favorited this amenity and opted in for updates.
+        recipient_ids = list(
+            Favorite.objects.filter(
+                amenity=amenity,
+                notify_on_updates=True,
+            )
+            .exclude(user=user)
+            .values_list("user_id", flat=True)
+            .distinct()
+        )
+
+        if recipient_ids:
+            payload = json.dumps(
+                {
+                    "type": "amenity_review_added",
+                    "amenity_id": amenity.id,
+                    "amenity_name": amenity.name,
+                    "review": {
+                        "id": review.id,
+                        "rating": review.rating,
+                        "created_at": review.created_at.isoformat(),
+                    },
+                    "actor_email": user.email,
+                }
+            )
+
+            def send_notification():
+                # Tests and local SQLite do not support Postgres NOTIFY.
+                if connection.vendor != "postgresql":
+                    return
+
+                with connection.cursor() as cursor:
+                    for recipient_id in recipient_ids:
+                        wrapped = json.dumps(
+                            {"user_id": recipient_id, "payload": payload}
+                        )
+                        cursor.execute(
+                            "SELECT pg_notify('global_chat_events', %s)", [wrapped]
+                        )
+
+            transaction.on_commit(send_notification)
 
         response_data = serialize_amenity_review(
             review,

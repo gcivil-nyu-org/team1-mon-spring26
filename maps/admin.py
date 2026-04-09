@@ -104,8 +104,8 @@ class AmenityPhotoAdmin(admin.ModelAdmin):
 
 @admin.register(Favorite)
 class FavoriteAdmin(admin.ModelAdmin):
-    list_display = ["user", "amenity", "created_at"]
-    list_filter = ["created_at", "amenity__amenity_type"]
+    list_display = ["user", "amenity", "notify_on_updates", "created_at"]
+    list_filter = ["notify_on_updates", "created_at", "amenity__amenity_type"]
     search_fields = ["user__email", "amenity__name", "amenity__address"]
     readonly_fields = ("created_at",)
 
