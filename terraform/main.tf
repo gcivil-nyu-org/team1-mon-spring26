@@ -97,15 +97,15 @@ resource "aws_iam_role" "github_actions_role" {
         Effect = "Allow"
         Principal = {
           # Make sure this ARN matches your OIDC provider name
-          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/://githubusercontent.com"
+          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
         }
         Condition = {
           StringEquals = {
-            "://githubusercontent.com:aud": "://amazonaws.com"
+            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
           }
           # Use StringLike and the asterisk wildcard
           StringLike = {
-            "://githubusercontent.com:sub": "repo:ajslezak/team1-mon-spring26:*"
+            "token.actions.githubusercontent.com:sub": "repo:ajslezak/team1-mon-spring26:*"
           }
         }
       }
