@@ -987,19 +987,20 @@ class ViewsCoverageTest(TestCase):
         self.client.force_login(self.test_user)
 
         with patch("maps.views.connection.vendor", "postgresql"), patch(
-            "maps.views.transaction.on_commit", side_effect=lambda fn: fn()
-        ), patch("maps.views.connection.cursor") as mock_cursor:
-            response = self.client.post(
-                reverse("maps:create_review_api"),
-                data=json.dumps(
-                    {
-                        "amenity_id": self.amenity_active.id,
-                        "rating": 5,
-                        "review_text": "Fresh update",
-                    }
-                ),
-                content_type="application/json",
-            )
+            "maps.views.connection.cursor"
+        ) as mock_cursor:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    reverse("maps:create_review_api"),
+                    data=json.dumps(
+                        {
+                            "amenity_id": self.amenity_active.id,
+                            "rating": 5,
+                            "review_text": "Fresh update",
+                        }
+                    ),
+                    content_type="application/json",
+                )
 
         self.assertEqual(response.status_code, 201)
 
