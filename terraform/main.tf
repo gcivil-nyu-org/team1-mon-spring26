@@ -85,7 +85,58 @@ resource "aws_iam_instance_profile" "ec2_profile" {
   role = aws_iam_role.ec2_role.name
 }
 
-# --- 2. Security Group ---
+# --- 2. IAM Role for GitHub Actions (OIDC) ---
+resource "aws_iam_role" "github_actions_role" {
+  name = "NycNow-GitHub-Actions-SSM-Role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Effect = "Allow"
+        Principal = {
+          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/://githubusercontent.com"
+        }
+        Condition = {
+          StringEquals = {
+            "://githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            # Only allow your specific repo to use this role
+            "://githubusercontent.com:sub" = "repo:YOUR_ORG/YOUR_REPO:*"
+          }
+        }
+      }
+    ]
+  })
+}
+
+# Permission for GitHub to trigger SSM commands on the EC2
+resource "aws_iam_role_policy" "github_ssm_policy" {
+  name = "NycNow-GitHub-SSM-Policy"
+  role = aws_iam_role.github_actions_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "ssm:SendCommand",
+          "ssm:GetCommandInvocation",
+          "ssm:ListCommandInvocations"
+        ]
+        Effect   = "Allow"
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# Data source to get your AWS Account ID automatically
+data "aws_caller_identity" "current" {}
+
+
+# --- 3. Security Group ---
 resource "aws_security_group" "app_sg" {
   name_prefix = "nycnow-sg-"
   description = "Web traffic ingress and API egress"
@@ -115,7 +166,7 @@ resource "aws_security_group" "app_sg" {
   }
 }
 
-# --- 3. Amazon Linux 2023 AMI ---
+# --- 4. Amazon Linux 2023 AMI ---
 data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
@@ -125,7 +176,7 @@ data "aws_ami" "al2023" {
   }
 }
 
-# --- 4. Launch Template (Spot Instance & Boot Script) ---
+# --- 5. Launch Template (Spot Instance & Boot Script) ---
 resource "aws_launch_template" "app_lt" {
   name_prefix   = "nycnow-lt-"
   image_id      = data.aws_ami.al2023.id
@@ -157,7 +208,7 @@ resource "aws_launch_template" "app_lt" {
   }))
 }
 
-# --- 5. Auto Scaling Group (Self-Healing) ---
+# --- 6. Auto Scaling Group (Self-Healing) ---
 resource "aws_autoscaling_group" "app_asg" {
   name                = "nycnow-asg"
   vpc_zone_identifier = var.subnet_ids
