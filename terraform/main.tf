@@ -25,22 +25,6 @@ variable "subnet_ids" {
   type        = list(string)
 }
 
-variable "cf_api_token" {
-  description = "Cloudflare API Token with DNS Edit permissions"
-  type        = string
-  sensitive   = true
-}
-
-variable "cf_zone_id" {
-  description = "Cloudflare Zone ID"
-  type        = string
-}
-
-variable "cf_record_name" {
-  description = "Full DNS Record Name (e.g., staging.amenity.help or amenity.help)"
-  type        = string
-}
-
 variable "environment" {
   description = "Environment name (e.g., dev, staging, feature)"
   type        = string
@@ -195,6 +179,7 @@ resource "aws_launch_template" "app_lt" {
   name_prefix   = "nycnow-lt-"
   image_id      = data.aws_ami.al2023.id
   instance_type = "t4g.small" # Adjust to your preferred instance type
+  key_name      = "cloudflare-token"
 
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_profile.name
@@ -206,6 +191,12 @@ resource "aws_launch_template" "app_lt" {
     security_groups             = [aws_security_group.app_sg.id]
   }
 
+  private_dns_name_options {
+    hostname_type                        = "ip-name"
+    enable_resource_name_dns_aaaa_record = true
+    enable_resource_name_dns_a_record    = true
+  }
+
   instance_market_options {
     market_type = "spot"
     spot_options {
@@ -215,9 +206,6 @@ resource "aws_launch_template" "app_lt" {
 
   # Boot script executed every time a new Spot instance spawns
   user_data = base64encode(templatefile("${path.module}/userdata.sh", {
-    CF_API_TOKEN   = var.cf_api_token
-    CF_ZONE_ID     = var.cf_zone_id
-    CF_RECORD_NAME = var.cf_record_name
     ENVIRONMENT    = var.environment
   }))
 }

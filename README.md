@@ -35,6 +35,11 @@ RDS_DB_NAME=amenities
 DB_PASSWORD=your_secure_db_password
 # DB_USER is automatically derived as RDS_DB_NAME_APP_ENV (e.g., amenities_staging)
 
+# Cloudflare DNS Update
+CF_API_TOKEN=your_super_secret_cloudflare_api_token
+CF_ZONE_ID=your_cloudflare_zone_id
+CF_RECORD_NAME=feature.amenity.help
+
 # AWS S3 Storage (For Media Uploads)
 AWS_S3_BUCKET_NAME=your-s3-bucket-name
 AWS_S3_REGION_NAME=us-east-2
