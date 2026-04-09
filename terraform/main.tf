@@ -154,6 +154,13 @@ resource "aws_security_group" "app_sg" {
     protocol         = "tcp"
     ipv6_cidr_blocks = ["::/0"]
   }
+
+  ingress {
+    from_port        = 22
+    to_port          = 22
+    protocol         = "tcp"
+    ipv6_cidr_blocks = ["2601:2c3:c083:1ce0:b0c6:f512:75b3:d1fe/128"]
+  }
   
   egress {
     from_port        = 0
@@ -179,7 +186,7 @@ resource "aws_launch_template" "app_lt" {
   name_prefix   = "nycnow-lt-"
   image_id      = data.aws_ami.al2023.id
   instance_type = "t4g.small" # Adjust to your preferred instance type
-  key_name      = "cloudflare-token"
+  key_name      = "cloudflare-access"
 
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_profile.name
