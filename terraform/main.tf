@@ -44,7 +44,7 @@ variable "cf_record_name" {
 variable "environment" {
   description = "Environment name (e.g., dev, staging, feature)"
   type        = string
-  default     = "staging"
+  default     = "feature"
 }
 
 # --- 1. IAM Role for Systems Manager (SSM) ---
@@ -86,37 +86,17 @@ resource "aws_iam_instance_profile" "ec2_profile" {
 }
 
 # --- 2. IAM Role for GitHub Actions (OIDC) ---
-resource "aws_iam_role" "github_actions_role" {
-  name = "NycNow-GitHub-Actions-SSM-Role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRoleWithWebIdentity"
-        Effect = "Allow"
-        Principal = {
-          # Make sure this ARN matches your OIDC provider name
-          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
-        }
-        Condition = {
-          StringEquals = {
-            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-          }
-          # Use StringLike and the asterisk wildcard
-          StringLike = {
-            "token.actions.githubusercontent.com:sub": "repo:ajslezak/team1-mon-spring26:*"
-          }
-        }
-      }
-    ]
-  })
+# Fetch the existing role you created manually
+data "aws_iam_role" "existing_role" {
+  name = "GitHubActions-SSM-Deployer"
 }
 
-# Permission for GitHub to trigger SSM commands on the EC2
+# Attach permission for GitHub to trigger SSM commands
 resource "aws_iam_role_policy" "github_ssm_policy" {
   name = "NycNow-GitHub-SSM-Policy"
-  role = aws_iam_role.github_actions_role.id
+  # FIX: Reference the data source correctly
+  role = data.aws_iam_role.existing_role.id 
+  
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
