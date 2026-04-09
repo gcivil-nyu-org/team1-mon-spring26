@@ -286,7 +286,7 @@ const ChatsApp = (() => {
                         <div class="chat-item-preview">
                             ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
                         </div>
-                        ${chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
+                        ${chat.chat_type !== 'direct' && chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
                     </div>
                 </div>
             `;
@@ -372,15 +372,38 @@ const ChatsApp = (() => {
         }
 
         const chatMain = document.getElementById('chat-main');
+
+        const isDirect = currentChat.chat_type === 'direct';
+        const profileIconHtml = isDirect && currentChat.other_user_email
+            ? `<a href="/profile/?user=${encodeURIComponent(currentChat.other_user_email)}" class="chat-header-profile-link" title="View profile">
+                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+               </a>`
+            : '';
+
+        const participantsBtnHtml = !isDirect
+            ? `<div class="chat-participants-wrap" id="participants-wrap">
+                   <button class="chat-participants-btn" id="participants-btn">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                       ${currentChat.participant_count}
+                   </button>
+                   <div class="chat-participants-panel" id="participants-panel" style="display:none;">
+                       <div class="chat-participants-panel-title">Participants</div>
+                       <div class="chat-participants-list" id="participants-list">
+                           <div style="padding:8px 14px;font-size:13px;color:var(--text-3)">Loading...</div>
+                       </div>
+                   </div>
+               </div>`
+            : '';
+
         chatMain.innerHTML = `
             <div class="chat-header">
                 <div class="chat-header-info">
-                    <h2>${escapeHtml(currentChat.name)}</h2>
+                    <h2>${escapeHtml(currentChat.name)}${profileIconHtml}</h2>
                     <div class="chat-header-meta">
                         ${currentChat.chat_type === 'amenity_forum' && currentChat.amenity_name ? `📍 ${escapeHtml(currentChat.amenity_name)}` : ''}
-                        ${currentChat.participant_count ? `<span>${currentChat.participant_count} participants</span>` : ''}
                     </div>
                 </div>
+                ${participantsBtnHtml}
             </div>
             <div class="chat-messages" id="chat-messages">
                 <div class="loading-spinner">Loading messages...</div>
@@ -408,6 +431,47 @@ const ChatsApp = (() => {
 
         // Auto-focus the input area so the user can start typing immediately
         msgInput.focus();
+
+        // Participants dropdown for group/forum chats
+        const participantsBtn = document.getElementById('participants-btn');
+        if (participantsBtn) {
+            participantsBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const panel = document.getElementById('participants-panel');
+                const list = document.getElementById('participants-list');
+                const isOpen = panel.style.display !== 'none';
+                if (isOpen) {
+                    panel.style.display = 'none';
+                    return;
+                }
+                panel.style.display = 'block';
+                list.innerHTML = '<div style="padding:8px 14px;font-size:13px;color:var(--text-3)">Loading...</div>';
+                try {
+                    const res = await fetch(`/api/chats/participants/?chat_id=${currentChat.id}`, { credentials: 'same-origin' });
+                    const data = await res.json();
+                    if (data.participants && data.participants.length) {
+                        list.innerHTML = data.participants.map(p => `
+                            <a class="chat-participant-item" href="/profile/?user=${encodeURIComponent(p.email)}">
+                                <img class="chat-participant-avatar" src="${escapeHtml(p.avatar_url || '/static/maps/images/default-avatar.png')}" alt="" onerror="this.style.display='none'">
+                                <span>${escapeHtml(p.username)}</span>
+                            </a>
+                        `).join('');
+                    } else {
+                        list.innerHTML = '<div style="padding:8px 14px;font-size:13px;color:var(--text-3)">No participants found.</div>';
+                    }
+                } catch {
+                    list.innerHTML = '<div style="padding:8px 14px;font-size:13px;color:var(--text-3)">Failed to load.</div>';
+                }
+            });
+
+            document.addEventListener('click', (e) => {
+                const wrap = document.getElementById('participants-wrap');
+                if (wrap && !wrap.contains(e.target)) {
+                    const panel = document.getElementById('participants-panel');
+                    if (panel) panel.style.display = 'none';
+                }
+            }, { capture: true });
+        }
     }
 
     function clearNotificationIfCurrentChat() {
