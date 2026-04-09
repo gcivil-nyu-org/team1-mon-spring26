@@ -21,6 +21,7 @@ jobs:
           # 2. Use the ARN of the GitHub Actions role from your Terraform
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/NycNow-GitHub-Actions-SSM-Role
           aws-region: us-east-2
+          disable-retry: true
 
       - name: Deploy via AWS Systems Manager (SSM)
         run: |
