@@ -6,7 +6,7 @@ exec > >(tee /var/log/userdata-execution.log) 2>&1
 
 # 1. System Updates & Dependencies
 dnf update -y
-dnf install -y git python3 pip nginx
+dnf install -y git python3.11 python3.11-pip nginx
 
 # Install PgBouncer using the repository previously used in Elastic Beanstalk
 dnf install -y spal-release
