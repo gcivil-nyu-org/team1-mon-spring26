@@ -8,17 +8,23 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # 1. Required permissions for OIDC to work
+    permissions:
+      id-token: write
+      contents: read
+
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # 2. Use the ARN of the GitHub Actions role from your Terraform
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/NycNow-GitHub-Actions-SSM-Role
           aws-region: us-east-2
 
       - name: Deploy via AWS Systems Manager (SSM)
         run: |
-          aws ssm send-command \
+          # 3. Capture the Command ID to track success/failure
+          COMMAND_ID=$(aws ssm send-command \
             --targets "Key=tag:App,Values=NycNow" "Key=tag:Environment,Values=${{ vars.APP_ENV || 'feature' }}" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploying latest application code" \
@@ -32,4 +38,10 @@ jobs:
               "sudo systemctl enable pgbouncer",
               "sudo systemctl restart django-wsgi django-asgi nginx pgbouncer"
             ]' \
-            --timeout-seconds 600
+            --query "Command.CommandId" \
+            --output text)
+          
+          echo "SSM Command Sent: $COMMAND_ID"
+          
+          # Optional: Wait for the command to finish so GitHub shows success/fail accurately
+          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id $(aws ec2 describe-instances --filters "Name=tag:App,Value=NycNow" "Name=instance-state-name,Value=running" --query "Reservations[0].Instances[0].InstanceId" --output text)
