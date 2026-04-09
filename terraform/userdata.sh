@@ -28,13 +28,13 @@ if [ -n "$RECORD_ID" ]; then
   curl -s -X PUT "$CF_API_URL/$RECORD_ID" \
     -H "Authorization: Bearer ${CF_API_TOKEN}" \
     -H "Content-Type: application/json" \
-    --data "{\"type\":\"AAAA\",\"name\":\"${CF_RECORD_NAME}\",\"content\":\"${IPV6}\",\"ttl\":1,\"proxied\":true}"
+    --data "{\"type\":\"AAAA\",\"name\":\"${CF_RECORD_NAME}\",\"content\":\"$${IPV6}\",\"ttl\":1,\"proxied\":true}"
 else
   # Create new record if missing
   curl -s -X POST "$CF_API_URL" \
     -H "Authorization: Bearer ${CF_API_TOKEN}" \
     -H "Content-Type: application/json" \
-    --data "{\"type\":\"AAAA\",\"name\":\"${CF_RECORD_NAME}\",\"content\":\"${IPV6}\",\"ttl\":1,\"proxied\":true}"
+    --data "{\"type\":\"AAAA\",\"name\":\"${CF_RECORD_NAME}\",\"content\":\"$${IPV6}\",\"ttl\":1,\"proxied\":true}"
 fi
 
 # 4. Setup User Application Directory

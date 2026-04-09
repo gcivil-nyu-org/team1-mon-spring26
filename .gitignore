@@ -215,3 +215,15 @@ __marimo__/
 
 # part of the test data, but we don't want to commit the actual photos
 media/
+
+# Terraform
+terraform/.terraform/
+**/.terraform/*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
