@@ -80,6 +80,20 @@ resource "aws_iam_role_policy" "ssm_parameter_policy" {
   })
 }
 
+# Allow the EC2 instance to dynamically assign itself an IPv6 address
+resource "aws_iam_role_policy" "ec2_ipv6_policy" {
+  name = "NycNow-EC2-IPv6-Policy"
+  role = aws_iam_role.ec2_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = ["ec2:AssignIpv6Addresses", "ec2:DescribeNetworkInterfaces"]
+      Effect = "Allow"
+      Resource = "*"
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "ec2_profile" {
   name = "NycNow-EC2-Profile"
   role = aws_iam_role.ec2_role.name
@@ -172,7 +186,7 @@ data "aws_ami" "al2023" {
   owners      = ["amazon"]
   filter {
     name   = "name"
-    values = ["al2023-ami-2023.*-x86_64"]
+    values = ["al2023-ami-2023.*-arm64"]
   }
 }
 

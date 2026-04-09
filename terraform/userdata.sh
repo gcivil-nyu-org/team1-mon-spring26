@@ -9,6 +9,14 @@ dnf install -y git python3 pip nginx pgbouncer
 TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
 MAC=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/mac)
 
+ENI=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/network/interfaces/macs/$MAC/interface-id)
+REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
+
+# Explicitly assign an IPv6 address and restart networking so the OS binds it
+aws ec2 assign-ipv6-addresses --network-interface-id $ENI --ipv6-address-count 1 --region $REGION || true
+systemctl restart systemd-networkd || true
+sleep 5
+
 for i in {1..10}; do
   IPV6=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/network/interfaces/macs/$MAC/ipv6s | head -n 1)
   if [ -n "$IPV6" ]; then break; fi
