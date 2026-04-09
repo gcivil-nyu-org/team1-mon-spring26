@@ -6,7 +6,11 @@ exec > >(tee /var/log/userdata-execution.log) 2>&1
 
 # 1. System Updates & Dependencies
 dnf update -y
-dnf install -y git python3 pip nginx pgbouncer
+dnf install -y git python3 pip nginx
+
+# Install PgBouncer using the repository previously used in Elastic Beanstalk
+dnf install -y spal-release
+dnf install -y pgbouncer
 
 # 2. Install Cloudflare WARP (Provides outbound IPv4 access for GitHub and AWS SSM)
 curl -fsSl https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo | tee /etc/yum.repos.d/cloudflare-warp.repo
@@ -14,20 +18,15 @@ dnf install -y cloudflare-warp
 systemctl enable --now warp-svc
 sleep 2
 warp-cli --accept-tos registration new || true
+# Exclude all IPv6 traffic from the tunnel so native IPv6 (like your SSH connection) routes directly
+# Trying older and newer v2024+ CLI syntaxes since Cloudflare changed the command
+warp-cli tunnel ip add-range ::/0
 warp-cli --accept-tos connect || true
 sleep 5 # Give the daemon a few seconds to establish the IPv4 tunnel
 
 # 3. Get the assigned IPv6 address from AWS Instance Metadata
 TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
 MAC=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/mac)
-
-ENI=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/network/interfaces/macs/$MAC/interface-id)
-REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
-
-# Explicitly assign an IPv6 address and restart networking so the OS binds it
-aws ec2 assign-ipv6-addresses --network-interface-id $ENI --ipv6-address-count 1 --region $REGION || true
-systemctl restart systemd-networkd || true
-sleep 5
 
 for i in {1..10}; do
   IPV6=$(curl -s -f -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/network/interfaces/macs/$MAC/ipv6s | head -n 1 || true)
