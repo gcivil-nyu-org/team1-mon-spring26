@@ -724,7 +724,7 @@ body.auth-page { overflow-y: auto !important; }
     }
     aside.detail-panel {
         transform: translateY(100%); opacity: 0; pointer-events: none;
-        transition: transform 0.28s cubic-bezier(.4,0,.2,1), opacity 0.18s ease, background 0.2s ease !important; z-index: 1500 !important; background: var(--surface) !important;
+        transition: transform 0.28s cubic-bezier(.4,0,.2,1), opacity 0.18s ease, background 0.2s ease !important; z-index: 2100 !important; background: var(--surface) !important;
     }
     aside.detail-panel.nearby-active {
         background: rgba(255, 255, 255, 0.3) !important;

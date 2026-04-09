@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
@@ -111,7 +112,14 @@ def compress_image(uploaded_file, max_dimension=1024, quality=80):
 def map_view(request):
     """Render the main map view."""
     amenity_types = AmenityType.objects.all()
-    return render(request, "maps/map.html", {"amenity_types": amenity_types})
+    return render(
+        request,
+        "maps/map.html",
+        {
+            "amenity_types": amenity_types,
+            "app_release": settings.APP_RELEASE,
+        },
+    )
 
 
 @login_required(login_url="/?auth_required=1")

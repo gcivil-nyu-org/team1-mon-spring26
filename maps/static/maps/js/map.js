@@ -96,7 +96,7 @@ function initializeGeolocation(shouldSetView = true) {
             clearTimeout(tid);
             locBtn.classList.remove('locating');
             dotEl.classList.add('denied');
-            statusEl.textContent = ({ 1: 'Permission denied', 2: 'Unavailable', 3: 'Timed out' })[err.code] || 'Unable to locate';
+            statusEl.textContent = ({ 1: 'no location found', 2: 'Unavailable', 3: 'Timed out' })[err.code] || 'Unable to locate';
             if (shouldSetView) {
                 map.setView([40.73, -73.99], 13);
             }
@@ -2213,31 +2213,70 @@ function setupPWA() {
     const promptEl = document.getElementById('pwa-install-prompt');
     const installBtn = document.getElementById('pwa-install-btn');
     const closeBtn = document.getElementById('pwa-close-btn');
+    const releaseMeta = document.querySelector('meta[name="app-release"]');
+    const appRelease = releaseMeta ? (releaseMeta.getAttribute('content') || '').trim() : '';
+    const dismissKey = 'pwa_install_prompt_dismissed_release';
     let deferredPrompt;
+
+    const hidePrompt = () => {
+        if (promptEl) promptEl.style.display = 'none';
+    };
+
+    const getDismissedRelease = () => {
+        try {
+            return localStorage.getItem(dismissKey) || '';
+        } catch {
+            return '';
+        }
+    };
+
+    const markPromptDismissed = () => {
+        if (!appRelease) return;
+        try {
+            localStorage.setItem(dismissKey, appRelease);
+        } catch {
+            // Ignore storage failures and keep the prompt ephemeral.
+        }
+    };
+
+    const isIos = () => /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+    const isInStandaloneMode = () =>
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (('standalone' in window.navigator) && window.navigator.standalone);
+
+    const shouldShowInstallPrompt = () =>
+        Boolean(promptEl) &&
+        !isInStandaloneMode() &&
+        (!appRelease || getDismissedRelease() !== appRelease);
+
+    const showPrompt = () => {
+        if (shouldShowInstallPrompt()) {
+            promptEl.style.display = 'block';
+        }
+    };
 
     // Handle Android/Chrome automatic prompt
     window.addEventListener('beforeinstallprompt', (e) => {
         e.preventDefault();
         deferredPrompt = e;
-        if (promptEl) promptEl.style.display = 'block';
+        if (installBtn) installBtn.style.display = '';
+        showPrompt();
     });
 
     if (installBtn) {
         installBtn.addEventListener('click', async () => {
             if (!deferredPrompt) return;
-            promptEl.style.display = 'none';
-            deferredPrompt.prompt();
+            hidePrompt();
+            const activePrompt = deferredPrompt;
             deferredPrompt = null;
+            await activePrompt.prompt();
         });
     }
 
     // Handle iOS Manual Prompt
-    const isIos = () => /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
-    const isInStandaloneMode = () => ('standalone' in window.navigator) && (window.navigator.standalone);
-
-    if (isIos() && !isInStandaloneMode()) {
+    if (isIos() && shouldShowInstallPrompt()) {
         if (promptEl) {
-            promptEl.style.display = 'block';
+            showPrompt();
             if (installBtn) installBtn.style.display = 'none'; // Hide the button since iOS doesn't support the auto-trigger
             const textEl = promptEl.querySelector('.pwa-prompt-text span');
             if (textEl) textEl.innerHTML = `To install, tap <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin:0 2px"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg> and <strong>Add to Home Screen</strong>`;
@@ -2245,8 +2284,16 @@ function setupPWA() {
     }
 
     if (closeBtn) {
-        closeBtn.addEventListener('click', () => { if (promptEl) promptEl.style.display = 'none'; });
+        closeBtn.addEventListener('click', () => {
+            markPromptDismissed();
+            hidePrompt();
+        });
     }
+
+    window.addEventListener('appinstalled', () => {
+        deferredPrompt = null;
+        hidePrompt();
+    });
 }
 
 window.addEventListener('beforeunload', () => {

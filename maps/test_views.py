@@ -138,6 +138,13 @@ class ViewsCoverageTest(TestCase):
         self.assertIn("amenity_types", response.context)
         self.assertContains(response, reverse("google_login"))
 
+    @override_settings(APP_RELEASE="test-release")
+    def test_map_view_includes_app_release(self):
+        response = self.client.get(reverse("maps:map"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["app_release"], "test-release")
+        self.assertContains(response, 'meta name="app-release" content="test-release"')
+
     def test_amenity_types_api(self):
         response = self.client.get(reverse("maps:amenity_types_api"))
         self.assertEqual(response.status_code, 200)
