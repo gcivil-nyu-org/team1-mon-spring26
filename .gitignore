@@ -218,6 +218,7 @@ media/
 
 # Terraform
 terraform/.terraform/
+terraform/.terraform.lock.hcl
 **/.terraform/*
 crash.log
 crash.*.log
