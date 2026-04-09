@@ -38,14 +38,13 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce
 from decimal import Decimal, InvalidOperation
-import json
 import os
 import io
 from PIL import Image, ImageOps
 from django.core.files.uploadedfile import InMemoryUploadedFile
 
-
 AVAILABILITY_WINDOW_HOURS = 3
+
 
 def normalize_longitude(lon):
     """Normalize a longitude to the range [-180, 180]."""
@@ -1845,6 +1844,7 @@ def get_amenity_reviewers_api(request):
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
+
 def availability_status_api(request, amenity_id):
     """GET: return available/unavailable counts for the last 3 hours."""
     from .models import AvailabilityReport, Amenity
@@ -1853,10 +1853,13 @@ def availability_status_api(request, amenity_id):
         amenity = Amenity.objects.get(pk=amenity_id)
     except Amenity.DoesNotExist:
         from django.http import JsonResponse
+
         return JsonResponse({"error": "Not found"}, status=404)
 
     cutoff = timezone.now() - timedelta(hours=AVAILABILITY_WINDOW_HOURS)
-    reports = AvailabilityReport.objects.filter(amenity=amenity, reported_at__gte=cutoff)
+    reports = AvailabilityReport.objects.filter(
+        amenity=amenity, reported_at__gte=cutoff
+    )
 
     available_count = reports.filter(is_available=True).count()
     unavailable_count = reports.filter(is_available=False).count()
@@ -1866,20 +1869,25 @@ def availability_status_api(request, amenity_id):
         request.session.create()
     session_key = request.session.session_key or ""
 
-    user_report = reports.filter(session_key=session_key).order_by("-reported_at").first()
+    user_report = (
+        reports.filter(session_key=session_key).order_by("-reported_at").first()
+    )
     user_vote = None
     if user_report:
         user_vote = "available" if user_report.is_available else "unavailable"
 
     from django.http import JsonResponse
-    return JsonResponse({
-        "available": available_count,
-        "unavailable": unavailable_count,
-        "total": available_count + unavailable_count,
-        "last_reported": latest.reported_at.isoformat() if latest else None,
-        "user_vote": user_vote,
-        "window_hours": AVAILABILITY_WINDOW_HOURS,
-    })
+
+    return JsonResponse(
+        {
+            "available": available_count,
+            "unavailable": unavailable_count,
+            "total": available_count + unavailable_count,
+            "last_reported": latest.reported_at.isoformat() if latest else None,
+            "user_vote": user_vote,
+            "window_hours": AVAILABILITY_WINDOW_HOURS,
+        }
+    )
 
 
 def report_availability_api(request, amenity_id):
@@ -1923,11 +1931,15 @@ def report_availability_api(request, amenity_id):
         session_key=session_key,
     )
 
-    reports = AvailabilityReport.objects.filter(amenity=amenity, reported_at__gte=cutoff)
-    return JsonResponse({
-        "ok": True,
-        "available": reports.filter(is_available=True).count(),
-        "unavailable": reports.filter(is_available=False).count(),
-        "total": reports.count(),
-        "user_vote": "available" if is_available else "unavailable",
-    })
+    reports = AvailabilityReport.objects.filter(
+        amenity=amenity, reported_at__gte=cutoff
+    )
+    return JsonResponse(
+        {
+            "ok": True,
+            "available": reports.filter(is_available=True).count(),
+            "unavailable": reports.filter(is_available=False).count(),
+            "total": reports.count(),
+            "user_vote": "available" if is_available else "unavailable",
+        }
+    )

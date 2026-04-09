@@ -20,7 +20,7 @@ from maps.models import (
     Chat,
     ChatParticipant,
     Message,
-    AvailabilityReport
+    AvailabilityReport,
 )
 from maps.views import normalize_longitude, get_cluster_grid_size
 
@@ -1735,7 +1735,9 @@ class ViewsCoverageTest(TestCase):
         self.assertIn("total_reviews", data)
 
     def test_get_availability_status_empty(self):
-        response = self.client.get(f"/api/amenities/{self.amenity_active.id}/availability/")
+        response = self.client.get(
+            f"/api/amenities/{self.amenity_active.id}/availability/"
+        )
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["available"], 0)
@@ -1779,7 +1781,9 @@ class ViewsCoverageTest(TestCase):
         )
         old_time = timezone.now() - timedelta(hours=4)
         AvailabilityReport.objects.filter(pk=report.pk).update(reported_at=old_time)
-        response = self.client.get(f"/api/amenities/{self.amenity_active.id}/availability/")
+        response = self.client.get(
+            f"/api/amenities/{self.amenity_active.id}/availability/"
+        )
         self.assertEqual(response.json()["total"], 0)
 
     def test_availability_invalid_amenity_returns_404(self):
@@ -1789,7 +1793,7 @@ class ViewsCoverageTest(TestCase):
     def test_availability_missing_is_available_field(self):
         response = self.client.post(
             f"/api/amenities/{self.amenity_active.id}/availability/report/",
-            data='{}',
+            data="{}",
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)

@@ -459,7 +459,8 @@ class Message(models.Model):
 
     def __str__(self):
         return f"Message from {self.sender.email} in {self.chat}"
-    
+
+
 class AvailabilityReport(models.Model):
     """Crowd-sourced availability report for an amenity. Expires after 3 hours."""
 
@@ -475,8 +476,12 @@ class AvailabilityReport(models.Model):
     class Meta:
         ordering = ["-reported_at"]
         indexes = [
-            models.Index(fields=["amenity", "reported_at"], name="avail_amenity_time_idx"),
-            models.Index(fields=["session_key", "reported_at"], name="avail_session_time_idx"),
+            models.Index(
+                fields=["amenity", "reported_at"], name="avail_amenity_time_idx"
+            ),
+            models.Index(
+                fields=["session_key", "reported_at"], name="avail_session_time_idx"
+            ),
         ]
 
     def __str__(self):
