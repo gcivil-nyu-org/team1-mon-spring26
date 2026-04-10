@@ -37,6 +37,8 @@ jobs:
               "su - ec2-user -c \"cd /home/ec2-user/app && source venv/bin/activate && python manage.py collectstatic --noinput\"",
               "su - ec2-user -c \"cd /home/ec2-user/app && source venv/bin/activate && python manage.py migrate\"",
               "su - ec2-user -c \"aws ssm get-parameter --name '/nycnow/env/${{ vars.APP_ENV || 'feature' }}' --with-decryption --query 'Parameter.Value' --output text --region us-east-2 > /home/ec2-user/app/.env\"",
+              "sudo cp /home/ec2-user/app/.platform/nginx/conf.d/https.conf /etc/nginx/conf.d/https.conf",
+              "sudo rm -f /etc/nginx/conf.d/django.conf",
               "sudo bash /home/ec2-user/app/scripts/configure_pgbouncer.sh",
               "sudo systemctl enable pgbouncer",
               "sudo systemctl restart django-wsgi django-asgi nginx pgbouncer"
