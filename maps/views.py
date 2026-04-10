@@ -1500,19 +1500,28 @@ def get_user_chats_api(request):
                     "avatar_url": avatar_url,
                     "amenity_id": chat.amenity_id,
                     "amenity_name": chat.amenity.name if chat.amenity else None,
-                    "created_by_email": chat.created_by.email if chat.created_by else None,
+                    "created_by_email": (
+                        chat.created_by.email if chat.created_by else None
+                    ),
                     "participant_count": len(chat.participants.all()),
                     "last_message": (
-                        last_message.content[:100] if last_message and last_message.content else None
+                        last_message.content[:100]
+                        if last_message and last_message.content
+                        else None
                     ),
                     "last_message_sender": (
-                        last_message.sender.email if last_message and last_message.sender else None
+                        last_message.sender.email
+                        if last_message and last_message.sender
+                        else None
                     ),
                     "last_message_at": (
-                        chat.last_message_at.isoformat() if chat.last_message_at
+                        chat.last_message_at.isoformat()
+                        if chat.last_message_at
                         else (chat.created_at.isoformat() if chat.created_at else None)
                     ),
-                    "created_at": chat.created_at.isoformat() if chat.created_at else None,
+                    "created_at": (
+                        chat.created_at.isoformat() if chat.created_at else None
+                    ),
                 }
             )
 
