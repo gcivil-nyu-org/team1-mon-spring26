@@ -477,12 +477,8 @@ class AvailabilityReport(models.Model):
     class Meta:
         ordering = ["-reported_at"]
         indexes = [
-            models.Index(
-                fields=["amenity", "reported_at"], name="avail_amenity_time_idx"
-            ),
-            models.Index(
-                fields=["session_key", "reported_at"], name="avail_session_time_idx"
-            ),
+            models.Index(fields=["amenity", "reported_at"], name="avail_amenity_time_idx"),
+            models.Index(fields=["session_key", "reported_at"], name="avail_session_time_idx"),
         ]
 
     def __str__(self):
