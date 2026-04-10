@@ -23,11 +23,14 @@ class CustomUser(AbstractUser):
     @property
     def avatar_url(self):
         if self.avatar:
-            if hasattr(self.avatar, "storage") and not self.avatar.storage.exists(
-                self.avatar.name
-            ):
+            try:
+                if hasattr(self.avatar, "storage") and not self.avatar.storage.exists(
+                    self.avatar.name
+                ):
+                    return static("maps/default-avatar.svg")
+                return self.avatar.url
+            except Exception:
                 return static("maps/default-avatar.svg")
-            return self.avatar.url
         return static("maps/default-avatar.svg")
 
     def __str__(self):
@@ -311,7 +314,6 @@ class Favorite(models.Model):
         on_delete=models.CASCADE,
         related_name="favorited_by",
     )
-    notify_on_updates = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -460,31 +462,3 @@ class Message(models.Model):
 
     def __str__(self):
         return f"Message from {self.sender.email} in {self.chat}"
-
-
-class AvailabilityReport(models.Model):
-    """Crowd-sourced availability report for an amenity. Expires after 3 hours."""
-
-    amenity = models.ForeignKey(
-        Amenity,
-        on_delete=models.CASCADE,
-        related_name="availability_reports",
-    )
-    is_available = models.BooleanField()
-    reported_at = models.DateTimeField(auto_now_add=True)
-    session_key = models.CharField(max_length=64, blank=True)
-
-    class Meta:
-        ordering = ["-reported_at"]
-        indexes = [
-            models.Index(
-                fields=["amenity", "reported_at"], name="avail_amenity_time_idx"
-            ),
-            models.Index(
-                fields=["session_key", "reported_at"], name="avail_session_time_idx"
-            ),
-        ]
-
-    def __str__(self):
-        status = "available" if self.is_available else "unavailable"
-        return f"{self.amenity.name} reported {status} at {self.reported_at}"

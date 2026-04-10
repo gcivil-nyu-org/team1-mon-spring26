@@ -93,6 +93,28 @@ resource "aws_iam_role_policy" "ec2_ipv6_policy" {
   })
 }
 
+# Allow the EC2 instance to access S3 for user uploads and avatars
+resource "aws_iam_role_policy" "s3_access_policy" {
+  name = "NycNow-EC2-S3-Policy"
+  role = aws_iam_role.ec2_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ]
+      Effect = "Allow"
+      Resource = [
+        "arn:aws:s3:::amenity-media-793314585930-us-east-2-an",
+        "arn:aws:s3:::amenity-media-793314585930-us-east-2-an/*"
+      ]
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "ec2_profile" {
   name = "NycNow-EC2-Profile"
   role = aws_iam_role.ec2_role.name
