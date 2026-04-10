@@ -652,8 +652,6 @@ def profile_view(request):
     else:
         profile_user = request.user
 
-    If a ?user=<email> query param is provided, show that user's profile.
-    """
     user_email = request.GET.get("user")
     if user_email:
         try:
