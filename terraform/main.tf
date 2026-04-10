@@ -57,10 +57,20 @@ resource "aws_iam_role_policy" "ssm_parameter_policy" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Action = "ssm:GetParameter"
-      Effect = "Allow"
-      Resource = "arn:aws:ssm:${var.aws_region}:*:parameter/nycnow/env/${var.environment}"
-    }]
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:GetParametersByPath"
+        ]
+        Effect   = "Allow"
+        Resource = [
+          # Restricts to only this environment's feature file
+          "arn:aws:ssm:${var.aws_region}:*:parameter/nycnow/env/${var.environment}",
+          
+          # Allows all environments to access shared ssl parameters
+          "arn:aws:ssm:${var.aws_region}:*:parameter/nycnow/env/ssl/*"
+        ]
+        }]
   })
 }
 
