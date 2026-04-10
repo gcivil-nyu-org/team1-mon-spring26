@@ -641,15 +641,25 @@ def profile_view(request):
     """
     Profile page.
     Anonymous users are redirected back to the map page.
+    If a ?user=<email> query param is provided, show that user's profile.
     """
+    user_email = request.GET.get("user")
+    if user_email:
+        try:
+            profile_user = CustomUser.objects.get(email=user_email)
+        except CustomUser.DoesNotExist:
+            profile_user = request.user
+    else:
+        profile_user = request.user
+
     return render(
         request,
         "maps/profile.html",
         {
-            "profile_user": request.user,
-            "reviews_count": request.user.reviews.count(),
+            "profile_user": profile_user,
+            "reviews_count": profile_user.reviews.count(),
             "likes_received_count": ReviewVote.objects.filter(
-                review__user=request.user,
+                review__user=profile_user,
                 value=1,
             ).count(),
         },
@@ -1476,8 +1486,9 @@ def get_user_chats_api(request):
             last_message = messages_list[-1] if messages_list else None
 
             avatar_url = None
+            other_user_email = None
             if chat.chat_type == "direct":
-                # Find the other participant to get their avatar
+                # Find the other participant to get their avatar and email
                 other_p = next(
                     (
                         p
@@ -1486,8 +1497,10 @@ def get_user_chats_api(request):
                     ),
                     None,
                 )
-                if other_p and getattr(other_p.user, "avatar_url", None):
-                    avatar_url = other_p.user.avatar_url
+                if other_p:
+                    if getattr(other_p.user, "avatar_url", None):
+                        avatar_url = other_p.user.avatar_url
+                    other_user_email = other_p.user.email
             else:
                 if chat.created_by and getattr(chat.created_by, "avatar_url", None):
                     avatar_url = chat.created_by.avatar_url
@@ -1498,6 +1511,7 @@ def get_user_chats_api(request):
                     "chat_type": chat.chat_type,
                     "name": chat.get_display_name(request.user),
                     "avatar_url": avatar_url,
+                    "other_user_email": other_user_email,
                     "amenity_id": chat.amenity_id,
                     "amenity_name": chat.amenity.name if chat.amenity else None,
                     "created_by_email": (
@@ -1878,6 +1892,8 @@ def get_chat_participants_api(request):
             {
                 "user_id": p.user.id if p.user else None,
                 "email": p.user.email if p.user else None,
+                "username": p.user.username or p.user.email,
+                "avatar_url": getattr(p.user, "avatar_url", None) or "",
                 "joined_at": p.joined_at.isoformat() if p.joined_at else None,
             }
             for p in chat.participants.select_related("user")

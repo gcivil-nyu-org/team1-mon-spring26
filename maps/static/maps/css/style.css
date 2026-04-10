@@ -1363,6 +1363,23 @@ body.profile-review-sheet-open { overflow: hidden; }
     border-bottom: 1px solid var(--border);
     background: var(--surface);
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.chat-header-profile-link {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-3);
+    margin-left: 6px;
+    vertical-align: middle;
+    transition: color 0.15s;
+}
+
+.chat-header-profile-link:hover {
+    color: var(--accent);
 }
 
 .chat-header-info {
@@ -1388,6 +1405,8 @@ body.profile-review-sheet-open { overflow: hidden; }
     font-weight: 600;
     margin: 0 0 4px 0;
     color: var(--text-1);
+    display: flex;
+    align-items: center;
 }
 
 .chat-header-meta {
@@ -1963,6 +1982,8 @@ body.profile-review-sheet-open { overflow: hidden; }
     align-items: center;
     gap: 12px;
     padding: 12px 16px;
+    width: 100%;
+    box-sizing: border-box;
     background: var(--surface2);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -1986,6 +2007,7 @@ body.profile-review-sheet-open { overflow: hidden; }
 
 .option-text {
     flex: 1;
+    text-align: center;
 }
 
 /* ── CLICKABLE USERNAME ── */
