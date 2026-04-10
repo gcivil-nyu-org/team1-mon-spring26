@@ -53,20 +53,22 @@ set -a
 source /home/ec2-user/app/.env
 set +a
 
-# 5. Dynamically update Cloudflare DNS Records (DNS only, no proxy)
+# 5. Dynamically update Cloudflare DNS Records
 CF_API_URL="https://api.cloudflare.com/client/v4/zones/$${CF_ZONE_ID}/dns_records"
 
 update_cloudflare_record() {
   local record_type=$1
-  local ip_address=$2
+  local record_name=$2
+  local record_content=$3
+  local proxied=$4
   
-  if [ -z "$ip_address" ]; then
-    echo "No valid IP found for $record_type record. Skipping."
+  if [ -z "$record_content" ]; then
+    echo "No valid content found for $record_type record $record_name. Skipping."
     return
   fi
 
-  echo "Updating Cloudflare $record_type Record to $ip_address..."
-  RECORD_ID=$(curl -s -X GET "$CF_API_URL?type=$record_type&name=$${CF_RECORD_NAME}" \
+  echo "Updating Cloudflare $record_type Record $record_name to $record_content (proxied: $proxied)..."
+  RECORD_ID=$(curl -s -X GET "$CF_API_URL?type=$record_type&name=$record_name" \
     -H "Authorization: Bearer $${CF_API_TOKEN}" \
     -H "Content-Type: application/json" | grep -o '"id":"[^"]*' | head -n 1 | cut -d'"' -f4)
 
@@ -77,11 +79,13 @@ update_cloudflare_record() {
     URL_PATH="$CF_API_URL/$RECORD_ID"
   fi
 
-  RESULT=$(curl -s -X $HTTP_METHOD "$URL_PATH" -H "Authorization: Bearer $${CF_API_TOKEN}" -H "Content-Type: application/json" --data "{\"type\":\"$record_type\",\"name\":\"$${CF_RECORD_NAME}\",\"content\":\"$ip_address\",\"ttl\":1,\"proxied\":false}")
+  RESULT=$(curl -s -X $HTTP_METHOD "$URL_PATH" -H "Authorization: Bearer $${CF_API_TOKEN}" -H "Content-Type: application/json" --data "{\"type\":\"$record_type\",\"name\":\"$record_name\",\"content\":\"$record_content\",\"ttl\":1,\"proxied\":$proxied}")
   echo "Cloudflare API Response: $RESULT"
 }
 
-update_cloudflare_record "AAAA" "$${IPV6}"
+update_cloudflare_record "AAAA" "v6-$${CF_RECORD_NAME}" "$${IPV6}" "true"
+update_cloudflare_record "AAAA" "ssh.$${CF_RECORD_NAME}" "$${IPV6}" "false"
+update_cloudflare_record "CNAME" "$${CF_RECORD_NAME}" "v6-$${CF_RECORD_NAME}" "true"
 
 # 6. Restart AWS SSM Agent to instantly register over the new WARP IPv4 tunnel
 systemctl restart amazon-ssm-agent
