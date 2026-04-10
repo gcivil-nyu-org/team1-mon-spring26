@@ -23,6 +23,8 @@ jobs:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/NycNow-GitHub-Actions-SSM-Role
           aws-region: us-east-2
           disable-retry: true
+          polling-interval-seconds: 10  # Default is 5
+          # timeout-seconds: 1200  # Default is 1200
 
       - name: Deploy via AWS Systems Manager (SSM)
         run: |
