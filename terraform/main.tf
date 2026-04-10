@@ -196,9 +196,16 @@ resource "aws_security_group" "app_sg" {
     from_port        = 22
     to_port          = 22
     protocol         = "tcp"
-    ipv6_cidr_blocks = ["2601:2c3:c083:1ce0:15ab:c4bd:6b73:3afd/128"]
+    ipv6_cidr_blocks = ["2601:2c3:c083:1ce0::/64"]
   }
 
+  ingress {
+    from_port        = 22
+    to_port          = 22
+    protocol         = "tcp"
+    cidr_blocks = ["73.115.20.106/32"]
+  }
+  
   ingress {
     from_port        = -1
     to_port          = -1

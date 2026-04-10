@@ -4,7 +4,8 @@ on:
   push:
     branches:
       - develop
-
+  repository_dispatch:
+    types: [asg_instance_refresh]
 jobs:
   deploy:
     runs-on: ubuntu-latest
