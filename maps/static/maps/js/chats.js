@@ -181,7 +181,7 @@ const ChatsApp = (() => {
         chatsAbortController = new AbortController();
 
         try {
-             // Append cache-buster so browsers don't silently return stale history
+            // Append cache-buster so browsers don't silently return stale history
             const response = await fetch(`/api/chats/?t=${Date.now()}`, { signal: chatsAbortController.signal });
             const data = await response.json();
 
