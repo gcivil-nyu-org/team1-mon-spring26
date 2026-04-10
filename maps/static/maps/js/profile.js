@@ -9,6 +9,9 @@ document.addEventListener('DOMContentLoaded', () => {
         favoritesLoaded: false,
         activeReviewId: null,
         reviewSheetMode: 'view',
+        pendingReviewPhotos: [],
+        nextPendingReviewPhotoId: 1,
+        pendingDeletePhotoIds: [],
     };
 
     const dropdown = document.getElementById('user-menu-dropdown');
@@ -200,6 +203,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }];
     }
 
+    function getPendingReviewPhotos() {
+        return Array.isArray(state.pendingReviewPhotos) ? state.pendingReviewPhotos : [];
+    }
+
+    function clearPendingReviewPhotos() {
+        getPendingReviewPhotos().forEach(photo => {
+            if (photo && photo.previewUrl) {
+                URL.revokeObjectURL(photo.previewUrl);
+            }
+        });
+        state.pendingReviewPhotos = [];
+        state.pendingDeletePhotoIds = [];
+    }
+
     function renderReviewCardPhotos(review) {
         const photos = getReviewPhotos(review);
         if (!photos.length) return '';
@@ -217,30 +234,97 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
     }
 
-    function renderReviewSheetPhotos(review, useThumbSize = false) {
-        const photos = getReviewPhotos(review);
-        if (!photos.length) return '';
+    function renderReviewSheetPhotoGallery(review, editable = false) {
+        const allExistingPhotos = getReviewPhotos(review);
+        const existingPhotos = editable
+            ? allExistingPhotos.filter(p => !state.pendingDeletePhotoIds.includes(p.id))
+            : allExistingPhotos;
+        const pendingPhotos = editable ? getPendingReviewPhotos() : [];
+        const totalPhotoCount = existingPhotos.length + pendingPhotos.length;
 
-        return `
-            <div class="profile-review-sheet-photo-list">
-                ${photos.map((photo, index) => `
-                    <div class="profile-review-sheet-photo-item">
+        if (!editable && !existingPhotos.length) return '';
+
+        if (!editable) {
+            return `
+                <div class="profile-review-sheet-view-photo-list">
+                    ${existingPhotos.map((photo, index) => `
                         <img
-                            class="${useThumbSize ? 'profile-review-sheet-photo-thumb' : 'profile-review-sheet-photo'}"
+                            class="profile-review-sheet-view-photo"
                             src="${escapeHtml(photo.url)}"
                             alt="Review photo ${index + 1}"
                         >
-                        ${photo.id ? `
-                            <button
-                                type="button"
-                                class="profile-review-sheet-secondary js-sheet-delete-photo"
-                                data-photo-id="${photo.id}"
-                            >
-                                Remove photo
-                            </button>
-                        ` : ''}
-                    </div>
-                `).join('')}
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        const cards = [];
+
+        existingPhotos.forEach((photo, index) => {
+            cards.push(`
+                <div class="profile-review-sheet-gallery-card">
+                    <img
+                        class="profile-review-sheet-gallery-photo"
+                        src="${escapeHtml(photo.url)}"
+                        alt="Review photo ${index + 1}"
+                    >
+                    ${editable && photo.id ? `
+                        <button
+                            type="button"
+                            class="profile-review-sheet-photo-delete js-sheet-delete-photo"
+                            data-photo-id="${photo.id}"
+                            aria-label="Remove photo ${index + 1}"
+                        >×</button>
+                    ` : ''}
+                </div>
+            `);
+        });
+
+        pendingPhotos.forEach((photo, index) => {
+            cards.push(`
+                <div class="profile-review-sheet-gallery-card is-pending">
+                    <img
+                        class="profile-review-sheet-gallery-photo"
+                        src="${escapeHtml(photo.previewUrl)}"
+                        alt="New review photo ${index + 1}"
+                    >
+                    <button
+                        type="button"
+                        class="profile-review-sheet-photo-delete js-sheet-delete-pending-photo"
+                        data-temp-id="${photo.tempId}"
+                        aria-label="Remove new photo ${index + 1}"
+                    >×</button>
+                </div>
+            `);
+        });
+
+        if (editable && totalPhotoCount < 5) {
+            cards.push(`
+                <button
+                    type="button"
+                    class="profile-review-sheet-add-photo js-sheet-add-photo"
+                    aria-label="Add photo"
+                >
+                    <span class="profile-review-sheet-add-photo-plus">+</span>
+                    <span class="profile-review-sheet-add-photo-label">Add photo</span>
+                </button>
+            `);
+        }
+
+        return `
+            <div class="profile-review-sheet-gallery-wrap">
+                <div class="profile-review-sheet-gallery" role="list">
+                    ${cards.join('')}
+                </div>
+                ${editable ? `
+                    <input
+                        type="file"
+                        class="js-sheet-photo-input"
+                        accept="image/*"
+                        multiple
+                        hidden
+                    >
+                ` : ''}
             </div>
         `;
     }
@@ -363,6 +447,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderFavoriteCard(favorite) {
         const amenityDisplayName = favorite.amenity_prop_name || favorite.amenity_name || 'Amenity';
         const address = String(favorite.address || '').trim();
+        const isChecked = favorite.notify_on_updates !== false;
 
         return `
             <article class="profile-review-card">
@@ -376,6 +461,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
 
                 ${address ? `<p class="profile-review-text">${escapeHtml(address)}</p>` : ''}
+
+                <label class="favorite-notify-row">
+                    <input
+                        class="favorite-notify-checkbox js-favorite-notify-toggle"
+                        type="checkbox"
+                        data-favorite-id="${favorite.id}"
+                        ${isChecked ? 'checked' : ''}
+                    >
+                    <span>Notify me when new reviews are added</span>
+                </label>
 
                 <a class="profile-empty-link" href="${escapeHtml(buildFavoriteMapUrl(favorite))}">
                     View on map
@@ -410,6 +505,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function hasPendingReviewChanges() {
+        if (getPendingReviewPhotos().length > 0 || state.pendingDeletePhotoIds.length > 0) {
+            return true;
+        }
+
         const review = getActiveReview();
         const form = document.getElementById('review-sheet-edit-form');
         if (!review || !form) return false;
@@ -421,7 +520,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const rating = Math.min(5, Math.max(1, parseInt(starPicker.dataset.rating || '5', 10) || 5));
         const reviewText = textInput.value.trim();
 
-        return rating !== Number(review.rating || 0) || reviewText !== String(review.review_text || '');
+        return (
+            rating !== Number(review.rating || 0) ||
+            reviewText !== String(review.review_text || '')
+        );
     }
 
     function syncReviewSheetSaveState() {
@@ -508,16 +610,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 <section class="profile-review-sheet-section profile-review-sheet-section-plain profile-review-sheet-section-grow">
                     <div class="profile-review-sheet-copy-group">
                         <div class="profile-review-sheet-rating-display">
-                            <div class="profile-review-stars" aria-label="Rated ${escapeHtml(String(review.rating))} out of 5">
-                                ${renderDisplayStars(review.rating)}
-                            </div>
-                            <span class="profile-review-sheet-meta">${escapeHtml(reviewDate)}</span>
+                        <div class="profile-review-stars" aria-label="Rated ${escapeHtml(String(review.rating))} out of 5">
+                            ${renderDisplayStars(review.rating)}
                         </div>
-
-                        <p class="profile-review-sheet-copy">${escapeHtml(reviewText)}</p>
+                        <span class="profile-review-sheet-meta">${escapeHtml(reviewDate)}</span>
                     </div>
 
-                    ${renderReviewSheetPhotos(review, false)}
+                    <p class="profile-review-sheet-copy">${escapeHtml(reviewText)}</p>
+                </div>
+
+                    ${renderReviewSheetPhotoGallery(review, false)}
                 </section>
             `;
             return;
@@ -545,7 +647,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     placeholder="Share your experience at this location..."
                 >${escapeHtml(review.review_text || '')}</textarea>
 
-                ${renderReviewSheetPhotos(review, true)}
+                ${renderReviewSheetPhotoGallery(review, true)}
 
                 <div class="profile-review-sheet-actions">
                     <button type="button" class="profile-review-sheet-secondary js-sheet-cancel-edit">Cancel</button>
@@ -618,6 +720,60 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function updateFavoriteNotificationPreference(favoriteId, notifyOnUpdates, checkbox) {
+        const originalChecked = !notifyOnUpdates;
+        checkbox.disabled = true;
+
+        try {
+            const response = await fetch(`${pageRoot.dataset.favoriteNotificationBase}${favoriteId}/notifications/`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    notify_on_updates: notifyOnUpdates,
+                }),
+            });
+
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                checkbox.checked = originalChecked;
+                showToast(body.error || 'Unable to update notification preference.', 'error');
+                return;
+            }
+
+            state.favorites = state.favorites.map(favorite => (
+                favorite.id === favoriteId
+                    ? { ...favorite, notify_on_updates: notifyOnUpdates }
+                    : favorite
+            ));
+        } catch (error) {
+            checkbox.checked = originalChecked;
+            showToast('Network error while updating notification preference.', 'error');
+        } finally {
+            checkbox.disabled = false;
+        }
+    }
+
+    function setupFavoriteActions() {
+        if (!favoritesList) return;
+
+        favoritesList.addEventListener('change', event => {
+            const toggle = event.target.closest('.js-favorite-notify-toggle');
+            if (!toggle) return;
+
+            const favoriteId = Number(toggle.dataset.favoriteId);
+            if (!Number.isFinite(favoriteId)) {
+                toggle.checked = !toggle.checked;
+                showToast('Invalid favorite selection.', 'error');
+                return;
+            }
+
+            updateFavoriteNotificationPreference(favoriteId, toggle.checked, toggle);
+        });
+    }
+
     function setupReviewActions() {
         if (!reviewsList) return;
 
@@ -651,15 +807,35 @@ document.addEventListener('DOMContentLoaded', () => {
             rating: Math.min(5, Math.max(1, parseInt(starPicker.dataset.rating || '5', 10) || 5)),
             review_text: textInput.value.trim(),
         };
+        const formData = new FormData();
+        formData.append('rating', String(payload.rating));
+        formData.append('review_text', payload.review_text);
+        getPendingReviewPhotos().forEach(photo => {
+            formData.append('photos', photo.file);
+        });
 
         try {
+            const photoIdsToDelete = [...state.pendingDeletePhotoIds];
+            if (photoIdsToDelete.length) {
+                const deleteResults = await Promise.all(
+                    photoIdsToDelete.map(photoId =>
+                        fetch(`${pageRoot.dataset.updateReviewBase}${state.activeReviewId}/photos/${photoId}/`, {
+                            method: 'DELETE',
+                            credentials: 'same-origin',
+                        }).then(r => ({ photoId, ok: r.ok })).catch(() => ({ photoId, ok: false }))
+                    )
+                );
+                const failed = deleteResults.filter(r => !r.ok);
+                if (failed.length) {
+                    showToast('Some photos could not be deleted.', 'error');
+                    return;
+                }
+            }
+
             const response = await fetch(`${pageRoot.dataset.updateReviewBase}${state.activeReviewId}/`, {
                 method: 'PATCH',
                 credentials: 'same-origin',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(payload),
+                body: formData,
             });
 
             const body = await response.json().catch(() => ({}));
@@ -672,6 +848,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 review.id === state.activeReviewId ? body : review
             ));
 
+            clearPendingReviewPhotos();
             renderReviews();
             state.reviewSheetMode = 'view';
             renderReviewSheet();
@@ -705,32 +882,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function deleteActiveReviewPhoto(photoId) {
-        if (!state.activeReviewId || !photoId) return;
-
-        try {
-            const response = await fetch(`${pageRoot.dataset.updateReviewBase}${state.activeReviewId}/photos/${photoId}/`, {
-                method: 'DELETE',
-                credentials: 'same-origin',
-            });
-
-            const body = await response.json().catch(() => ({}));
-            if (!response.ok) {
-                showToast(body.error || 'Unable to delete this photo.', 'error');
-                return;
-            }
-
-            state.reviews = state.reviews.map(review => (
-                review.id === state.activeReviewId ? body : review
-            ));
-
-            renderReviews();
-            renderReviewSheet();
-            showToast(body.message || 'Review photo deleted successfully.', 'success');
-        } catch (error) {
-            showToast('Network error while deleting the photo.', 'error');
-        }
-    }
 
     function openReviewSheet(reviewId) {
         if (!reviewSheet) return;
@@ -740,6 +891,7 @@ document.addEventListener('DOMContentLoaded', () => {
             reviewSheetHideTimer = null;
         }
 
+        clearPendingReviewPhotos();
         state.activeReviewId = reviewId;
         state.reviewSheetMode = 'view';
         reviewSheet.hidden = false;
@@ -756,6 +908,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function closeReviewSheet() {
         if (!reviewSheet) return;
 
+        clearPendingReviewPhotos();
         state.activeReviewId = null;
         state.reviewSheetMode = 'view';
         reviewSheet.classList.remove('is-open');
@@ -800,6 +953,66 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        reviewSheetBody.addEventListener('change', event => {
+            const input = event.target.closest('.js-sheet-photo-input');
+            if (!input) return;
+
+            const review = getActiveReview();
+            if (!review) return;
+
+            const existingCount = getReviewPhotos(review).length;
+            const currentPendingCount = getPendingReviewPhotos().length;
+            const availableSlots = Math.max(0, 5 - existingCount - currentPendingCount);
+            const selectedFiles = Array.from(input.files || []);
+
+            if (!selectedFiles.length) return;
+
+            if (availableSlots <= 0) {
+                showToast('You can upload up to 5 photos per review.', 'warn');
+                input.value = '';
+                return;
+            }
+
+            const nextPhotos = [];
+            let skippedForLimit = false;
+
+            selectedFiles.forEach(file => {
+                if (nextPhotos.length >= availableSlots) {
+                    skippedForLimit = true;
+                    return;
+                }
+
+                if (!(file.type || '').startsWith('image/')) {
+                    showToast(`"${file.name}" is not an image.`, 'warn');
+                    return;
+                }
+
+                if (file.size > 5 * 1024 * 1024) {
+                    showToast(`"${file.name}" exceeds the 5MB limit.`, 'warn');
+                    return;
+                }
+
+                nextPhotos.push({
+                    tempId: state.nextPendingReviewPhotoId++,
+                    file,
+                    previewUrl: URL.createObjectURL(file),
+                });
+            });
+
+            if (skippedForLimit) {
+                showToast('You can upload up to 5 photos per review.', 'warn');
+            }
+
+            state.pendingReviewPhotos = [
+                ...getPendingReviewPhotos(),
+                ...nextPhotos,
+            ];
+
+            input.value = '';
+            renderReviewSheet();
+            syncReviewSheetSaveState();
+        });
+
         reviewSheet.addEventListener('click', event => {
             const menuButton = event.target.closest('#review-sheet-menu-button');
             if (menuButton) {
@@ -842,7 +1055,37 @@ document.addEventListener('DOMContentLoaded', () => {
                 const photoId = Number(deletePhotoButton.dataset.photoId);
                 if (!Number.isFinite(photoId)) return;
 
-                deleteActiveReviewPhoto(photoId);
+                if (!state.pendingDeletePhotoIds.includes(photoId)) {
+                    state.pendingDeletePhotoIds.push(photoId);
+                }
+                renderReviewSheet();
+                syncReviewSheetSaveState();
+                return;
+            }
+
+            const deletePendingPhotoButton = event.target.closest('.js-sheet-delete-pending-photo');
+            if (deletePendingPhotoButton) {
+                const tempId = Number(deletePendingPhotoButton.dataset.tempId);
+                const nextPendingPhotos = [];
+
+                getPendingReviewPhotos().forEach(photo => {
+                    if (photo.tempId === tempId) {
+                        URL.revokeObjectURL(photo.previewUrl);
+                        return;
+                    }
+                    nextPendingPhotos.push(photo);
+                });
+
+                state.pendingReviewPhotos = nextPendingPhotos;
+                renderReviewSheet();
+                syncReviewSheetSaveState();
+                return;
+            }
+
+            const addPhotoButton = event.target.closest('.js-sheet-add-photo');
+            if (addPhotoButton) {
+                const input = reviewSheetBody.querySelector('.js-sheet-photo-input');
+                input?.click();
                 return;
             }
 
@@ -869,6 +1112,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function setReviewSheetMode(mode) {
+        if (state.reviewSheetMode === 'edit' && mode !== 'edit') {
+            clearPendingReviewPhotos();
+        }
         state.reviewSheetMode = mode;
         renderReviewSheet();
     }
@@ -898,6 +1144,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupLogout();
     setupTabs();
     setupReviewActions();
+    setupFavoriteActions();
     setupReviewSheet();
     setActiveTab('reviews');
 });

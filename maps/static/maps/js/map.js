@@ -96,7 +96,7 @@ function initializeGeolocation(shouldSetView = true) {
             clearTimeout(tid);
             locBtn.classList.remove('locating');
             dotEl.classList.add('denied');
-            statusEl.textContent = ({ 1: 'Permission denied', 2: 'Unavailable', 3: 'Timed out' })[err.code] || 'Unable to locate';
+            statusEl.textContent = ({ 1: 'no location found', 2: 'Unavailable', 3: 'Timed out' })[err.code] || 'Unable to locate';
             if (shouldSetView) {
                 map.setView([40.73, -73.99], 13);
             }
@@ -763,6 +763,10 @@ function renderOverviewTab(amenity) {
     let html = '';
 
     html += `<div class="dp-section"><span class="dp-status ${amenity.active ? 'active' : 'inactive'}">${amenity.active ? 'Active' : 'Inactive'}</span></div>`;
+    html += `<div class="dp-section" id="availability-section-${amenity.id}">
+    <div class="dp-field-label">Is it available right now?</div>
+    <div class="avail-loading" style="font-size:12px;color:var(--text-3);">Loading reports…</div>
+    </div>`;
 
     if (currentUser && currentUser.is_authenticated) {
         html += `<div class="dp-section">
@@ -822,6 +826,7 @@ function renderOverviewTab(amenity) {
     </div></div>`;
 
     document.getElementById('tab-overview').innerHTML = html;
+    loadAvailabilitySection(amenity);
 
     const loginLink = document.querySelector('#tab-overview .js-open-auth');
     if (loginLink) {
@@ -831,6 +836,89 @@ function renderOverviewTab(amenity) {
             showAuthModal();
         });
     }
+}
+
+function loadAvailabilitySection(amenity) {
+    fetch(`/api/amenities/${amenity.id}/availability/`)
+        .then(r => r.json())
+        .then(data => {
+            const section = document.getElementById(`availability-section-${amenity.id}`);
+            if (!section) return;
+
+            const total = data.total || 0;
+            const availPct = total > 0 ? Math.round((data.available / total) * 100) : null;
+            const userVote = data.user_vote;
+
+            let timeAgo = '';
+            if (data.last_reported) {
+                const mins = Math.round((Date.now() - new Date(data.last_reported)) / 60000);
+                timeAgo = mins < 2 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.floor(mins/60)}h ago`;
+            }
+
+            const barHtml = total > 0 ? `
+                <div style="margin:8px 0 6px;">
+                    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-3);margin-bottom:4px;">
+                        <span style="color:var(--green)">✓ Available · ${data.available}</span>
+                        <span style="color:var(--red)">✗ Unavailable · ${data.unavailable}</span>
+                    </div>
+                    <div style="height:6px;border-radius:3px;background:var(--red-lt);overflow:hidden;">
+                        <div style="height:100%;width:${availPct}%;background:var(--green);border-radius:3px;transition:width .3s ease;"></div>
+                    </div>
+                    <div style="font-size:11px;color:var(--text-3);margin-top:4px;">${total} report${total !== 1 ? 's' : ''} · last ${timeAgo} · resets every 3h</div>
+                </div>` : `<div style="font-size:12px;color:var(--text-3);margin:6px 0 8px;">No reports yet in the last 3 hours. Be the first!</div>`;
+
+            const availActive = userVote === 'available';
+            const unavailActive = userVote === 'unavailable';
+
+            section.innerHTML = `
+                <div class="dp-field-label">Is it available right now?</div>
+                ${barHtml}
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;">
+                    <button type="button" class="avail-btn" data-vote="true"
+                        style="padding:9px 0;border-radius:8px;border:1.5px solid ${availActive ? 'var(--green)' : 'var(--border)'};
+                               background:${availActive ? 'var(--green-lt)' : 'var(--surface2)'};
+                               color:${availActive ? 'var(--green)' : 'var(--text-2)'};
+                               font-size:13px;font-weight:600;font-family:var(--font);cursor:pointer;transition:all .15s ease;">
+                        ✓ Available${availActive ? ' ✓' : ''}
+                    </button>
+                    <button type="button" class="avail-btn" data-vote="false"
+                        style="padding:9px 0;border-radius:8px;border:1.5px solid ${unavailActive ? 'var(--red)' : 'var(--border)'};
+                               background:${unavailActive ? 'var(--red-lt)' : 'var(--surface2)'};
+                               color:${unavailActive ? 'var(--red)' : 'var(--text-2)'};
+                               font-size:13px;font-weight:600;font-family:var(--font);cursor:pointer;transition:all .15s ease;">
+                        ✗ Unavailable${unavailActive ? ' ✓' : ''}
+                    </button>
+                </div>`;
+
+            section.querySelectorAll('.avail-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const isAvailable = btn.dataset.vote === 'true';
+                    btn.disabled = true;
+                    btn.textContent = 'Saving…';
+                    fetch(`/api/amenities/${amenity.id}/availability/report/`, {
+                        method: 'POST',
+                        headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken'),
+                        },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({ is_available: isAvailable }),
+                    })
+                    .then(r => r.json())
+                    .then(d => {
+                        if (d.ok) {
+                            showToast(isAvailable ? 'Marked as available!' : 'Marked as unavailable.', isAvailable ? 'success' : 'warn');
+                            loadAvailabilitySection(amenity);
+                        }
+                    })
+                    .catch(() => showToast('Could not save report.', 'error'));
+                });
+            });
+        })
+        .catch(() => {
+            const section = document.getElementById(`availability-section-${amenity.id}`);
+            if (section) section.querySelector('.avail-loading').textContent = 'Could not load availability.';
+        });
 }
 
 function wireFavoriteToggle(amenity) {
@@ -2125,31 +2213,70 @@ function setupPWA() {
     const promptEl = document.getElementById('pwa-install-prompt');
     const installBtn = document.getElementById('pwa-install-btn');
     const closeBtn = document.getElementById('pwa-close-btn');
+    const releaseMeta = document.querySelector('meta[name="app-release"]');
+    const appRelease = releaseMeta ? (releaseMeta.getAttribute('content') || '').trim() : '';
+    const dismissKey = 'pwa_install_prompt_dismissed_release';
     let deferredPrompt;
+
+    const hidePrompt = () => {
+        if (promptEl) promptEl.style.display = 'none';
+    };
+
+    const getDismissedRelease = () => {
+        try {
+            return localStorage.getItem(dismissKey) || '';
+        } catch {
+            return '';
+        }
+    };
+
+    const markPromptDismissed = () => {
+        if (!appRelease) return;
+        try {
+            localStorage.setItem(dismissKey, appRelease);
+        } catch {
+            // Ignore storage failures and keep the prompt ephemeral.
+        }
+    };
+
+    const isIos = () => /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+    const isInStandaloneMode = () =>
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (('standalone' in window.navigator) && window.navigator.standalone);
+
+    const shouldShowInstallPrompt = () =>
+        Boolean(promptEl) &&
+        !isInStandaloneMode() &&
+        (!appRelease || getDismissedRelease() !== appRelease);
+
+    const showPrompt = () => {
+        if (shouldShowInstallPrompt()) {
+            promptEl.style.display = 'block';
+        }
+    };
 
     // Handle Android/Chrome automatic prompt
     window.addEventListener('beforeinstallprompt', (e) => {
         e.preventDefault();
         deferredPrompt = e;
-        if (promptEl) promptEl.style.display = 'block';
+        if (installBtn) installBtn.style.display = '';
+        showPrompt();
     });
 
     if (installBtn) {
         installBtn.addEventListener('click', async () => {
             if (!deferredPrompt) return;
-            promptEl.style.display = 'none';
-            deferredPrompt.prompt();
+            hidePrompt();
+            const activePrompt = deferredPrompt;
             deferredPrompt = null;
+            await activePrompt.prompt();
         });
     }
 
     // Handle iOS Manual Prompt
-    const isIos = () => /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
-    const isInStandaloneMode = () => ('standalone' in window.navigator) && (window.navigator.standalone);
-
-    if (isIos() && !isInStandaloneMode()) {
+    if (isIos() && shouldShowInstallPrompt()) {
         if (promptEl) {
-            promptEl.style.display = 'block';
+            showPrompt();
             if (installBtn) installBtn.style.display = 'none'; // Hide the button since iOS doesn't support the auto-trigger
             const textEl = promptEl.querySelector('.pwa-prompt-text span');
             if (textEl) textEl.innerHTML = `To install, tap <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin:0 2px"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg> and <strong>Add to Home Screen</strong>`;
@@ -2157,8 +2284,16 @@ function setupPWA() {
     }
 
     if (closeBtn) {
-        closeBtn.addEventListener('click', () => { if (promptEl) promptEl.style.display = 'none'; });
+        closeBtn.addEventListener('click', () => {
+            markPromptDismissed();
+            hidePrompt();
+        });
     }
+
+    window.addEventListener('appinstalled', () => {
+        deferredPrompt = null;
+        hidePrompt();
+    });
 }
 
 window.addEventListener('beforeunload', () => {

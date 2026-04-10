@@ -1,5 +1,7 @@
+from django.conf import settings
 from django.shortcuts import render
 from django.http import JsonResponse
+from django.http.multipartparser import MultiPartParser, MultiPartParserError
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import authenticate, login, logout
@@ -10,6 +12,9 @@ from django.contrib.gis.geos import Polygon, GEOSGeometry
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.db import connection
+from django.utils import timezone
+from datetime import timedelta
+import json
 from .models import (
     AmenityType,
     Amenity,
@@ -35,11 +40,12 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce
 from decimal import Decimal, InvalidOperation
-import json
 import os
 import io
 from PIL import Image, ImageOps
 from django.core.files.uploadedfile import InMemoryUploadedFile
+
+AVAILABILITY_WINDOW_HOURS = 3
 
 
 def normalize_longitude(lon):
@@ -107,7 +113,14 @@ def compress_image(uploaded_file, max_dimension=1024, quality=80):
 def map_view(request):
     """Render the main map view."""
     amenity_types = AmenityType.objects.all()
-    return render(request, "maps/map.html", {"amenity_types": amenity_types})
+    return render(
+        request,
+        "maps/map.html",
+        {
+            "amenity_types": amenity_types,
+            "app_release": settings.APP_RELEASE,
+        },
+    )
 
 
 @login_required(login_url="/?auth_required=1")
@@ -810,6 +823,7 @@ def serialize_profile_review(review):
         "amenity_prop_name": review.amenity.prop_name,
         "amenity_type": review.amenity.amenity_type.name,
         "rating": review.rating,
+        "vote_score": int(getattr(review, "vote_score", 0)),
         "review_text": review.review_text,
         "photo_id": review_photo_ids[0] if review_photo_ids else None,
         "photo_url": review_photo_urls[0] if review_photo_urls else None,
@@ -818,6 +832,22 @@ def serialize_profile_review(review):
         "created_at": review.created_at.isoformat(),
         "updated_at": review.updated_at.isoformat(),
     }
+
+
+def annotate_reviews_with_vote_score(queryset):
+    return queryset.annotate(
+        vote_score=Coalesce(Sum("votes__value"), Value(0), output_field=IntegerField())
+    )
+
+
+def parse_multipart_request(request):
+    parser = MultiPartParser(
+        request.META,
+        request,
+        request.upload_handlers,
+        encoding=request.encoding,
+    )
+    return parser.parse()
 
 
 def serialize_profile_favorite(favorite):
@@ -831,6 +861,7 @@ def serialize_profile_favorite(favorite):
         "address": amenity.address,
         "latitude": amenity.location.y,
         "longitude": amenity.location.x,
+        "notify_on_updates": favorite.notify_on_updates,
         "created_at": favorite.created_at.isoformat(),
     }
 
@@ -842,8 +873,8 @@ def profile_reviews_api(request):
     Return all reviews written by the current user for the profile page.
     """
     reviews = (
-        Review.objects.filter(user=request.user)
-        .select_related("amenity")
+        annotate_reviews_with_vote_score(Review.objects.filter(user=request.user))
+        .select_related("amenity", "amenity__amenity_type")
         .prefetch_related("amenity__photos")
         .order_by("-updated_at", "-created_at")
     )
@@ -877,6 +908,40 @@ def profile_favorites_api(request):
 
 @csrf_exempt
 @login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST"])
+def favorite_notification_preference_api(request, favorite_id):
+    try:
+        favorite = Favorite.objects.get(id=favorite_id, user=request.user)
+    except Favorite.DoesNotExist:
+        return JsonResponse({"error": "Favorite not found"}, status=404)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    notify_on_updates = data.get("notify_on_updates")
+    if not isinstance(notify_on_updates, bool):
+        return JsonResponse(
+            {"error": "notify_on_updates must be a boolean"},
+            status=400,
+        )
+
+    favorite.notify_on_updates = notify_on_updates
+    favorite.save(update_fields=["notify_on_updates"])
+
+    return JsonResponse(
+        {
+            "favorite_id": favorite.id,
+            "notify_on_updates": favorite.notify_on_updates,
+            "message": "Favorite notification preference updated",
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
 @require_http_methods(["POST", "DELETE"])
 def toggle_favorite_api(request, amenity_id):
     try:
@@ -893,6 +958,7 @@ def toggle_favorite_api(request, amenity_id):
             {
                 "amenity_id": amenity.id,
                 "is_favorited": True,
+                "notify_on_updates": favorite.notify_on_updates,
                 "message": "Added to favorites" if created else "Already favorited",
             },
             status=200,
@@ -1014,6 +1080,48 @@ def create_review_api(request):
             )
             review_photos.append(review_photo)
 
+        # Notify users who favorited this amenity and opted in for updates.
+        recipient_ids = list(
+            Favorite.objects.filter(
+                amenity=amenity,
+                notify_on_updates=True,
+            )
+            .exclude(user=user)
+            .values_list("user_id", flat=True)
+            .distinct()
+        )
+
+        if recipient_ids:
+            payload = json.dumps(
+                {
+                    "type": "amenity_review_added",
+                    "amenity_id": amenity.id,
+                    "amenity_name": amenity.name,
+                    "review": {
+                        "id": review.id,
+                        "rating": review.rating,
+                        "created_at": review.created_at.isoformat(),
+                    },
+                    "actor_email": user.email,
+                }
+            )
+
+            def send_notification():
+                # Tests and local SQLite do not support Postgres NOTIFY.
+                if connection.vendor != "postgresql":
+                    return
+
+                with connection.cursor() as cursor:
+                    for recipient_id in recipient_ids:
+                        wrapped = json.dumps(
+                            {"user_id": recipient_id, "payload": payload}
+                        )
+                        cursor.execute(
+                            "SELECT pg_notify('global_chat_events', %s)", [wrapped]
+                        )
+
+            transaction.on_commit(send_notification)
+
         response_data = serialize_amenity_review(
             review,
             photo_url=review_photos[0].photo.url if review_photos else None,
@@ -1120,7 +1228,7 @@ def review_detail_api(request, review_id):
         try:
             review = (
                 Review.objects.filter(id=review_id, user=request.user)
-                .select_related("amenity")
+                .select_related("amenity", "amenity__amenity_type")
                 .prefetch_related("amenity__photos")
                 .get()
             )
@@ -1134,9 +1242,23 @@ def review_detail_api(request, review_id):
                 status=200,
             )
 
-        data = json.loads(request.body)
-        rating = data.get("rating", review.rating)
-        review_text = data.get("review_text", review.review_text)
+        content_type = request.content_type or ""
+        if content_type.startswith("multipart/form-data"):
+            try:
+                data, files = parse_multipart_request(request)
+            except MultiPartParserError:
+                return JsonResponse({"error": "Invalid multipart payload"}, status=400)
+
+            rating = data.get("rating", review.rating)
+            review_text = data.get("review_text", review.review_text)
+            photo_files = files.getlist("photos")
+            if not photo_files and "photo" in files:
+                photo_files = files.getlist("photo")
+        else:
+            data = json.loads(request.body)
+            rating = data.get("rating", review.rating)
+            review_text = data.get("review_text", review.review_text)
+            photo_files = []
 
         try:
             rating = int(rating)
@@ -1153,13 +1275,54 @@ def review_detail_api(request, review_id):
                 status=400,
             )
 
+        current_photo_count = (
+            AmenityPhoto.objects.filter(
+                amenity_id=review.amenity_id,
+                uploaded_by=request.user,
+            )
+            .filter(Q(review=review) | Q(review__isnull=True))
+            .count()
+        )
+
+        if current_photo_count + len(photo_files) > 5:
+            return JsonResponse(
+                {"error": "You can upload up to 5 photos per review."},
+                status=400,
+            )
+
+        processed_photos = []
+        for photo_file in photo_files:
+            file_content_type = photo_file.content_type or ""
+            if not file_content_type.startswith("image/"):
+                return JsonResponse({"error": "Photo must be an image"}, status=400)
+
+            photo_file = compress_image(photo_file, max_dimension=1024)
+            if photo_file.size > 5 * 1024 * 1024:
+                return JsonResponse(
+                    {"error": "Photo must be 5MB or smaller"}, status=400
+                )
+            processed_photos.append(photo_file)
+
         review.rating = rating
         review.review_text = review_text
         review.save(update_fields=["rating", "review_text", "updated_at"])
 
+        is_first_amenity_photo = not AmenityPhoto.objects.filter(
+            amenity=review.amenity
+        ).exists()
+        for index, photo_file in enumerate(processed_photos):
+            AmenityPhoto.objects.create(
+                amenity=review.amenity,
+                review=review,
+                photo=photo_file,
+                uploaded_by=request.user,
+                is_primary=(is_first_amenity_photo and index == 0),
+                caption=f"Review photo by {request.user.email}",
+            )
+
         refreshed_review = (
-            Review.objects.filter(id=review.id)
-            .select_related("amenity")
+            annotate_reviews_with_vote_score(Review.objects.filter(id=review.id))
+            .select_related("amenity", "amenity__amenity_type")
             .prefetch_related("amenity__photos")
             .get()
         )
@@ -1185,7 +1348,7 @@ def review_photo_detail_api(request, review_id, photo_id):
         try:
             review = (
                 Review.objects.filter(id=review_id, user=request.user)
-                .select_related("amenity")
+                .select_related("amenity", "amenity__amenity_type")
                 .prefetch_related("amenity__photos")
                 .get()
             )
@@ -1208,8 +1371,8 @@ def review_photo_detail_api(request, review_id, photo_id):
         photo.delete()
 
         refreshed_review = (
-            Review.objects.filter(id=review.id)
-            .select_related("amenity")
+            annotate_reviews_with_vote_score(Review.objects.filter(id=review.id))
+            .select_related("amenity", "amenity__amenity_type")
             .prefetch_related("amenity__photos")
             .get()
         )
@@ -1839,3 +2002,103 @@ def get_amenity_reviewers_api(request):
         return JsonResponse({"error": "Invalid limit parameter"}, status=400)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+
+def availability_status_api(request, amenity_id):
+    """GET: return available/unavailable counts for the last 3 hours."""
+    from .models import AvailabilityReport, Amenity
+
+    try:
+        amenity = Amenity.objects.get(pk=amenity_id)
+    except Amenity.DoesNotExist:
+        from django.http import JsonResponse
+
+        return JsonResponse({"error": "Not found"}, status=404)
+
+    cutoff = timezone.now() - timedelta(hours=AVAILABILITY_WINDOW_HOURS)
+    reports = AvailabilityReport.objects.filter(
+        amenity=amenity, reported_at__gte=cutoff
+    )
+
+    available_count = reports.filter(is_available=True).count()
+    unavailable_count = reports.filter(is_available=False).count()
+    latest = reports.order_by("-reported_at").first()
+
+    if not request.session.session_key:
+        request.session.create()
+    session_key = request.session.session_key or ""
+
+    user_report = (
+        reports.filter(session_key=session_key).order_by("-reported_at").first()
+    )
+    user_vote = None
+    if user_report:
+        user_vote = "available" if user_report.is_available else "unavailable"
+
+    from django.http import JsonResponse
+
+    return JsonResponse(
+        {
+            "available": available_count,
+            "unavailable": unavailable_count,
+            "total": available_count + unavailable_count,
+            "last_reported": latest.reported_at.isoformat() if latest else None,
+            "user_vote": user_vote,
+            "window_hours": AVAILABILITY_WINDOW_HOURS,
+        }
+    )
+
+
+def report_availability_api(request, amenity_id):
+    """POST: submit or change an availability report."""
+    from django.http import JsonResponse
+    from .models import AvailabilityReport, Amenity
+
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    try:
+        amenity = Amenity.objects.get(pk=amenity_id)
+    except Amenity.DoesNotExist:
+        return JsonResponse({"error": "Not found"}, status=404)
+
+    try:
+        data = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    is_available = data.get("is_available")
+    if is_available is None:
+        return JsonResponse({"error": "is_available is required"}, status=400)
+
+    if not request.session.session_key:
+        request.session.create()
+    session_key = request.session.session_key or ""
+
+    cutoff = timezone.now() - timedelta(hours=AVAILABILITY_WINDOW_HOURS)
+
+    # Delete existing report from this session so they can change their vote
+    AvailabilityReport.objects.filter(
+        amenity=amenity,
+        session_key=session_key,
+        reported_at__gte=cutoff,
+    ).delete()
+
+    AvailabilityReport.objects.create(
+        amenity=amenity,
+        is_available=bool(is_available),
+        session_key=session_key,
+    )
+
+    reports = AvailabilityReport.objects.filter(
+        amenity=amenity, reported_at__gte=cutoff
+    )
+    return JsonResponse(
+        {
+            "ok": True,
+            "available": reports.filter(is_available=True).count(),
+            "unavailable": reports.filter(is_available=False).count(),
+            "total": reports.count(),
+            "user_vote": "available" if is_available else "unavailable",
+        }
+    )

@@ -20,6 +20,8 @@
         class="profile-page-shell settings-page-shell"
         data-profile-update-url="{% url 'maps:update_profile_api' %}"
         data-password-update-url="{% url 'maps:change_password_api' %}"
+        data-favorites-url="{% url 'maps:profile_favorites_api' %}"
+        data-favorite-notification-base="/api/favorites/"
         data-logout-url="{% url 'maps:logout_api' %}"
         data-has-usable-password="{{ has_usable_password|yesno:'true,false' }}"
     >
@@ -58,6 +60,21 @@
                                 </svg>
                             </span>
                             <span class="settings-nav-label">Account</span>
+                        </button>
+                        <button
+                            class="settings-nav-button"
+                            type="button"
+                            role="tab"
+                            aria-selected="false"
+                            data-tab="notifications"
+                        >
+                            <span class="settings-nav-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none">
+                                    <path d="M12 4.5a4 4 0 0 0-4 4v2.75c0 .9-.27 1.79-.77 2.53l-1.11 1.64c-.27.4.01.95.49.95h10.78c.48 0 .76-.55.49-.95l-1.11-1.64A4.5 4.5 0 0 1 16 11.25V8.5a4 4 0 0 0-4-4Z"></path>
+                                    <path d="M9.75 18.5a2.25 2.25 0 0 0 4.5 0"></path>
+                                </svg>
+                            </span>
+                            <span class="settings-nav-label">Notifications</span>
                         </button>
                     </div>
                 </aside>
@@ -202,6 +219,20 @@
                                 </button>
                             </div>
                         </form>
+                    </section>
+
+                    <section class="settings-panel" data-panel="notifications" aria-label="Notification settings">
+                        <div class="profile-edit-header">
+                            <h2 class="profile-edit-title settings-panel-title">Notifications</h2>
+                            <p class="settings-panel-copy">
+                                Choose which favorited amenities should notify you when new reviews are posted.
+                            </p>
+                        </div>
+
+                        <div id="settings-favorites-notify-state" class="settings-favorites-state">
+                            Loading your favorites...
+                        </div>
+                        <div id="settings-favorites-notify-list" class="settings-favorites-list" hidden></div>
                     </section>
                 </div>
             </section>

@@ -724,7 +724,7 @@ body.auth-page { overflow-y: auto !important; }
     }
     aside.detail-panel {
         transform: translateY(100%); opacity: 0; pointer-events: none;
-        transition: transform 0.28s cubic-bezier(.4,0,.2,1), opacity 0.18s ease, background 0.2s ease !important; z-index: 1500 !important; background: var(--surface) !important;
+        transition: transform 0.28s cubic-bezier(.4,0,.2,1), opacity 0.18s ease, background 0.2s ease !important; z-index: 2100 !important; background: var(--surface) !important;
     }
     aside.detail-panel.nearby-active {
         background: rgba(255, 255, 255, 0.3) !important;
@@ -851,6 +851,19 @@ body.viewport-switching aside.sidebar, body.viewport-switching aside.detail-pane
 .profile-review-text { font-size: 15px; color: var(--text-1); line-height: 1.65; margin-bottom: 14px; white-space: pre-wrap; }
 .profile-review-photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .profile-review-photo { width: 100%; height: 110px; object-fit: cover; border-radius: 12px; display: block; border: 1px solid var(--border); }
+.favorite-notify-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: var(--text-2);
+}
+.favorite-notify-checkbox {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent);
+}
 .profile-empty-title { font-size: 16px; font-weight: 600; color: var(--text-2); margin: 0; }
 .profile-empty-copy { font-size: 14px; color: var(--text-3); margin: 0 auto; line-height: 1.6; max-width: 56ch; }
 .profile-empty-link, .profile-edit-link, .profile-edit-cancel, .profile-edit-save, .profile-review-sheet-secondary, .profile-review-sheet-danger, .profile-review-sheet-primary {
@@ -960,10 +973,57 @@ body.profile-review-sheet-open { overflow: hidden; }
 .profile-review-sheet-copy-delete, .profile-review-sheet-copy-subtle { white-space: normal; }
 .profile-review-sheet-copy-delete { font-size: 16px; font-weight: 600; color: var(--text-1); }
 .profile-review-sheet-copy-subtle { font-size: 14px; color: var(--text-2); line-height: 1.5; }
-.profile-review-sheet-media-block { margin: 6px -16px -16px; }
-.profile-review-sheet-photo { width: calc(100% + 32px); max-width: none; border-radius: 0; border: none; display: block; }
-.profile-review-sheet-photo-list { display: grid; gap: 14px; }
-.profile-review-sheet-photo-item { display: grid; gap: 8px; }
+.profile-review-sheet-vote-summary {
+    display: inline-flex; align-items: center; min-height: 28px; padding: 0 10px;
+    border-radius: 999px; background: var(--surface2); border: 1px solid var(--border);
+    font-size: 12px; font-weight: 500; color: var(--text-2);
+}
+.profile-review-sheet-view-photo-list { display: grid; gap: 6px; margin-left: -16px; margin-right: -16px; margin-bottom: -16px; }
+.profile-review-sheet-view-photo {
+    width: 100%; height: auto; display: block; border-radius: 0;
+    background: var(--surface2);
+}
+.profile-review-sheet-gallery-wrap { display: grid; gap: 10px; }
+.profile-review-sheet-gallery {
+    display: flex; gap: 12px; overflow-x: auto; padding-bottom: 4px;
+    scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin; scrollbar-color: var(--border2) transparent;
+}
+.profile-review-sheet-gallery::-webkit-scrollbar { height: 6px; }
+.profile-review-sheet-gallery::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 999px; }
+.profile-review-sheet-gallery-card,
+.profile-review-sheet-add-photo {
+    position: relative; width: 88px; height: 88px; flex: 0 0 88px;
+    border-radius: 10px; overflow: hidden; scroll-snap-align: start;
+}
+.profile-review-sheet-gallery-card {
+    border: 1px solid var(--border); background: var(--surface2);
+}
+.profile-review-sheet-gallery-card.is-pending {
+    box-shadow: inset 0 0 0 1px rgba(26, 110, 245, 0.18);
+}
+.profile-review-sheet-gallery-photo {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.profile-review-sheet-photo-delete {
+    position: absolute; top: 4px; right: 4px; width: 20px; height: 20px;
+    border: none; border-radius: 999px; background: #fff; color: #666;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 16px; line-height: 1; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.18);
+}
+.profile-review-sheet-photo-delete:hover { background: #f0f0f0; color: #333; }
+.profile-review-sheet-photo-badge {
+    position: absolute; left: 6px; bottom: 6px; padding: 3px 7px; border-radius: 999px;
+    background: rgba(17, 17, 16, 0.78); color: #fff; font-size: 10px; font-weight: 600;
+}
+.profile-review-sheet-add-photo {
+    border: 1.5px dashed var(--border2); background: var(--surface); color: var(--text-2);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; cursor: pointer; font-family: var(--font);
+}
+.profile-review-sheet-add-photo:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-lt); }
+.profile-review-sheet-add-photo-plus { font-size: 32px; line-height: 1; }
+.profile-review-sheet-add-photo-label { display: none; }
 .profile-review-sheet-form { display: grid; gap: 16px; }
 .profile-review-sheet-textarea {
     width: 100%; border: 1px solid var(--border2); border-radius: 10px; font-family: var(--font); font-size: 15px;
@@ -976,10 +1036,6 @@ body.profile-review-sheet-open { overflow: hidden; }
     display: inline-flex; align-items: center; justify-content: center; border: none; background: transparent; appearance: none; -webkit-appearance: none;
 }
 .profile-review-sheet .star-btn.lit, .profile-review-sheet .star-btn:hover { transform: none; }
-.profile-review-sheet-photo-thumb {
-    width: 104px; height: 104px; object-fit: cover; border-radius: 12px;
-    border: 1px solid var(--border); background: var(--surface2); display: block;
-}
 .profile-review-sheet-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; margin-top: 10px; }
 .profile-review-sheet-secondary, .profile-review-sheet-danger, .profile-review-sheet-primary { padding: 10px 14px; }
 .profile-review-sheet-secondary { background: var(--surface2); color: var(--text-1); }
@@ -1002,8 +1058,7 @@ body.profile-review-sheet-open { overflow: hidden; }
         width: 36px; height: 4px; background: var(--border2); border-radius: 4px;
     }
     .profile-review-sheet-section { padding-left: 18px; padding-right: 18px; }
-    .profile-review-sheet-media-block { margin-left: -18px; margin-right: -18px; margin-bottom: -18px; }
-    .profile-review-sheet-photo { width: calc(100% + 36px); }
+    .profile-review-sheet-view-photo-list { margin-left: -18px; margin-right: -18px; margin-bottom: -18px; }
     .profile-review-sheet-actions { justify-content: stretch; }
     .profile-review-sheet-secondary, .profile-review-sheet-primary, .profile-review-sheet-danger { width: 100%; }
     .profile-review-photo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1068,12 +1123,47 @@ body.profile-review-sheet-open { overflow: hidden; }
 .settings-panel-title { font-size: 28px; margin-bottom: 6px; }
 .settings-panel-copy { font-size: 14px; line-height: 1.6; color: var(--text-2); margin: 0; }
 .settings-form-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.settings-favorites-state { color: var(--text-2); font-size: 14px; line-height: 1.5; }
+.settings-favorites-list { display: grid; gap: 10px; }
+.settings-favorite-card {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: #fff;
+}
+.settings-favorite-copy { min-width: 0; }
+.settings-favorite-title { font-size: 14px; font-weight: 700; color: var(--text-1); }
+.settings-favorite-meta {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.settings-favorite-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-2);
+    flex-shrink: 0;
+}
+.settings-favorite-checkbox {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent);
+}
 
 /* ── SETTINGS PAGE: MOBILE ── */
 @media (max-width: 768px) {
     .settings-shell { grid-template-columns: 1fr; }
     .settings-sidebar { border-right: none; border-bottom: 1px solid #ececec; padding: 20px 18px; }
-    .settings-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .settings-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .settings-nav-button { text-align: center; justify-content: center; }
     .settings-content { padding: 20px 18px; }
     .settings-panel.is-active { width: 100%; }

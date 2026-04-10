@@ -2,6 +2,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const root = document.getElementById('settings-root');
     if (!root) return;
     let hasUsablePassword = root.dataset.hasUsablePassword === 'true';
+    let notificationFavoritesLoaded = false;
+    let notificationFavorites = [];
 
     const dropdown = document.getElementById('user-menu-dropdown');
     const dropdownToggle = document.getElementById('avatar-button');
@@ -26,6 +28,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const confirmPasswordInput = document.getElementById('settings-confirm-password-input');
     const accountMessage = document.getElementById('settings-account-message');
     const accountSaveButton = document.getElementById('settings-account-save');
+
+    const favoritesNotifyState = document.getElementById('settings-favorites-notify-state');
+    const favoritesNotifyList = document.getElementById('settings-favorites-notify-list');
 
     const topnavAvatar = document.getElementById('avatar-image');
     const topnavUserEmail = document.getElementById('user-menu-email');
@@ -89,6 +94,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
+    }
+
     function setActiveTab(tabName, updateHistory = true) {
         let hasMatch = false;
 
@@ -105,11 +119,137 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!hasMatch) return;
 
+        if (tabName === 'notifications' && !notificationFavoritesLoaded) {
+            fetchNotificationFavorites();
+        }
+
         if (updateHistory) {
             const url = new URL(window.location.href);
             url.searchParams.set('tab', tabName);
             window.history.replaceState({}, '', url);
         }
+    }
+
+    function renderNotificationFavorites() {
+        if (!favoritesNotifyState || !favoritesNotifyList) return;
+
+        if (!notificationFavorites.length) {
+            favoritesNotifyState.hidden = false;
+            favoritesNotifyState.textContent = 'No favorites yet. Add favorites from the map to manage notification preferences.';
+            favoritesNotifyList.hidden = true;
+            favoritesNotifyList.innerHTML = '';
+            return;
+        }
+
+        favoritesNotifyState.hidden = true;
+        favoritesNotifyList.hidden = false;
+        favoritesNotifyList.innerHTML = notificationFavorites.map(favorite => {
+            const amenityDisplayName = favorite.amenity_prop_name || favorite.amenity_name || 'Amenity';
+            const amenityType = favorite.amenity_type || 'Amenity';
+            const address = String(favorite.address || '').trim();
+            const isChecked = favorite.notify_on_updates !== false;
+
+            return `
+                <article class="settings-favorite-card">
+                    <div class="settings-favorite-copy">
+                        <div class="settings-favorite-title">${escapeHtml(amenityDisplayName)}</div>
+                        <div class="settings-favorite-meta">${escapeHtml(amenityType)}${address ? ` • ${escapeHtml(address)}` : ''}</div>
+                    </div>
+                    <label class="settings-favorite-toggle">
+                        <input
+                            class="settings-favorite-checkbox js-settings-favorite-toggle"
+                            type="checkbox"
+                            data-favorite-id="${favorite.id}"
+                            ${isChecked ? 'checked' : ''}
+                        >
+                        <span>Notify</span>
+                    </label>
+                </article>
+            `;
+        }).join('');
+    }
+
+    async function fetchNotificationFavorites() {
+        if (!favoritesNotifyState || !favoritesNotifyList) return;
+
+        favoritesNotifyState.hidden = false;
+        favoritesNotifyState.textContent = 'Loading your favorites...';
+        favoritesNotifyList.hidden = true;
+        favoritesNotifyList.innerHTML = '';
+
+        try {
+            const response = await fetch(root.dataset.favoritesUrl, {
+                method: 'GET',
+                credentials: 'same-origin',
+            });
+
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                favoritesNotifyState.textContent = body.error || 'Unable to load favorites.';
+                return;
+            }
+
+            notificationFavorites = Array.isArray(body.favorites) ? body.favorites : [];
+            notificationFavoritesLoaded = true;
+            renderNotificationFavorites();
+        } catch (error) {
+            favoritesNotifyState.textContent = 'Network error while loading favorites.';
+        }
+    }
+
+    async function updateFavoriteNotificationPreference(favoriteId, notifyOnUpdates, checkbox) {
+        const originalChecked = !notifyOnUpdates;
+        checkbox.disabled = true;
+
+        try {
+            const response = await fetch(`${root.dataset.favoriteNotificationBase}${favoriteId}/notifications/`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    notify_on_updates: notifyOnUpdates,
+                }),
+            });
+
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                checkbox.checked = originalChecked;
+                showToast(body.error || 'Unable to update notification preference.', 'error');
+                return;
+            }
+
+            notificationFavorites = notificationFavorites.map(favorite => (
+                favorite.id === favoriteId
+                    ? { ...favorite, notify_on_updates: notifyOnUpdates }
+                    : favorite
+            ));
+            showToast('Notification preference updated.', 'success');
+        } catch (error) {
+            checkbox.checked = originalChecked;
+            showToast('Network error while updating preference.', 'error');
+        } finally {
+            checkbox.disabled = false;
+        }
+    }
+
+    function setupNotificationFavorites() {
+        if (!favoritesNotifyList) return;
+
+        favoritesNotifyList.addEventListener('change', event => {
+            const toggle = event.target.closest('.js-settings-favorite-toggle');
+            if (!toggle) return;
+
+            const favoriteId = Number(toggle.dataset.favoriteId);
+            if (!Number.isFinite(favoriteId)) {
+                toggle.checked = !toggle.checked;
+                showToast('Invalid favorite selection.', 'error');
+                return;
+            }
+
+            updateFavoriteNotificationPreference(favoriteId, toggle.checked, toggle);
+        });
     }
 
     function setupTabs() {
@@ -425,4 +565,5 @@ document.addEventListener('DOMContentLoaded', () => {
     setupAvatarPreview();
     setupProfileForm();
     setupAccountForm();
+    setupNotificationFavorites();
 });

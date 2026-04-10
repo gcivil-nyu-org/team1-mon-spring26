@@ -1,11 +1,14 @@
 import json
 from django.test import TestCase, Client, override_settings
+from django.test.client import BOUNDARY, MULTIPART_CONTENT, encode_multipart
 from django.urls import reverse
 from django.contrib.gis.geos import Point
 from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils.html import escape
 from unittest.mock import patch
+from django.utils import timezone
+from datetime import timedelta
 
 from maps.models import (
     AmenityType,
@@ -18,6 +21,7 @@ from maps.models import (
     Chat,
     ChatParticipant,
     Message,
+    AvailabilityReport,
 )
 from maps.views import normalize_longitude, get_cluster_grid_size
 
@@ -134,6 +138,13 @@ class ViewsCoverageTest(TestCase):
         self.assertTemplateUsed(response, "maps/map.html")
         self.assertIn("amenity_types", response.context)
         self.assertContains(response, reverse("google_login"))
+
+    @override_settings(APP_RELEASE="test-release")
+    def test_map_view_includes_app_release(self):
+        response = self.client.get(reverse("maps:map"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["app_release"], "test-release")
+        self.assertContains(response, 'meta name="app-release" content="test-release"')
 
     def test_amenity_types_api(self):
         response = self.client.get(reverse("maps:amenity_types_api"))
@@ -380,6 +391,36 @@ class ViewsCoverageTest(TestCase):
         self.assertIn("favorites", data)
         self.assertEqual(len(data["favorites"]), 1)
         self.assertEqual(data["favorites"][0]["amenity_id"], self.amenity_active.id)
+        self.assertTrue(data["favorites"][0]["notify_on_updates"])
+
+    def test_favorite_notification_preference_api_updates_flag(self):
+        favorite = Favorite.objects.create(
+            user=self.test_user, amenity=self.amenity_active
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:favorite_notification_preference_api", args=[favorite.id]),
+            data=json.dumps({"notify_on_updates": False}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        favorite.refresh_from_db()
+        self.assertFalse(favorite.notify_on_updates)
+
+    def test_favorite_notification_preference_api_rejects_non_boolean(self):
+        favorite = Favorite.objects.create(
+            user=self.test_user, amenity=self.amenity_active
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:favorite_notification_preference_api", args=[favorite.id]),
+            data=json.dumps({"notify_on_updates": "yes"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_toggle_favorite_api_add_and_remove(self):
         self.client.force_login(self.test_user)
@@ -444,6 +485,7 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.context["profile_user"], self.test_user)
         self.assertContains(response, "Profile")
         self.assertContains(response, "Account")
+        self.assertContains(response, "Notifications")
 
     def test_update_profile_api_updates_profile(self):
         self.client.force_login(self.test_user)
@@ -638,6 +680,22 @@ class ViewsCoverageTest(TestCase):
             reviews[0]["photo_ids"], [first_photo.id, second_photo.id]
         )
         self.assertEqual(len(reviews[0]["photo_urls"]), 2)
+        self.assertEqual(reviews[0]["vote_score"], 0)
+
+    def test_profile_reviews_api_returns_vote_score(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=5,
+            review_text="My review",
+        )
+        ReviewVote.objects.create(review=review, user=self.test_user2, value=1)
+        ReviewVote.objects.create(review=review, user=self.test_user3, value=1)
+
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:profile_reviews_api"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["reviews"][0]["vote_score"], 2)
 
     def test_review_detail_api_patch_updates_own_review(self):
         review = Review.objects.create(
@@ -659,6 +717,49 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(review.rating, 5)
         self.assertEqual(review.review_text, "Updated")
         self.assertEqual(response.json()["message"], "Review updated successfully")
+
+    def test_review_detail_api_patch_accepts_multipart_and_adds_photos(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=4,
+            review_text="Original",
+        )
+        photo1 = SimpleUploadedFile(
+            "review-photo-1.jpg", b"file_content_1", content_type="image/jpeg"
+        )
+        photo2 = SimpleUploadedFile(
+            "review-photo-2.jpg", b"file_content_2", content_type="image/jpeg"
+        )
+        payload = encode_multipart(
+            BOUNDARY,
+            {
+                "rating": "5",
+                "review_text": "Updated with photos",
+                "photos": [photo1, photo2],
+            },
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.generic(
+            "PATCH",
+            reverse("maps:review_detail_api", args=[review.id]),
+            payload,
+            content_type=MULTIPART_CONTENT,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        review.refresh_from_db()
+        self.assertEqual(review.rating, 5)
+        self.assertEqual(review.review_text, "Updated with photos")
+        self.assertEqual(
+            AmenityPhoto.objects.filter(
+                review=review, uploaded_by=self.test_user
+            ).count(),
+            2,
+        )
+        self.assertEqual(len(response.json()["photo_urls"]), 2)
+        self.assertEqual(response.json()["vote_score"], 0)
 
     def test_review_detail_api_delete_removes_own_review(self):
         review = Review.objects.create(
@@ -1730,3 +1831,67 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("total_reviews", data)
+
+    def test_get_availability_status_empty(self):
+        response = self.client.get(
+            f"/api/amenities/{self.amenity_active.id}/availability/"
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["available"], 0)
+        self.assertEqual(data["unavailable"], 0)
+        self.assertEqual(data["total"], 0)
+        self.assertIsNone(data["user_vote"])
+
+    def test_post_availability_report(self):
+        response = self.client.post(
+            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            data='{"is_available": true}',
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["available"], 1)
+        self.assertEqual(data["unavailable"], 0)
+        self.assertEqual(data["user_vote"], "available")
+        self.assertEqual(AvailabilityReport.objects.count(), 1)
+
+    def test_change_availability_vote(self):
+        self.client.post(
+            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            data='{"is_available": true}',
+            content_type="application/json",
+        )
+        self.client.post(
+            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            data='{"is_available": false}',
+            content_type="application/json",
+        )
+        self.assertEqual(AvailabilityReport.objects.count(), 1)
+        self.assertFalse(AvailabilityReport.objects.first().is_available)
+
+    def test_expired_availability_reports_excluded(self):
+        report = AvailabilityReport.objects.create(
+            amenity=self.amenity_active,
+            is_available=True,
+            session_key="old-session",
+        )
+        old_time = timezone.now() - timedelta(hours=4)
+        AvailabilityReport.objects.filter(pk=report.pk).update(reported_at=old_time)
+        response = self.client.get(
+            f"/api/amenities/{self.amenity_active.id}/availability/"
+        )
+        self.assertEqual(response.json()["total"], 0)
+
+    def test_availability_invalid_amenity_returns_404(self):
+        response = self.client.get("/api/amenities/99999/availability/")
+        self.assertEqual(response.status_code, 404)
+
+    def test_availability_missing_is_available_field(self):
+        response = self.client.post(
+            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            data="{}",
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
