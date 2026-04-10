@@ -181,16 +181,8 @@ const ChatsApp = (() => {
         chatsAbortController = new AbortController();
 
         try {
-            const response = await fetch(`/api/chats/`, { 
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                credentials: 'same-origin',
-                cache: 'no-store',
-                signal: chatsAbortController.signal 
-            });
+             // Append cache-buster so browsers don't silently return stale history
+            const response = await fetch(`/api/chats/?t=${Date.now()}`, { signal: chatsAbortController.signal });
             const data = await response.json();
 
             if (!response.ok) {
@@ -438,16 +430,8 @@ const ChatsApp = (() => {
         messagesAbortController = new AbortController();
 
         try {
-            const response = await fetch(`/api/chats/messages/?chat_id=${chatId}&page=${page}`, { 
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                credentials: 'same-origin',
-                cache: 'no-store',
-                signal: messagesAbortController.signal 
-            });
+            // Append cache-buster so browsers don't silently return stale history
+            const response = await fetch(`/api/chats/messages/?chat_id=${chatId}&page=${page}&t=${Date.now()}`, { signal: messagesAbortController.signal });
             const data = await response.json();
 
             if (!response.ok) {
