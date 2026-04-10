@@ -182,7 +182,15 @@ const ChatsApp = (() => {
 
         try {
             // Append cache-buster so browsers don't silently return stale history
-            const response = await fetch(`/api/chats/?t=${Date.now()}`, { signal: chatsAbortController.signal });
+            const response = await fetch(`/api/chats/?t=${Date.now()}`, { 
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                credentials: 'same-origin',
+                signal: chatsAbortController.signal 
+            });
             const data = await response.json();
 
             if (!response.ok) {
@@ -431,7 +439,15 @@ const ChatsApp = (() => {
 
         try {
             // Append cache-buster so browsers don't silently return stale history
-            const response = await fetch(`/api/chats/messages/?chat_id=${chatId}&page=${page}&t=${Date.now()}`, { signal: messagesAbortController.signal });
+            const response = await fetch(`/api/chats/messages/?chat_id=${chatId}&page=${page}&t=${Date.now()}`, { 
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                credentials: 'same-origin',
+                signal: messagesAbortController.signal 
+            });
             const data = await response.json();
 
             if (!response.ok) {
