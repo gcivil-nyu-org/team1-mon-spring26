@@ -296,4 +296,10 @@ resource "aws_autoscaling_group" "app_asg" {
     value               = var.environment
     propagate_at_launch = true
   }
+
+  tag {
+    key                 = "Name"
+    value               = "nycnow-${var.environment}"
+    propagate_at_launch = true
+  }
 }
