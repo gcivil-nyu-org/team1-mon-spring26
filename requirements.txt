@@ -13,3 +13,4 @@ psycopg[binary]
 psycopg-pool
 starlette
 uvicorn[standard]
+gunicorn

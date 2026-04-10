@@ -1471,8 +1471,9 @@ def get_user_chats_api(request):
 
         chats_data = []
         for chat in user_chats:
-            # Get the last message
-            last_message = chat.messages.last()
+            # Get the last message (using prefetched list to avoid N+1 queries)
+            messages_list = list(chat.messages.all())
+            last_message = messages_list[-1] if messages_list else None
 
             avatar_url = None
             if chat.chat_type == "direct":
@@ -1499,16 +1500,26 @@ def get_user_chats_api(request):
                     "avatar_url": avatar_url,
                     "amenity_id": chat.amenity_id,
                     "amenity_name": chat.amenity.name if chat.amenity else None,
-                    "created_by_email": chat.created_by.email,
+                    "created_by_email": (
+                        chat.created_by.email if chat.created_by else None
+                    ),
                     "participant_count": chat.participants.count(),
                     "last_message": (
-                        last_message.content[:100] if last_message else None
+                        last_message.content[:100]
+                        if last_message and last_message.content
+                        else None
                     ),
                     "last_message_sender": (
                         last_message.sender.email if last_message else None
                     ),
-                    "last_message_at": chat.last_message_at.isoformat(),
-                    "created_at": chat.created_at.isoformat(),
+                    "last_message_at": (
+                        chat.last_message_at.isoformat()
+                        if chat.last_message_at
+                        else (chat.created_at.isoformat() if chat.created_at else None)
+                    ),
+                    "created_at": (
+                        chat.created_at.isoformat() if chat.created_at else None
+                    ),
                 }
             )
 
@@ -1560,10 +1571,10 @@ def get_chat_messages_api(request):
         messages_data = [
             {
                 "id": m.id,
-                "sender_id": m.sender.id,
-                "sender_email": m.sender.email,
+                "sender_id": m.sender.id if m.sender else None,
+                "sender_email": m.sender.email if m.sender else None,
                 "content": m.content,
-                "created_at": m.created_at.isoformat(),
+                "created_at": m.created_at.isoformat() if m.created_at else None,
             }
             for m in paginated_messages
         ]
@@ -1865,9 +1876,9 @@ def get_chat_participants_api(request):
 
         participants_data = [
             {
-                "user_id": p.user.id,
-                "email": p.user.email,
-                "joined_at": p.joined_at.isoformat(),
+                "user_id": p.user.id if p.user else None,
+                "email": p.user.email if p.user else None,
+                "joined_at": p.joined_at.isoformat() if p.joined_at else None,
             }
             for p in chat.participants.select_related("user")
         ]
