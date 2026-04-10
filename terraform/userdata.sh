@@ -6,11 +6,14 @@ exec > >(tee /var/log/userdata-execution.log) 2>&1
 
 # 1. System Updates & Dependencies
 dnf update -y
-dnf install -y git python3.11 python3.11-pip nginx
+dnf install -y git python3.14 python3.14-pip nginx
 
 # Install PgBouncer using the repository previously used in Elastic Beanstalk
 dnf install -y spal-release
 dnf install -y pgbouncer
+
+# Install GDAL & GEOS for geospatial support (required by PostGIS and Django's GIS features)
+dnf install -y gdal310 geos
 
 # 2. Install Cloudflare WARP (Provides outbound IPv4 access for GitHub and AWS SSM)
 curl -fsSl https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo | tee /etc/yum.repos.d/cloudflare-warp.repo
