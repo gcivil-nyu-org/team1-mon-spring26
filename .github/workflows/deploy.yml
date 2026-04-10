@@ -8,6 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    if: github.repository_owner == 'ajslezak'
     environment: feature
     # 1. Required permissions for OIDC to work
     permissions:
