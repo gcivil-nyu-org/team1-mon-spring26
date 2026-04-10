@@ -143,6 +143,10 @@ chmod 400 /etc/pki/tls/certs/server.key
 mkdir -p /var/cache/osm_tile_cache
 chown -R nginx:nginx /var/cache/osm_tile_cache
 
+# Allow Nginx to connect to local upstream ports (8000/8001) through SELinux
+setsebool -P httpd_can_network_connect 1 || true
+setsebool -P httpd_read_user_content 1 || true
+
 systemctl daemon-reload
 systemctl enable django-wsgi django-asgi nginx pgbouncer
 
