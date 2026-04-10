@@ -31,6 +31,11 @@ variable "environment" {
   default     = "feature"
 }
 
+variable "rds_security_group_id" {
+  description = "The Security Group ID of the existing RDS instance"
+  type        = string
+}
+
 # --- 1. IAM Role for Systems Manager (SSM) ---
 # Allows GitHub Actions to SSH/Execute commands securely without a public IP
 resource "aws_iam_role" "ec2_role" {
@@ -186,6 +191,16 @@ resource "aws_security_group" "app_sg" {
     cidr_blocks      = ["0.0.0.0/0"]
     ipv6_cidr_blocks = ["::/0"]
   }
+}
+
+# --- 3.5 Authorize EC2 to access RDS ---
+resource "aws_security_group_rule" "rds_ingress" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  security_group_id        = var.rds_security_group_id
+  source_security_group_id = aws_security_group.app_sg.id
 }
 
 # --- 4. Amazon Linux 2023 AMI ---
