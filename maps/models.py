@@ -23,14 +23,11 @@ class CustomUser(AbstractUser):
     @property
     def avatar_url(self):
         if self.avatar:
-            try:
-                if hasattr(self.avatar, "storage") and not self.avatar.storage.exists(
-                    self.avatar.name
-                ):
-                    return static("maps/default-avatar.svg")
-                return self.avatar.url
-            except Exception:
+            if hasattr(self.avatar, "storage") and not self.avatar.storage.exists(
+                self.avatar.name
+            ):
                 return static("maps/default-avatar.svg")
+            return self.avatar.url
         return static("maps/default-avatar.svg")
 
     def __str__(self):

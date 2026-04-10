@@ -1503,16 +1503,14 @@ def get_user_chats_api(request):
                     "created_by_email": (
                         chat.created_by.email if chat.created_by else None
                     ),
-                    "participant_count": len(chat.participants.all()),
+                    "participant_count": chat.participants.count(),
                     "last_message": (
                         last_message.content[:100]
                         if last_message and last_message.content
                         else None
                     ),
                     "last_message_sender": (
-                        last_message.sender.email
-                        if last_message and last_message.sender
-                        else None
+                        last_message.sender.email if last_message else None
                     ),
                     "last_message_at": (
                         chat.last_message_at.isoformat()
