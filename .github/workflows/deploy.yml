@@ -22,9 +22,7 @@ jobs:
           # 2. Use the ARN of the GitHub Actions role from your Terraform
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/NycNow-GitHub-Actions-SSM-Role
           aws-region: us-east-2
-          disable-retry: true
-          polling-interval-seconds: 10  # Default is 5
-          # timeout-seconds: 1200  # Default is 1200
+          disable-retry: false
 
       - name: Deploy via AWS Systems Manager (SSM)
         run: |
@@ -54,4 +52,4 @@ jobs:
           echo "SSM Command Sent: $COMMAND_ID"
           
           # Optional: Wait for the command to finish so GitHub shows success/fail accurately
-          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id $(aws ec2 describe-instances --filters "Name=tag:App,Values=NycNow" "Name=tag:Environment,Values=${{ vars.APP_ENV || 'feature' }}" "Name=instance-state-name,Values=running" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          # aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id $(aws ec2 describe-instances --filters "Name=tag:App,Values=NycNow" "Name=tag:Environment,Values=${{ vars.APP_ENV || 'feature' }}" "Name=instance-state-name,Values=running" --query "Reservations[0].Instances[0].InstanceId" --output text)
