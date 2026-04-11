@@ -32,6 +32,7 @@ jobs:
           APP_ENV: feature
           DJANGO_DEBUG: 'True'
           AWS_S3_BUCKET_NAME: elasticbeanstalk-us-east-2-793314585930
+          AWS_S3_REGION_NAME: us-east-2
 
       - name: Run Tests
         run: coverage run -m pytest
