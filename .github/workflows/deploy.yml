@@ -8,20 +8,20 @@ on:
     types: [asg_instance_refresh]
 jobs:
   lint:
-  runs-on: ubuntu-latest
-  if: github.event_name != 'repository_dispatch'
-  steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.14'
-    - name: Install Linters
-      run: pip install black flake8
-    - name: Run Black
-      run: black --check --diff .
-    - name: Run Flake8
-      run: flake8 .
+    runs-on: ubuntu-latest
+    if: github.event_name != 'repository_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install Linters
+        run: pip install black flake8
+      - name: Run Black
+        run: black --check --diff .
+      - name: Run Flake8
+        run: flake8 .
   tests:
     runs-on: ubuntu-latest
     # Skip tests if the trigger is the ASG Lambda (repository_dispatch)
