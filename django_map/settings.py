@@ -36,6 +36,8 @@ ALLOWED_HOSTS = [
     ".amenity.help",
 ]
 
+# Trust the X-Forwarded-Proto header from Nginx so Django knows it's HTTPS
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # Application definition
 
