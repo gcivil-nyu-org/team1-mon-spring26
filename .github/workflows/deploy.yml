@@ -28,7 +28,7 @@ jobs:
         run: python manage.py migrate --noinput
         env:
           # Use a dummy DB or sqlite for CI tests to avoid "Connection Refused"
-          DATABASE_URL: sqlite:///:memory:
+          DATABASE_URL: 'sqlite:///:memory:'
           DJANGO_DEBUG: 'True'
 
       - name: Run Tests
