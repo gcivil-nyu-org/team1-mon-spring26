@@ -313,7 +313,7 @@ else:
         "django.core.mail.backends.smtp.EmailBackend",
     )
 
-DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "noreply@example.com")
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "contact@amenity.help")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
