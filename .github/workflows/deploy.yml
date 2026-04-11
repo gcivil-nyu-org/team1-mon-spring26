@@ -22,14 +22,7 @@ jobs:
         run: black --check --diff .
       - name: Run Flake8
         run: flake8 .
-      - name: Show Coverage Report
-        run: |
-          coverage report  # This prints the table in your Travis log
-          coverage xml     # This creates the file for Codecov
-      - name: Upload to Coveralls
-        uses: coverallsapp/github-action@v2
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+      
   tests:
     needs: lint
     runs-on: ubuntu-latest
@@ -80,8 +73,15 @@ jobs:
           AWS_S3_BUCKET_NAME: elasticbeanstalk-us-east-2-793314585930
           AWS_S3_REGION_NAME: us-east-2
 
-      #- name: Run Tests
-      #  run: coverage run -m pytest
+      - name: Show Coverage Report
+        run: |
+          coverage report  # This prints the table in your Travis log
+          coverage xml     # This creates the file for Codecov
+
+      - name: Upload to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
   deploy:
     needs: tests
