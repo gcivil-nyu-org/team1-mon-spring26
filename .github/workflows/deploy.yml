@@ -31,6 +31,7 @@ jobs:
           DATABASE_URL: 'sqlite:///:memory:'
           APP_ENV: feature
           DJANGO_DEBUG: 'True'
+          AWS_S3_BUCKET_NAME: elasticbeanstalk-us-east-2-793314585930
 
       - name: Run Tests
         run: coverage run -m pytest
