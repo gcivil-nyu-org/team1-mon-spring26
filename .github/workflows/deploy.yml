@@ -22,7 +22,11 @@ jobs:
         run: black --check --diff .
       - name: Run Flake8
         run: flake8 .
-      - name: Coveralls
+      - name: Show Coverage Report
+        run: |
+          coverage report  # This prints the table in your Travis log
+          coverage xml     # This creates the file for Codecov
+      - name: Upload to Coveralls
         uses: coverallsapp/github-action@v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
