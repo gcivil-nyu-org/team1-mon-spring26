@@ -158,6 +158,7 @@ resource "aws_iam_role_policy" "github_ssm_policy" {
           "ssm:SendCommand",
           "ssm:GetCommandInvocation",
           "ssm:ListCommandInvocations",
+          "ssm:DescribeInstanceInformation",
           "ec2:DescribeInstances"
         ]
         Effect   = "Allow"
