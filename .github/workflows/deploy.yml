@@ -121,9 +121,9 @@ jobs:
             echo "Waiting for instance to register tags... ($i/12)"
             sleep 15
           done
-          # 2. Capture the Command ID to track success/failure
+          # 2. Use the ID we just found directly instead of tags
           COMMAND_ID=$(aws ssm send-command \
-            --targets "Key=tag:App,Values=NycNow" "Key=tag:Environment,Values=${{ vars.APP_ENV || 'feature' }}" \
+            --instance-ids "$INSTANCE_EXISTS" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploying latest application code" \
             --parameters 'commands=[
