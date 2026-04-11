@@ -86,7 +86,7 @@ jobs:
           # 1. Loop for up to 3 minutes checking for the tagged instance
           for i in {1..12}; do
             INSTANCE_EXISTS=$(aws ec2 describe-instances \
-              --filters "Name=tag:App,Value=NycNow" "Name=instance-state-name,Value=running" \
+              --filters "Name=tag:App,Values=NycNow" "Name=instance-state-name,Values=running" \
               --query "Reservations[*].Instances[*].InstanceId" --output text)
             
             if [ ! -z "$INSTANCE_EXISTS" ]; then
