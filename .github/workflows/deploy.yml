@@ -19,6 +19,11 @@ jobs:
         with:
           python-version: '3.14' # Matches your EC2 environment
 
+      - name: Install GDAL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin
+
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
