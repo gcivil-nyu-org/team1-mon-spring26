@@ -214,6 +214,26 @@ resource "aws_security_group" "app_sg" {
     ipv6_cidr_blocks = ["::/0"]
   }
   
+  # Explicitly allow SMTP out to Google (TLS)
+  egress {
+    description      = "SMTP (TLS) to smtp.google.com"
+    from_port        = 465
+    to_port          = 465
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  # Explicitly allow SMTP out to Google (STARTTLS)
+  egress {
+    description      = "SMTP (STARTTLS) to smtp.google.com"
+    from_port        = 587
+    to_port          = 587
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
   egress {
     from_port        = 0
     to_port          = 0
