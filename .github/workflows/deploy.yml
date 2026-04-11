@@ -18,10 +18,12 @@ jobs:
 
   deploy:
     needs: tests
-    # This job must run if 'test' passes OR if 'test' was skipped
-    if: always() && (needs.test.result == 'success' || needs.test.result == 'skipped') 
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'ajslezak'
+    # This job must run if 'test' passes OR if 'tests' was skipped
+    if: |
+      always() && 
+      github.repository_owner == 'ajslezak' && 
+      (needs.tests.result == 'success' || needs.tests.result == 'skipped')
     environment: feature
     # 1. Required permissions for OIDC to work
     permissions:
