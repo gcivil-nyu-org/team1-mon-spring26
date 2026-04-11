@@ -11,6 +11,20 @@ jobs:
     runs-on: ubuntu-latest
     # Skip tests if the trigger is the ASG Lambda (repository_dispatch)
     if: github.repository_owner == 'ajslezak' && github.event_name != 'repository_dispatch'
+    services:
+      postgres:
+        image: postgis/postgis:17-3.5 # Includes PostGIS out of the box
+        env:
+          POSTGRES_DB: amenities
+          POSTGRES_USER: amenities_feature
+          POSTGRES_PASSWORD: mypassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
