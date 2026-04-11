@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.14'
       - name: Install Linters
-        run: pip install black flake8
+        run: pip install black flake8 coverage
       - name: Run Black
         run: black --check --diff .
       - name: Run Flake8
@@ -31,6 +31,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
   tests:
+    needs: lint
     runs-on: ubuntu-latest
     environment: feature
     # Skip tests if the trigger is the ASG Lambda (repository_dispatch)
@@ -89,6 +90,7 @@ jobs:
     if: |
       always() && 
       github.repository_owner == 'ajslezak' && 
+      (needs.lint.result == 'success' || needs.lint.result == 'skipped') &&
       (needs.tests.result == 'success' || needs.tests.result == 'skipped')
     environment: feature
     # 1. Required permissions for OIDC to work
