@@ -28,8 +28,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Run Migrations (Optional/Headless)
-        run: python manage.py migrate --noinput
+      - name: Run Tests
+        run: |
+          python manage.py migrate --noinput
+          coverage run -m pytest
+          
         env:
           # Use a dummy DB or sqlite for CI tests to avoid "Connection Refused"
           DATABASE_URL: 'sqlite:///:memory:'
@@ -38,8 +41,8 @@ jobs:
           AWS_S3_BUCKET_NAME: elasticbeanstalk-us-east-2-793314585930
           AWS_S3_REGION_NAME: us-east-2
 
-      - name: Run Tests
-        run: coverage run -m pytest
+      #- name: Run Tests
+      #  run: coverage run -m pytest
 
   deploy:
     needs: tests
