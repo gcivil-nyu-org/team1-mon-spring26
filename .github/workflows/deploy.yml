@@ -24,6 +24,7 @@ jobs:
         run: flake8 .
   tests:
     runs-on: ubuntu-latest
+    environment: feature
     # Skip tests if the trigger is the ASG Lambda (repository_dispatch)
     if: github.repository_owner == 'ajslezak' && github.event_name != 'repository_dispatch'
     services:
@@ -31,7 +32,7 @@ jobs:
         image: postgis/postgis:17-3.5 # Includes PostGIS out of the box
         env:
           POSTGRES_DB: amenities
-          POSTGRES_USER: amenities_feature
+          POSTGRES_USER: amenities_${{ vars.APP_ENV || 'feature' }}
           POSTGRES_PASSWORD: mypassword
         ports:
           - 5432:5432
