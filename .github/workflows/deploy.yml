@@ -108,19 +108,40 @@ jobs:
 
       - name: Deploy via AWS Systems Manager (SSM)
         run: |
-          # 1. Loop for up to 3 minutes checking for the tagged instance
-          for i in {1..12}; do
-            INSTANCE_EXISTS=$(aws ec2 describe-instances \
+          # 1. Loop until instance is running AND visible to SSM
+          for i in {1..20}; do
+            # Get ID from EC2
+            ID=$(aws ec2 describe-instances \
               --filters "Name=tag:App,Values=NycNow" "Name=instance-state-name,Values=running" \
-              --query "Reservations[*].Instances[*].InstanceId" --output text)
+              --query "sort_by(Reservations[].Instances[], &LaunchTime)[-1].InstanceId" \
+              --output text)
             
-            if [ ! -z "$INSTANCE_EXISTS" ]; then
-              echo "Instance found: $INSTANCE_EXISTS"
-              break
+            if [ "$ID" != "None" ] && [ ! -z "$ID" ]; then
+              # Check if SSM service sees this ID as "Online"
+              SSM_STATUS=$(aws ssm describe-instance-information \
+                --filters "Key=InstanceIds,Values=$ID" \
+                --query "InstanceInformationList[0].PingStatus" \
+                --output text)
+              
+              if [ "$SSM_STATUS" == "Online" ]; then
+                echo "Instance $ID is Online in SSM!"
+                INSTANCE_EXISTS=$ID
+                break
+              fi
+              echo "Instance $ID found, but SSM Agent is not Online yet... ($i/20)"
+            else
+              echo "Waiting for EC2 instance to start... ($i/20)"
             fi
-            echo "Waiting for instance to register tags... ($i/12)"
             sleep 15
           done
+
+          if [ -z "$INSTANCE_EXISTS" ]; then
+            echo "Error: Instance never became online in SSM."
+            exit 1
+          else
+            echo "Instance found: $INSTANCE_EXISTS"
+          fi
+
           # 2. Use the ID we just found directly instead of tags
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_EXISTS" \
