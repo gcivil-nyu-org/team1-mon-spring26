@@ -4,3 +4,8 @@ Develop: [![Build Status](https://app.travis-ci.com/gcivil-nyu-org/team1-mon-spr
 
 # django_map
 Django map application for NYC Essentials Now
+
+## Production Deployment (AWS Elastic Beanstalk)
+
+This project is configured to deploy automatically to self-healing AWS EC2 Spot Instances via Elastic Beanstalk.
+It uses a single RDS database with multiple schemas (users) to keep the data separate for each environment.

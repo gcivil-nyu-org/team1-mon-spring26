@@ -1,14 +1,51 @@
+from django.conf import settings
 from django.shortcuts import render
 from django.http import JsonResponse
+from django.http.multipartparser import MultiPartParser, MultiPartParserError
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.password_validation import validate_password
 from django.contrib.gis.geos import Polygon, GEOSGeometry
-from .models import AmenityType, Amenity, Review, AmenityPhoto, CustomUser
-from django.db.models import Avg, Count, Subquery, OuterRef
-from decimal import Decimal, InvalidOperation
+from django.db import transaction
+from django.core.exceptions import ValidationError
+from django.db import connection
+from django.utils import timezone
+from datetime import timedelta
 import json
+from .models import (
+    AmenityType,
+    Amenity,
+    Review,
+    AmenityPhoto,
+    CustomUser,
+    Chat,
+    ChatParticipant,
+    Message,
+    ReviewVote,
+    Favorite,
+)
+from django.db.models import (
+    Avg,
+    Count,
+    Subquery,
+    OuterRef,
+    Sum,
+    Q,
+    Value,
+    IntegerField,
+    Prefetch,
+)
+from django.db.models.functions import Coalesce
+from decimal import Decimal, InvalidOperation
+import os
+import io
+from PIL import Image, ImageOps
+from django.core.files.uploadedfile import InMemoryUploadedFile
+
+AVAILABILITY_WINDOW_HOURS = 3
 
 
 def normalize_longitude(lon):
@@ -20,10 +57,76 @@ def normalize_longitude(lon):
     return lon
 
 
+def compress_image(uploaded_file, max_dimension=1024, quality=80):
+    """
+    Resizes and compresses an uploaded image to save storage and bandwidth.
+    Converts the image to JPEG format.
+    """
+    try:
+        img = Image.open(uploaded_file)
+
+        # Preserve original EXIF orientation (prevent sideways mobile photos)
+        img = ImageOps.exif_transpose(img)
+
+        # Convert to RGB to ensure we can save it as JPEG
+        if img.mode in ("RGBA", "P", "LA"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "RGBA":
+                background.paste(img, mask=img.split()[3])
+            elif img.mode == "LA":
+                background.paste(img, mask=img.split()[1])
+            else:
+                background.paste(img)
+            img = background
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        # Resize maintaining aspect ratio
+        resample_filter = getattr(
+            Image.Resampling, "LANCZOS", getattr(Image, "LANCZOS", 1)
+        )
+        img.thumbnail((max_dimension, max_dimension), resample_filter)
+
+        # Save to buffer
+        output = io.BytesIO()
+        img.save(output, format="JPEG", quality=quality, optimize=True)
+        output.seek(0)
+
+        # Replace extension with .jpg
+        base_name, _ = os.path.splitext(uploaded_file.name)
+        new_name = f"{base_name}.jpg"
+
+        return InMemoryUploadedFile(
+            output,
+            "ImageField",
+            new_name,
+            "image/jpeg",
+            output.getbuffer().nbytes,
+            None,
+        )
+    except Exception:
+        # If anything fails (e.g. invalid file),
+        # return original to let size validation handle it
+        return uploaded_file
+
+
 def map_view(request):
     """Render the main map view."""
     amenity_types = AmenityType.objects.all()
-    return render(request, "maps/map.html", {"amenity_types": amenity_types})
+    return render(
+        request,
+        "maps/map.html",
+        {
+            "amenity_types": amenity_types,
+            "app_release": settings.APP_RELEASE,
+        },
+    )
+
+
+@login_required(login_url="/?auth_required=1")
+def chats_view(request):
+    """Render the chats view for messaging."""
+    return render(request, "maps/chats.html")
 
 
 def get_cluster_grid_size(zoom):
@@ -56,7 +159,7 @@ def get_cluster_grid_size(zoom):
 
 def cluster_amenities(amenities, zoom):
     """
-    Performs grid-based clustering on a queryset of amenities.
+    Performs grid-based clustering on a queryset of amenities.12
     """
     grid_size = get_cluster_grid_size(zoom)
 
@@ -75,13 +178,79 @@ def cluster_amenities(amenities, zoom):
         ) as sub
         GROUP BY snapped_location
     """
-    from django.db import connection
 
     with connection.cursor() as cursor:
         cursor.execute(
             cluster_query, [grid_size, list(amenities.values_list("id", flat=True))]
         )
         return cursor.fetchall()
+
+
+def get_review_prefetch_queryset(user):
+    queryset = (
+        Review.objects.select_related("user")
+        .annotate(
+            vote_score=Coalesce(
+                Sum("votes__value"), Value(0), output_field=IntegerField()
+            )
+        )
+        .order_by("-vote_score", "-created_at")
+    )
+    if user.is_authenticated:
+        queryset = queryset.annotate(
+            user_vote=Coalesce(
+                Sum(
+                    "votes__value",
+                    filter=Q(votes__user=user),
+                ),
+                Value(0),
+                output_field=IntegerField(),
+            )
+        )
+    return queryset
+
+
+def serialize_map_amenity(amenity, user, favorite_amenity_ids=None):
+    if favorite_amenity_ids is None:
+        favorite_amenity_ids = set()
+
+    photo_urls_by_user = {}
+    for photo in amenity.photos.all():
+        if photo.uploaded_by_id not in photo_urls_by_user:
+            photo_urls_by_user[photo.uploaded_by_id] = []
+        photo_urls_by_user[photo.uploaded_by_id].append(photo.photo.url)
+
+    return {
+        "id": amenity.id,
+        "name": amenity.name,
+        "latitude": amenity.location.y,
+        "longitude": amenity.location.x,
+        "address": amenity.address,
+        "prop_name": amenity.prop_name,
+        "description": amenity.description,
+        "operator": amenity.operator,
+        "hours_of_operation": amenity.hours_of_operation,
+        "changing_stations": amenity.changing_stations,
+        "accessibility": amenity.accessibility,
+        "rating": getattr(amenity, "avg_rating", None),
+        "review_count": getattr(amenity, "review_count", 0),
+        "reviews": [
+            serialize_amenity_review(
+                review,
+                photo_url=photo_urls_by_user.get(review.user_id, [None])[0],
+                photo_urls=photo_urls_by_user.get(review.user_id, []),
+                current_user=user,
+            )
+            for review in amenity.reviews.all()[:5]
+        ],
+        "photo_url": getattr(amenity, "primary_photo_url", None),
+        "active": amenity.active,
+        "type": amenity.amenity_type.name,
+        "type_id": amenity.amenity_type.id,
+        "icon": amenity.amenity_type.icon,
+        "color": amenity.amenity_type.color,
+        "is_favorited": amenity.id in favorite_amenity_ids,
+    }
 
 
 def amenities_api(request):
@@ -149,8 +318,11 @@ def amenities_api(request):
     amenities = amenities.annotate(primary_photo_url=Subquery(primary_photo_subquery))
 
     # 3. Apply select_related and prefetch_related BEFORE the union.
+    review_prefetch_queryset = get_review_prefetch_queryset(request.user)
+
     amenities = amenities.select_related("amenity_type").prefetch_related(
-        "reviews__user", "photos"
+        Prefetch("reviews", queryset=review_prefetch_queryset),
+        "photos",
     )
 
     # --- Backend Clustering Logic ---
@@ -194,6 +366,7 @@ def amenities_api(request):
                         "type_id": bike_rack_type.id,
                         "icon": "bicycle",
                         "color": "#FF9800",
+                        "is_favorited": False,
                     }
                 )
             else:
@@ -222,48 +395,74 @@ def amenities_api(request):
     if not amenities.exists():
         return JsonResponse({"amenities": final_amenities_list})
 
+    favorite_amenity_ids = set()
+    if request.user.is_authenticated:
+        amenity_ids = list(amenities.values_list("id", flat=True))
+        favorite_amenity_ids = set(
+            Favorite.objects.filter(
+                user=request.user, amenity_id__in=amenity_ids
+            ).values_list("amenity_id", flat=True)
+        )
+
     # Serialize the individual amenities
     for a in amenities:
-        photo_by_user = {}
-        for p in a.photos.all():
-            if p.uploaded_by_id not in photo_by_user:
-                photo_by_user[p.uploaded_by_id] = p.photo.url
-
         final_amenities_list.append(
-            {
-                "id": a.id,
-                "name": a.name,
-                "latitude": a.location.y,
-                "longitude": a.location.x,
-                "address": a.address,
-                "prop_name": a.prop_name,
-                "description": a.description,
-                "operator": a.operator,
-                "hours_of_operation": a.hours_of_operation,
-                "changing_stations": a.changing_stations,
-                "accessibility": a.accessibility,
-                "rating": a.avg_rating,
-                "review_count": a.review_count,
-                "reviews": [
-                    {
-                        "user_name": r.user.email,
-                        "rating": r.rating,
-                        "review_text": r.review_text,
-                        "photo_url": photo_by_user.get(r.user_id),
-                        "created_at": r.created_at.isoformat(),
-                    }
-                    for r in a.reviews.all()[:5]  # Get last 5 reviews
-                ],
-                "photo_url": a.primary_photo_url,
-                "active": a.active,
-                "type": a.amenity_type.name,
-                "type_id": a.amenity_type.id,
-                "icon": a.amenity_type.icon,
-                "color": a.amenity_type.color,
-            }
+            serialize_map_amenity(
+                a,
+                request.user,
+                favorite_amenity_ids=favorite_amenity_ids,
+            )
         )
 
     return JsonResponse({"amenities": final_amenities_list})
+
+
+@require_http_methods(["GET"])
+def amenity_detail_api(request, amenity_id):
+    try:
+        amenity = (
+            Amenity.objects.filter(id=amenity_id)
+            .annotate(
+                avg_rating=Avg("reviews__rating"),
+                review_count=Count("reviews__id", distinct=True),
+            )
+            .annotate(
+                primary_photo_url=Subquery(
+                    AmenityPhoto.objects.filter(
+                        amenity=OuterRef("pk"), is_primary=True
+                    ).values("photo")[:1]
+                )
+            )
+            .select_related("amenity_type")
+            .prefetch_related(
+                Prefetch(
+                    "reviews", queryset=get_review_prefetch_queryset(request.user)
+                ),
+                "photos",
+            )
+            .get()
+        )
+    except Amenity.DoesNotExist:
+        return JsonResponse({"error": "Amenity not found"}, status=404)
+
+    favorite_ids = set()
+    if request.user.is_authenticated:
+        favorite_ids = set(
+            Favorite.objects.filter(user=request.user, amenity=amenity).values_list(
+                "amenity_id", flat=True
+            )
+        )
+
+    return JsonResponse(
+        {
+            "amenity": serialize_map_amenity(
+                amenity,
+                request.user,
+                favorite_amenity_ids=favorite_ids,
+            )
+        },
+        status=200,
+    )
 
 
 def amenity_types_api(request):
@@ -337,7 +536,32 @@ def serialize_auth_user(user):
         "email": user.email,
         "username": user.username,
         "bio": user.bio,
+        "avatar_url": user.avatar_url,
+        "has_usable_password": user.has_usable_password(),
         "is_authenticated": True,
+    }
+
+
+def serialize_amenity_review(
+    review, photo_url=None, photo_urls=None, current_user=None
+):
+    current_user_vote = getattr(review, "user_vote", 0)
+    if not (current_user and current_user.is_authenticated):
+        current_user_vote = 0
+
+    return {
+        "id": review.id,
+        "amenity_id": review.amenity_id,
+        "user_name": review.user.username or review.user.email,
+        "user_email": review.user.email,
+        "user_avatar_url": review.user.avatar_url,
+        "rating": review.rating,
+        "vote_score": int(getattr(review, "vote_score", 0)),
+        "user_vote": int(current_user_vote or 0),
+        "review_text": review.review_text,
+        "photo_url": photo_url,
+        "photo_urls": photo_urls or ([photo_url] if photo_url else []),
+        "created_at": review.created_at.isoformat(),
     }
 
 
@@ -403,6 +627,7 @@ def current_user_api(request):
                 "email": "",
                 "username": "",
                 "bio": "",
+                "has_usable_password": False,
                 "is_authenticated": False,
             },
             status=200,
@@ -416,13 +641,377 @@ def profile_view(request):
     """
     Profile page.
     Anonymous users are redirected back to the map page.
+    If a ?user=<email> query param is provided, show that user's profile.
     """
+    user_email = request.GET.get("user")
+    if user_email:
+        try:
+            profile_user = CustomUser.objects.get(email=user_email)
+        except CustomUser.DoesNotExist:
+            profile_user = request.user
+    else:
+        profile_user = request.user
+
+    user_email = request.GET.get("user")
+    if user_email:
+        try:
+            profile_user = CustomUser.objects.get(email=user_email)
+        except CustomUser.DoesNotExist:
+            profile_user = request.user
+    else:
+        profile_user = request.user
+
     return render(
         request,
         "maps/profile.html",
         {
-            "profile_user": request.user,
+            "profile_user": profile_user,
+            "reviews_count": profile_user.reviews.count(),
+            "likes_received_count": ReviewVote.objects.filter(
+                review__user=profile_user,
+                value=1,
+            ).count(),
         },
+    )
+
+
+@login_required(login_url="/?auth_required=1")
+def settings_view(request):
+    """
+    Render the settings page for the current user.
+    """
+    return render(
+        request,
+        "maps/settings.html",
+        {
+            "profile_user": request.user,
+            "has_usable_password": request.user.has_usable_password(),
+        },
+    )
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST"])
+def change_password_api(request):
+    """
+    Change the current user's password while preserving the active session.
+    """
+    has_usable_password = request.user.has_usable_password()
+    current_password = (request.POST.get("current_password") or "").strip()
+    new_password = (request.POST.get("new_password") or "").strip()
+    confirm_password = (request.POST.get("confirm_password") or "").strip()
+
+    if has_usable_password:
+        if not current_password or not new_password or not confirm_password:
+            return JsonResponse(
+                {"error": "All password fields are required"},
+                status=400,
+            )
+    elif not new_password or not confirm_password:
+        return JsonResponse(
+            {"error": "New password and confirmation are required"},
+            status=400,
+        )
+
+    if has_usable_password and not request.user.check_password(current_password):
+        return JsonResponse({"error": "Current password is incorrect"}, status=400)
+
+    if new_password != confirm_password:
+        return JsonResponse(
+            {"error": "New password and confirmation do not match"},
+            status=400,
+        )
+
+    if has_usable_password and current_password == new_password:
+        return JsonResponse(
+            {"error": "New password must be different from your current password"},
+            status=400,
+        )
+
+    try:
+        validate_password(new_password, request.user)
+    except ValidationError as exc:
+        return JsonResponse({"error": " ".join(exc.messages)}, status=400)
+
+    request.user.set_password(new_password)
+    request.user.save(update_fields=["password"])
+    update_session_auth_hash(request, request.user)
+
+    return JsonResponse(
+        {
+            "message": (
+                "Password updated successfully"
+                if has_usable_password
+                else "Password set successfully"
+            ),
+            "has_usable_password": True,
+            "password_action": "change" if has_usable_password else "set",
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST"])
+def update_profile_api(request):
+    """
+    Update the current user's profile fields from the dedicated edit page.
+    """
+    user = request.user
+
+    username = (request.POST.get("username") or "").strip()
+    bio = (request.POST.get("bio") or "").strip()
+    avatar_file = request.FILES.get("avatar")
+
+    if not username:
+        return JsonResponse({"error": "Username is required"}, status=400)
+
+    if len(username) > 30:
+        return JsonResponse(
+            {"error": "Username must be 30 characters or fewer"},
+            status=400,
+        )
+
+    if CustomUser.objects.filter(username=username).exclude(id=user.id).exists():
+        return JsonResponse({"error": "Username is already taken"}, status=400)
+
+    if len(bio) > 150:
+        return JsonResponse(
+            {"error": "Bio must be 150 characters or fewer"},
+            status=400,
+        )
+
+    if avatar_file:
+        content_type = avatar_file.content_type or ""
+        if not content_type.startswith("image/"):
+            return JsonResponse({"error": "Avatar must be an image"}, status=400)
+
+        # Automatically compress avatars to a maximum of 512x512
+        avatar_file = compress_image(avatar_file, max_dimension=512)
+
+        if avatar_file.size > 2 * 1024 * 1024:
+            return JsonResponse(
+                {"error": "Avatar must be 2MB or smaller"},
+                status=400,
+            )
+
+        user.avatar = avatar_file
+
+    user.username = username
+    user.bio = bio
+    user.save()
+
+    response_data = serialize_auth_user(user)
+    response_data["message"] = "Profile updated successfully"
+    return JsonResponse(response_data, status=200)
+
+
+def serialize_profile_review(review):
+    """
+    Serialize one review for the profile page.
+    The photo is inferred from the amenity photo uploaded by the same user.
+    """
+    review_photos = []
+
+    # Reuse prefetched amenity photos when available.
+    # The current data model stores review photos on AmenityPhoto,
+    # not directly on Review.
+    for photo in review.amenity.photos.all():
+        if photo.uploaded_by_id == review.user_id:
+            review_photos.append(photo)
+
+    review_photo_ids = []
+    review_photo_urls = []
+    for photo in review_photos:
+        # Some legacy or malformed AmenityPhoto rows may not have a file
+        # attached. Skip those rows so one bad photo does not break profile.
+        try:
+            photo_url = photo.photo.url
+        except ValueError:
+            continue
+
+        review_photo_ids.append(photo.id)
+        review_photo_urls.append(photo_url)
+
+    return {
+        "id": review.id,
+        "amenity_id": review.amenity_id,
+        "amenity_name": review.amenity.name,
+        "amenity_prop_name": review.amenity.prop_name,
+        "amenity_type": review.amenity.amenity_type.name,
+        "rating": review.rating,
+        "vote_score": int(getattr(review, "vote_score", 0)),
+        "review_text": review.review_text,
+        "photo_id": review_photo_ids[0] if review_photo_ids else None,
+        "photo_url": review_photo_urls[0] if review_photo_urls else None,
+        "photo_ids": review_photo_ids,
+        "photo_urls": review_photo_urls,
+        "created_at": review.created_at.isoformat(),
+        "updated_at": review.updated_at.isoformat(),
+    }
+
+
+def annotate_reviews_with_vote_score(queryset):
+    return queryset.annotate(
+        vote_score=Coalesce(Sum("votes__value"), Value(0), output_field=IntegerField())
+    )
+
+
+def parse_multipart_request(request):
+    parser = MultiPartParser(
+        request.META,
+        request,
+        request.upload_handlers,
+        encoding=request.encoding,
+    )
+    return parser.parse()
+
+
+def serialize_profile_favorite(favorite):
+    amenity = favorite.amenity
+    return {
+        "id": favorite.id,
+        "amenity_id": amenity.id,
+        "amenity_name": amenity.name,
+        "amenity_prop_name": amenity.prop_name,
+        "amenity_type": amenity.amenity_type.name,
+        "address": amenity.address,
+        "latitude": amenity.location.y,
+        "longitude": amenity.location.x,
+        "notify_on_updates": favorite.notify_on_updates,
+        "created_at": favorite.created_at.isoformat(),
+    }
+
+
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["GET"])
+def profile_reviews_api(request):
+    """
+    Return all reviews written by the current user for the profile page.
+    """
+    reviews = (
+        annotate_reviews_with_vote_score(Review.objects.filter(user=request.user))
+        .select_related("amenity", "amenity__amenity_type")
+        .prefetch_related("amenity__photos")
+        .order_by("-updated_at", "-created_at")
+    )
+
+    return JsonResponse(
+        {
+            "reviews": [serialize_profile_review(review) for review in reviews],
+        },
+        status=200,
+    )
+
+
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["GET"])
+def profile_favorites_api(request):
+    favorites = (
+        Favorite.objects.filter(user=request.user)
+        .select_related("amenity", "amenity__amenity_type")
+        .order_by("-created_at")
+    )
+
+    return JsonResponse(
+        {
+            "favorites": [
+                serialize_profile_favorite(favorite) for favorite in favorites
+            ],
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST"])
+def favorite_notification_preference_api(request, favorite_id):
+    try:
+        favorite = Favorite.objects.get(id=favorite_id, user=request.user)
+    except Favorite.DoesNotExist:
+        return JsonResponse({"error": "Favorite not found"}, status=404)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    notify_on_updates = data.get("notify_on_updates")
+    if not isinstance(notify_on_updates, bool):
+        return JsonResponse(
+            {"error": "notify_on_updates must be a boolean"},
+            status=400,
+        )
+
+    favorite.notify_on_updates = notify_on_updates
+    favorite.save(update_fields=["notify_on_updates"])
+
+    return JsonResponse(
+        {
+            "favorite_id": favorite.id,
+            "notify_on_updates": favorite.notify_on_updates,
+            "message": "Favorite notification preference updated",
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST", "DELETE"])
+def toggle_favorite_api(request, amenity_id):
+    try:
+        amenity = Amenity.objects.get(id=amenity_id)
+    except Amenity.DoesNotExist:
+        return JsonResponse({"error": "Amenity not found"}, status=404)
+
+    if request.method == "POST":
+        favorite, created = Favorite.objects.get_or_create(
+            user=request.user,
+            amenity=amenity,
+        )
+        return JsonResponse(
+            {
+                "amenity_id": amenity.id,
+                "is_favorited": True,
+                "notify_on_updates": favorite.notify_on_updates,
+                "message": "Added to favorites" if created else "Already favorited",
+            },
+            status=200,
+        )
+
+    Favorite.objects.filter(user=request.user, amenity=amenity).delete()
+    return JsonResponse(
+        {
+            "amenity_id": amenity.id,
+            "is_favorited": False,
+            "message": "Removed from favorites",
+        },
+        status=200,
+    )
+
+
+@require_http_methods(["GET"])
+def amenity_rating_distribution_api(request, amenity_id):
+    """API endpoint to fetch the rating distribution for a specific amenity."""
+    try:
+        amenity = Amenity.objects.get(id=amenity_id)
+    except Amenity.DoesNotExist:
+        return JsonResponse({"error": "Amenity not found"}, status=404)
+
+    rating_distribution = list(
+        Review.objects.filter(amenity=amenity)
+        .values("rating")
+        .annotate(count=Count("rating"))
+        .order_by("-rating")
+    )
+
+    return JsonResponse(
+        {"amenity_id": amenity_id, "rating_distribution": rating_distribution},
+        status=200,
     )
 
 
@@ -434,18 +1023,20 @@ def create_review_api(request):
         if not request.user.is_authenticated:
             return JsonResponse({"error": "Login required"}, status=401)
 
-        content_type = request.content_type or ""
+        content_type = request.META.get("CONTENT_TYPE", "")
         if content_type.startswith("multipart/form-data"):
             amenity_id = request.POST.get("amenity_id")
             rating = request.POST.get("rating", 5)
-            review_text = request.POST.get("review_text", "").strip()
-            photo_file = request.FILES.get("photo")
+            review_text = (request.POST.get("review_text") or "").strip()
+            photo_files = request.FILES.getlist("photos")
+            if not photo_files and "photo" in request.FILES:
+                photo_files = request.FILES.getlist("photo")
         else:
             data = json.loads(request.body)
             amenity_id = data.get("amenity_id")
             rating = data.get("rating", 5)
-            review_text = data.get("review_text", "").strip()
-            photo_file = None
+            review_text = (data.get("review_text") or "").strip()
+            photo_files = []
 
         if not amenity_id:
             return JsonResponse({"error": "amenity_id required"}, status=400)
@@ -458,14 +1049,25 @@ def create_review_api(request):
         if not (1 <= rating <= 5):
             return JsonResponse({"error": "Rating must be between 1 and 5"}, status=400)
 
-        if photo_file:
-            content_type = photo_file.content_type or ""
-            if not content_type.startswith("image/"):
+        if len(photo_files) > 5:
+            return JsonResponse({"error": "Maximum of 5 photos allowed"}, status=400)
+
+        processed_photos = []
+        for photo_file in photo_files:
+            file_content_type = photo_file.content_type or ""
+            if not file_content_type.startswith("image/"):
                 return JsonResponse({"error": "Photo must be an image"}, status=400)
+
+            # Compress review photos to 1024x1024 maximum
+            photo_file = compress_image(photo_file, max_dimension=1024)
+
             if photo_file.size > 5 * 1024 * 1024:
                 return JsonResponse(
                     {"error": "Photo must be 5MB or smaller"}, status=400
                 )
+            processed_photos.append(photo_file)
+
+        photo_files = processed_photos
 
         try:
             amenity = Amenity.objects.get(id=amenity_id)
@@ -484,26 +1086,618 @@ def create_review_api(request):
             amenity=amenity, user=user, rating=rating, review_text=review_text
         )
 
-        review_photo = None
-        if photo_file:
+        review_photos = []
+        is_first = not AmenityPhoto.objects.filter(amenity=amenity).exists()
+        for i, photo_file in enumerate(photo_files):
             review_photo = AmenityPhoto.objects.create(
                 amenity=amenity,
+                review=review,
                 photo=photo_file,
                 uploaded_by=user,
-                is_primary=not AmenityPhoto.objects.filter(amenity=amenity).exists(),
+                is_primary=(is_first and i == 0),
                 caption=f"Review photo by {user.email}",
+            )
+            review_photos.append(review_photo)
+
+        # Notify users who favorited this amenity and opted in for updates.
+        recipient_ids = list(
+            Favorite.objects.filter(
+                amenity=amenity,
+                notify_on_updates=True,
+            )
+            .exclude(user=user)
+            .values_list("user_id", flat=True)
+            .distinct()
+        )
+
+        if recipient_ids:
+            payload = json.dumps(
+                {
+                    "type": "amenity_review_added",
+                    "amenity_id": amenity.id,
+                    "amenity_name": amenity.name,
+                    "review": {
+                        "id": review.id,
+                        "rating": review.rating,
+                        "created_at": review.created_at.isoformat(),
+                    },
+                    "actor_email": user.email,
+                }
+            )
+
+            def send_notification():
+                # Tests and local SQLite do not support Postgres NOTIFY.
+                if connection.vendor != "postgresql":
+                    return
+
+                with connection.cursor() as cursor:
+                    for recipient_id in recipient_ids:
+                        wrapped = json.dumps(
+                            {"user_id": recipient_id, "payload": payload}
+                        )
+                        cursor.execute(
+                            "SELECT pg_notify('global_chat_events', %s)", [wrapped]
+                        )
+
+            transaction.on_commit(send_notification)
+
+        response_data = serialize_amenity_review(
+            review,
+            photo_url=review_photos[0].photo.url if review_photos else None,
+            photo_urls=[rp.photo.url for rp in review_photos] if review_photos else [],
+            current_user=request.user,
+        )
+        response_data["message"] = "Review created successfully"
+        return JsonResponse(response_data, status=201)
+
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST"])
+def review_vote_api(request, review_id):
+    """Create, update, or clear the current user's vote on a review."""
+    try:
+        try:
+            review = Review.objects.select_related("user").get(id=review_id)
+        except Review.DoesNotExist:
+            return JsonResponse({"error": "Review not found"}, status=404)
+
+        if review.user_id == request.user.id:
+            return JsonResponse(
+                {"error": "You cannot vote on your own review"},
+                status=400,
+            )
+
+        data = json.loads(request.body)
+        vote = data.get("vote")
+
+        vote_value = None
+        if vote in (1, "1", "up", "upvote"):
+            vote_value = 1
+        elif vote in (-1, "-1", "down", "downvote"):
+            vote_value = -1
+        elif vote in (0, "0", None, "clear"):
+            vote_value = 0
+
+        if vote_value is None:
+            return JsonResponse(
+                {"error": "vote must be one of: up, down, or clear"},
+                status=400,
+            )
+
+        existing_vote = ReviewVote.objects.filter(
+            review=review,
+            user=request.user,
+        ).first()
+
+        if vote_value == 0:
+            if existing_vote:
+                existing_vote.delete()
+            user_vote = 0
+        elif existing_vote and existing_vote.value == vote_value:
+            existing_vote.delete()
+            user_vote = 0
+        elif existing_vote:
+            existing_vote.value = vote_value
+            existing_vote.save(update_fields=["value", "updated_at"])
+            user_vote = vote_value
+        else:
+            ReviewVote.objects.create(
+                review=review,
+                user=request.user,
+                value=vote_value,
+            )
+            user_vote = vote_value
+
+        vote_score = (
+            ReviewVote.objects.filter(review=review).aggregate(
+                total=Coalesce(Sum("value"), Value(0), output_field=IntegerField())
+            )["total"]
+            or 0
+        )
+
+        return JsonResponse(
+            {
+                "review_id": review.id,
+                "vote_score": int(vote_score),
+                "user_vote": int(user_vote),
+            },
+            status=200,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["PATCH", "DELETE"])
+def review_detail_api(request, review_id):
+    """
+    Update or delete the current user's own review from the profile page.
+    """
+    try:
+        try:
+            review = (
+                Review.objects.filter(id=review_id, user=request.user)
+                .select_related("amenity", "amenity__amenity_type")
+                .prefetch_related("amenity__photos")
+                .get()
+            )
+        except Review.DoesNotExist:
+            return JsonResponse({"error": "Review not found"}, status=404)
+
+        if request.method == "DELETE":
+            review.delete()
+            return JsonResponse(
+                {"message": "Review deleted successfully"},
+                status=200,
+            )
+
+        content_type = request.content_type or ""
+        if content_type.startswith("multipart/form-data"):
+            try:
+                data, files = parse_multipart_request(request)
+            except MultiPartParserError:
+                return JsonResponse({"error": "Invalid multipart payload"}, status=400)
+
+            rating = data.get("rating", review.rating)
+            review_text = data.get("review_text", review.review_text)
+            photo_files = files.getlist("photos")
+            if not photo_files and "photo" in files:
+                photo_files = files.getlist("photo")
+        else:
+            data = json.loads(request.body)
+            rating = data.get("rating", review.rating)
+            review_text = data.get("review_text", review.review_text)
+            photo_files = []
+
+        try:
+            rating = int(rating)
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Rating must be an integer"}, status=400)
+
+        if not (1 <= rating <= 5):
+            return JsonResponse({"error": "Rating must be between 1 and 5"}, status=400)
+
+        review_text = str(review_text or "").strip()
+        if len(review_text) > 600:
+            return JsonResponse(
+                {"error": "Review text must be 600 characters or fewer"},
+                status=400,
+            )
+
+        current_photo_count = (
+            AmenityPhoto.objects.filter(
+                amenity_id=review.amenity_id,
+                uploaded_by=request.user,
+            )
+            .filter(Q(review=review) | Q(review__isnull=True))
+            .count()
+        )
+
+        if current_photo_count + len(photo_files) > 5:
+            return JsonResponse(
+                {"error": "You can upload up to 5 photos per review."},
+                status=400,
+            )
+
+        processed_photos = []
+        for photo_file in photo_files:
+            file_content_type = photo_file.content_type or ""
+            if not file_content_type.startswith("image/"):
+                return JsonResponse({"error": "Photo must be an image"}, status=400)
+
+            photo_file = compress_image(photo_file, max_dimension=1024)
+            if photo_file.size > 5 * 1024 * 1024:
+                return JsonResponse(
+                    {"error": "Photo must be 5MB or smaller"}, status=400
+                )
+            processed_photos.append(photo_file)
+
+        review.rating = rating
+        review.review_text = review_text
+        review.save(update_fields=["rating", "review_text", "updated_at"])
+
+        is_first_amenity_photo = not AmenityPhoto.objects.filter(
+            amenity=review.amenity
+        ).exists()
+        for index, photo_file in enumerate(processed_photos):
+            AmenityPhoto.objects.create(
+                amenity=review.amenity,
+                review=review,
+                photo=photo_file,
+                uploaded_by=request.user,
+                is_primary=(is_first_amenity_photo and index == 0),
+                caption=f"Review photo by {request.user.email}",
+            )
+
+        refreshed_review = (
+            annotate_reviews_with_vote_score(Review.objects.filter(id=review.id))
+            .select_related("amenity", "amenity__amenity_type")
+            .prefetch_related("amenity__photos")
+            .get()
+        )
+
+        response_data = serialize_profile_review(refreshed_review)
+        response_data["message"] = "Review updated successfully"
+        return JsonResponse(response_data, status=200)
+
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["DELETE"])
+def review_photo_detail_api(request, review_id, photo_id):
+    """
+    Delete one photo attached to the current user's own review.
+    """
+    try:
+        try:
+            review = (
+                Review.objects.filter(id=review_id, user=request.user)
+                .select_related("amenity", "amenity__amenity_type")
+                .prefetch_related("amenity__photos")
+                .get()
+            )
+        except Review.DoesNotExist:
+            return JsonResponse({"error": "Review not found"}, status=404)
+
+        photo = (
+            AmenityPhoto.objects.filter(
+                id=photo_id,
+                amenity_id=review.amenity_id,
+                uploaded_by=request.user,
+            )
+            .filter(Q(review=review) | Q(review__isnull=True))
+            .first()
+        )
+
+        if not photo:
+            return JsonResponse({"error": "Photo not found"}, status=404)
+
+        photo.delete()
+
+        refreshed_review = (
+            annotate_reviews_with_vote_score(Review.objects.filter(id=review.id))
+            .select_related("amenity", "amenity__amenity_type")
+            .prefetch_related("amenity__photos")
+            .get()
+        )
+
+        response_data = serialize_profile_review(refreshed_review)
+        response_data["message"] = "Review photo deleted successfully"
+        return JsonResponse(response_data, status=200)
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def get_amenity_reviews_api(request):
+    """API endpoint to fetch all reviews for a specific amenity with pagination."""
+    try:
+        amenity_id = request.GET.get("amenity_id")
+        page = int(request.GET.get("page", 1))
+        page_size = int(request.GET.get("page_size", 10))
+
+        if not amenity_id:
+            return JsonResponse({"error": "amenity_id parameter required"}, status=400)
+
+        try:
+            amenity = Amenity.objects.get(id=amenity_id)
+        except Amenity.DoesNotExist:
+            return JsonResponse({"error": "Amenity not found"}, status=404)
+
+        # Get all reviews for the amenity, ordered by most recent
+        reviews = (
+            Review.objects.filter(amenity=amenity)
+            .select_related("user")
+            .order_by("-created_at")
+        )
+
+        # Calculate pagination
+        total_count = reviews.count()
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_reviews = reviews[start_idx:end_idx]
+
+        # Serialize reviews
+        reviews_data = [
+            {
+                "id": r.id,
+                "user_name": r.user.email if r.user else "Anonymous",
+                "rating": r.rating,
+                "review_text": r.review_text,
+                "created_at": r.created_at.isoformat(),
+                "updated_at": r.updated_at.isoformat(),
+            }
+            for r in paginated_reviews
+        ]
+
+        return JsonResponse(
+            {
+                "amenity_id": amenity.id,
+                "amenity_name": amenity.name,
+                "total_reviews": total_count,
+                "average_rating": amenity.get_average_rating(),
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (total_count + page_size - 1) // page_size,
+                "reviews": reviews_data,
+            },
+            status=200,
+        )
+
+    except (ValueError, TypeError):
+        return JsonResponse(
+            {"error": "Invalid page or page_size parameter"}, status=400
+        )
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+# ===== Chat Functionality APIs =====
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def get_user_chats_api(request):
+    """Get all chats for the current user."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        # Get all chats where the user is a participant
+        user_chats = (
+            Chat.objects.filter(participants__user=request.user)
+            .select_related("created_by", "amenity")
+            .prefetch_related("participants__user", "messages")
+            .distinct()
+            .order_by("-last_message_at")
+        )
+
+        chats_data = []
+        for chat in user_chats:
+            # Get the last message (using prefetched list to avoid N+1 queries)
+            messages_list = list(chat.messages.all())
+            last_message = messages_list[-1] if messages_list else None
+
+            avatar_url = None
+            other_user_email = None
+            if chat.chat_type == "direct":
+                # Find the other participant to get their avatar and email
+                other_p = next(
+                    (
+                        p
+                        for p in chat.participants.all()
+                        if p.user_id != request.user.id
+                    ),
+                    None,
+                )
+                if other_p:
+                    if getattr(other_p.user, "avatar_url", None):
+                        avatar_url = other_p.user.avatar_url
+                    other_user_email = other_p.user.email
+            else:
+                if chat.created_by and getattr(chat.created_by, "avatar_url", None):
+                    avatar_url = chat.created_by.avatar_url
+
+            chats_data.append(
+                {
+                    "id": chat.id,
+                    "chat_type": chat.chat_type,
+                    "name": chat.get_display_name(request.user),
+                    "avatar_url": avatar_url,
+                    "other_user_email": other_user_email,
+                    "amenity_id": chat.amenity_id,
+                    "amenity_name": chat.amenity.name if chat.amenity else None,
+                    "created_by_email": (
+                        chat.created_by.email if chat.created_by else None
+                    ),
+                    "participant_count": chat.participants.count(),
+                    "last_message": (
+                        last_message.content[:100]
+                        if last_message and last_message.content
+                        else None
+                    ),
+                    "last_message_sender": (
+                        last_message.sender.email if last_message else None
+                    ),
+                    "last_message_at": (
+                        chat.last_message_at.isoformat()
+                        if chat.last_message_at
+                        else (chat.created_at.isoformat() if chat.created_at else None)
+                    ),
+                    "created_at": (
+                        chat.created_at.isoformat() if chat.created_at else None
+                    ),
+                }
             )
 
         return JsonResponse(
             {
-                "id": review.id,
-                "amenity_id": amenity.id,
-                "user_name": user.email,
-                "rating": review.rating,
-                "review_text": review.review_text,
-                "photo_url": review_photo.photo.url if review_photo else None,
-                "created_at": review.created_at.isoformat(),
-                "message": "Review created successfully",
+                "chats": chats_data,
+                "total_count": len(chats_data),
+            },
+            status=200,
+        )
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def get_chat_messages_api(request):
+    """Get messages for a specific chat."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        chat_id = request.GET.get("chat_id")
+        page = int(request.GET.get("page", 1))
+        page_size = int(request.GET.get("page_size", 20))
+
+        if not chat_id:
+            return JsonResponse({"error": "chat_id parameter required"}, status=400)
+
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return JsonResponse({"error": "Chat not found"}, status=404)
+
+        # Check if user is a participant in this chat
+        if not chat.participants.filter(user=request.user).exists():
+            return JsonResponse(
+                {"error": "You are not a participant in this chat"}, status=403
+            )
+
+        # Get messages with pagination
+        messages = chat.messages.select_related("sender").order_by("-created_at", "-id")
+        total_count = messages.count()
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_messages = messages[start_idx:end_idx]
+
+        messages_data = [
+            {
+                "id": m.id,
+                "sender_id": m.sender.id if m.sender else None,
+                "sender_email": m.sender.email if m.sender else None,
+                "content": m.content,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in paginated_messages
+        ]
+
+        # Reverse to get chronological order
+        messages_data.reverse()
+
+        return JsonResponse(
+            {
+                "chat_id": chat.id,
+                "chat_type": chat.chat_type,
+                "chat_name": chat.get_display_name(request.user),
+                "amenity_id": chat.amenity_id,
+                "page": page,
+                "page_size": page_size,
+                "total_messages": total_count,
+                "total_pages": (total_count + page_size - 1) // page_size,
+                "messages": messages_data,
+            },
+            status=200,
+        )
+
+    except (ValueError, TypeError):
+        return JsonResponse(
+            {"error": "Invalid page or page_size parameter"}, status=400
+        )
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def send_message_api(request):
+    """Send a message in a chat."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        data = json.loads(request.body)
+        chat_id = data.get("chat_id")
+        content = (data.get("content") or "").strip()
+
+        if not chat_id:
+            return JsonResponse({"error": "chat_id required"}, status=400)
+
+        if not content:
+            return JsonResponse({"error": "content required"}, status=400)
+
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return JsonResponse({"error": "Chat not found"}, status=404)
+
+        # Check if user is a participant
+        if not chat.participants.filter(user=request.user).exists():
+            return JsonResponse(
+                {"error": "You are not a participant in this chat"}, status=403
+            )
+
+        # Create the message
+        message = Message.objects.create(
+            chat=chat, sender=request.user, content=content
+        )
+
+        # Update chat's last_message_at
+        chat.last_message_at = message.created_at
+        chat.save(update_fields=["last_message_at"])
+
+        # NOTIFY all other participants
+        payload = json.dumps(
+            {
+                "type": "new_message",
+                "chat_id": chat.id,
+                "message": {
+                    "id": message.id,
+                    "sender_email": message.sender.email,
+                    "content": message.content,
+                    "created_at": message.created_at.isoformat(),
+                },
+            }
+        )
+
+        def send_notification():
+            with connection.cursor() as cursor:
+                for p in chat.participants.exclude(user=request.user):
+                    wrapped = json.dumps({"user_id": p.user_id, "payload": payload})
+                    cursor.execute(
+                        "SELECT pg_notify('global_chat_events', %s)", [wrapped]
+                    )
+
+        transaction.on_commit(send_notification)
+
+        return JsonResponse(
+            {
+                "id": message.id,
+                "chat_id": chat.id,
+                "sender_id": message.sender.id,
+                "sender_email": message.sender.email,
+                "content": message.content,
+                "created_at": message.created_at.isoformat(),
             },
             status=201,
         )
@@ -512,3 +1706,435 @@ def create_review_api(request):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def create_direct_chat_api(request):
+    """Create or get a direct message chat with another user."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        data = json.loads(request.body)
+        recipient_email = (data.get("recipient_email") or "").strip()
+
+        if not recipient_email:
+            return JsonResponse({"error": "recipient_email required"}, status=400)
+
+        try:
+            recipient = CustomUser.objects.get(email=recipient_email)
+        except CustomUser.DoesNotExist:
+            return JsonResponse({"error": "Recipient user not found"}, status=404)
+
+        if recipient.id == request.user.id:
+            return JsonResponse(
+                {"error": "Cannot create chat with yourself"}, status=400
+            )
+
+        # Check if direct chat already exists between these two users
+        existing_chat = (
+            Chat.objects.filter(chat_type="direct", participants__user=request.user)
+            .filter(participants__user=recipient)
+            .first()
+        )
+
+        if existing_chat:
+            return JsonResponse(
+                {
+                    "id": existing_chat.id,
+                    "chat_type": existing_chat.chat_type,
+                    "name": existing_chat.get_display_name(request.user),
+                    "created_at": existing_chat.created_at.isoformat(),
+                    "message": "Chat already exists",
+                },
+                status=200,
+            )
+
+        # Create new direct chat
+        chat = Chat.objects.create(
+            chat_type="direct",
+            created_by=request.user,
+        )
+
+        # Add both users as participants
+        ChatParticipant.objects.create(chat=chat, user=request.user)
+        ChatParticipant.objects.create(chat=chat, user=recipient)
+
+        # NOTIFY the recipient
+        payload = json.dumps({"type": "new_message", "chat_id": chat.id})
+
+        def send_notification():
+            with connection.cursor() as cursor:
+                wrapped = json.dumps({"user_id": recipient.id, "payload": payload})
+                cursor.execute("SELECT pg_notify('global_chat_events', %s)", [wrapped])
+
+        transaction.on_commit(send_notification)
+
+        return JsonResponse(
+            {
+                "id": chat.id,
+                "chat_type": chat.chat_type,
+                "name": chat.get_display_name(request.user),
+                "created_at": chat.created_at.isoformat(),
+                "message": "Chat created successfully",
+            },
+            status=201,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def create_group_chat_api(request):
+    """Create a group chat, optionally with recent reviewers of an amenity."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        data = json.loads(request.body)
+        chat_name = (data.get("chat_name") or "").strip()
+        amenity_id = data.get("amenity_id")
+        participant_emails = data.get("participant_emails", [])
+
+        if not chat_name:
+            return JsonResponse({"error": "chat_name required"}, status=400)
+
+        if not participant_emails:
+            return JsonResponse({"error": "participant_emails required"}, status=400)
+
+        # Get participants
+        participants = CustomUser.objects.filter(email__in=participant_emails)
+        if participants.count() != len(participant_emails):
+            return JsonResponse(
+                {"error": "One or more participants not found"}, status=404
+            )
+
+        # Ensure creator is in the participant list
+        if request.user not in participants:
+            participants = list(participants) + [request.user]
+        else:
+            participants = list(participants)
+
+        # Get amenity if provided (for forum chats)
+        amenity = None
+        if amenity_id:
+            try:
+                amenity = Amenity.objects.get(id=amenity_id)
+            except Amenity.DoesNotExist:
+                return JsonResponse({"error": "Amenity not found"}, status=404)
+
+        # Create the group chat
+        chat_type = "amenity_forum" if amenity else "group"
+        chat = Chat.objects.create(
+            chat_type=chat_type,
+            amenity=amenity,
+            created_by=request.user,
+            name=chat_name,
+        )
+
+        # Add participants
+        for participant in participants:
+            ChatParticipant.objects.create(chat=chat, user=participant)
+
+        # NOTIFY other participants
+        payload = json.dumps({"type": "new_message", "chat_id": chat.id})
+
+        def send_notification():
+            with connection.cursor() as cursor:
+                for participant in participants:
+                    if participant.id != request.user.id:
+                        wrapped = json.dumps(
+                            {"user_id": participant.id, "payload": payload}
+                        )
+                        cursor.execute(
+                            "SELECT pg_notify('global_chat_events', %s)", [wrapped]
+                        )
+
+        transaction.on_commit(send_notification)
+
+        return JsonResponse(
+            {
+                "id": chat.id,
+                "chat_type": chat.chat_type,
+                "name": chat.name,
+                "participant_count": len(participants),
+                "created_at": chat.created_at.isoformat(),
+                "message": "Group chat created successfully",
+            },
+            status=201,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def get_chat_participants_api(request):
+    """Get participants for a specific chat."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        chat_id = request.GET.get("chat_id")
+        if not chat_id:
+            return JsonResponse({"error": "chat_id parameter required"}, status=400)
+
+        try:
+            chat = Chat.objects.get(id=chat_id)
+        except Chat.DoesNotExist:
+            return JsonResponse({"error": "Chat not found"}, status=404)
+
+        if not chat.participants.filter(user=request.user).exists():
+            return JsonResponse(
+                {"error": "You are not a participant in this chat"}, status=403
+            )
+
+        participants_data = [
+            {
+                "user_id": p.user.id if p.user else None,
+                "email": p.user.email if p.user else None,
+                "username": p.user.username or p.user.email,
+                "avatar_url": getattr(p.user, "avatar_url", None) or "",
+                "joined_at": p.joined_at.isoformat() if p.joined_at else None,
+            }
+            for p in chat.participants.select_related("user")
+        ]
+
+        return JsonResponse(
+            {
+                "chat_id": chat.id,
+                "participants": participants_data,
+            }
+        )
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def leave_chat_api(request):
+    """Leave a chat."""
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "Login required"}, status=401)
+
+        data = json.loads(request.body)
+        chat_id = data.get("chat_id")
+        if not chat_id:
+            return JsonResponse({"error": "chat_id required"}, status=400)
+
+        ChatParticipant.objects.filter(chat_id=chat_id, user=request.user).delete()
+
+        return JsonResponse({"message": "Successfully left the chat"})
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def amenity_search_api(request):
+    """Search amenities by name for group chat creation."""
+    q = request.GET.get("q", "").strip()
+    limit = min(int(request.GET.get("limit", 10)), 20)
+
+    if len(q) < 2:
+        return JsonResponse({"amenities": []})
+
+    amenities = (
+        Amenity.objects.filter(name__icontains=q, active=True)
+        .select_related("amenity_type")
+        .order_by("name")[:limit]
+    )
+
+    return JsonResponse(
+        {
+            "amenities": [
+                {
+                    "id": a.id,
+                    "name": a.name,
+                    "address": a.address or "",
+                    "type": a.amenity_type.name,
+                }
+                for a in amenities
+            ]
+        }
+    )
+
+
+@require_http_methods(["GET"])
+@login_required(login_url="/?auth_required=1")
+def user_search_api(request):
+    """Search users by email or username for chat autocomplete."""
+    q = request.GET.get("q", "").strip()
+    limit = min(int(request.GET.get("limit", 10)), 20)
+
+    if len(q) < 2:
+        return JsonResponse({"users": []})
+
+    # Search matching users by email or username, excluding the current user
+    users = (
+        CustomUser.objects.filter(
+            Q(email__icontains=q) | Q(username__icontains=q), is_active=True
+        )
+        .exclude(id=request.user.id)
+        .order_by("email")[:limit]
+    )
+
+    return JsonResponse({"users": [serialize_auth_user(u) for u in users]})
+
+
+@require_http_methods(["GET"])
+def get_amenity_reviewers_api(request):
+    """Get list of recent reviewers for an amenity (for starting group chats)."""
+    try:
+        amenity_id = request.GET.get("amenity_id")
+        limit = int(request.GET.get("limit", 10))
+
+        if not amenity_id:
+            return JsonResponse({"error": "amenity_id parameter required"}, status=400)
+
+        try:
+            amenity = Amenity.objects.get(id=amenity_id)
+        except Amenity.DoesNotExist:
+            return JsonResponse({"error": "Amenity not found"}, status=404)
+
+        # Get recent reviewers
+        reviewers = (
+            Review.objects.filter(amenity=amenity, user__isnull=False)
+            .select_related("user")
+            .order_by("-created_at")[:limit]
+        )
+
+        reviewers_data = [
+            {
+                "user_id": r.user.id,
+                "email": r.user.email,
+                "rating": r.rating,
+                "review_text": r.review_text[:100] if r.review_text else None,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in reviewers
+        ]
+
+        return JsonResponse(
+            {
+                "amenity_id": amenity.id,
+                "amenity_name": amenity.name,
+                "reviewers": reviewers_data,
+                "total_reviewers": len(reviewers_data),
+            },
+            status=200,
+        )
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "Invalid limit parameter"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+def availability_status_api(request, amenity_id):
+    """GET: return available/unavailable counts for the last 3 hours."""
+    from .models import AvailabilityReport, Amenity
+
+    try:
+        amenity = Amenity.objects.get(pk=amenity_id)
+    except Amenity.DoesNotExist:
+        from django.http import JsonResponse
+
+        return JsonResponse({"error": "Not found"}, status=404)
+
+    cutoff = timezone.now() - timedelta(hours=AVAILABILITY_WINDOW_HOURS)
+    reports = AvailabilityReport.objects.filter(
+        amenity=amenity, reported_at__gte=cutoff
+    )
+
+    available_count = reports.filter(is_available=True).count()
+    unavailable_count = reports.filter(is_available=False).count()
+    latest = reports.order_by("-reported_at").first()
+
+    if not request.session.session_key:
+        request.session.create()
+    session_key = request.session.session_key or ""
+
+    user_report = (
+        reports.filter(session_key=session_key).order_by("-reported_at").first()
+    )
+    user_vote = None
+    if user_report:
+        user_vote = "available" if user_report.is_available else "unavailable"
+
+    from django.http import JsonResponse
+
+    return JsonResponse(
+        {
+            "available": available_count,
+            "unavailable": unavailable_count,
+            "total": available_count + unavailable_count,
+            "last_reported": latest.reported_at.isoformat() if latest else None,
+            "user_vote": user_vote,
+            "window_hours": AVAILABILITY_WINDOW_HOURS,
+        }
+    )
+
+
+def report_availability_api(request, amenity_id):
+    """POST: submit or change an availability report."""
+    from django.http import JsonResponse
+    from .models import AvailabilityReport, Amenity
+
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    try:
+        amenity = Amenity.objects.get(pk=amenity_id)
+    except Amenity.DoesNotExist:
+        return JsonResponse({"error": "Not found"}, status=404)
+
+    try:
+        data = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    is_available = data.get("is_available")
+    if is_available is None:
+        return JsonResponse({"error": "is_available is required"}, status=400)
+
+    if not request.session.session_key:
+        request.session.create()
+    session_key = request.session.session_key or ""
+
+    cutoff = timezone.now() - timedelta(hours=AVAILABILITY_WINDOW_HOURS)
+
+    # Delete existing report from this session so they can change their vote
+    AvailabilityReport.objects.filter(
+        amenity=amenity,
+        session_key=session_key,
+        reported_at__gte=cutoff,
+    ).delete()
+
+    AvailabilityReport.objects.create(
+        amenity=amenity,
+        is_available=bool(is_available),
+        session_key=session_key,
+    )
+
+    reports = AvailabilityReport.objects.filter(
+        amenity=amenity, reported_at__gte=cutoff
+    )
+    return JsonResponse(
+        {
+            "ok": True,
+            "available": reports.filter(is_available=True).count(),
+            "unavailable": reports.filter(is_available=False).count(),
+            "total": reports.count(),
+            "user_vote": "available" if is_available else "unavailable",
+        }
+    )

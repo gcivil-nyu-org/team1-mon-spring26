@@ -36,6 +36,8 @@ ALLOWED_HOSTS = [
     ".amenity.help",
 ]
 
+# Trust the X-Forwarded-Proto header from Nginx so Django knows it's HTTPS
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # Application definition
 
@@ -48,7 +50,13 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.gis",
     "django.contrib.postgres",
+    "django.contrib.sites",
     "maps",
+    "storages",
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",
+    "allauth.socialaccount.providers.google",
 ]
 
 MIDDLEWARE = [
@@ -59,19 +67,11 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "django.middleware.gzip.GZipMiddleware",
+    "maps.middleware.SelectiveGZipMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
 ]
 
 ROOT_URLCONF = "django_map.urls"
-
-STORAGES = {
-    "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
-    },
-    "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
-    },
-}
 
 TEMPLATES = [
     {
@@ -92,6 +92,7 @@ WSGI_APPLICATION = "django_map.wsgi.application"
 
 # Get the environment name (set this in the EB Console for each environment)
 APP_ENV = os.environ.get("APP_ENV", "")
+APP_RELEASE = os.environ.get("APP_RELEASE", "1.08")
 DB_NAME = os.environ.get("RDS_DB_NAME", os.environ.get("DB_NAME", "amenities"))
 DB_USER = os.environ.get("RDS_USERNAME", os.environ.get("DB_USER", ""))
 
@@ -106,19 +107,54 @@ if not DB_USER:
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.contrib.gis.db.backends.postgis",
-        "NAME": DB_NAME,
-        "USER": DB_USER,
-        "PASSWORD": os.environ.get(
-            "DB_PASSWORD",
-            os.environ.get("RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword")),
-        ),
-        "HOST": os.environ.get("RDS_HOSTNAME", "localhost"),
-        "PORT": os.environ.get("RDS_PORT", os.environ.get("PGPORT", "5432")),
+# if running as root(=0), we are in pre-deploy and should use RDS DB directly
+RUNNING_AS = os.getuid()
+if os.environ.get("RDS_HOSTNAME") and RUNNING_AS != 0:
+    # on AWS, use RDS pgbouncer proxy
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.contrib.gis.db.backends.postgis",
+            "NAME": DB_NAME,
+            "USER": DB_USER,
+            "PASSWORD": os.environ.get(
+                "DB_PASSWORD",
+                os.environ.get(
+                    "RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword")
+                ),
+            ),
+            "HOST": "localhost",
+            "PORT": 6432,  # pgbouncer port
+            "CONN_MAX_AGE": 0,  # Don't cache connections; let pgbouncer manage pooling
+            "OPTIONS": {
+                # Use pgbouncer's transaction pooling mode
+                # See https://www.pgbouncer.org/config.html#server-pooler-mode
+                # "sslmode": "require",
+                # "connect_timeout": 10,
+                "pool": {
+                    "min_size": 2,
+                    "max_size": 20,  # Adjust based on your expected concurrency per worker
+                    "timeout": 10,  # Seconds to wait for a connection
+                },
+            },
+        }
     }
-}
+else:
+    # local
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.contrib.gis.db.backends.postgis",
+            "NAME": DB_NAME,
+            "USER": DB_USER,
+            "PASSWORD": os.environ.get(
+                "DB_PASSWORD",
+                os.environ.get(
+                    "RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword")
+                ),
+            ),
+            "HOST": os.environ.get("RDS_HOSTNAME", "localhost"),
+            "PORT": os.environ.get("RDS_PORT", os.environ.get("PGPORT", "5432")),
+        }
+    }
 
 
 # Password validation
@@ -152,6 +188,37 @@ USE_I18N = True
 USE_TZ = True
 
 
+# Logging configuration
+# Outputs to console, which AWS Elastic Beanstalk captures in /var/log/web.stdout.log
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[{asctime}] {levelname} [{name}:{lineno}] {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": os.environ.get("DJANGO_LOG_LEVEL", "INFO"),
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": os.environ.get("DJANGO_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+    },
+}
+
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
@@ -161,6 +228,97 @@ STATIC_URL = "/static/"
 # Custom User Model
 AUTH_USER_MODEL = "maps.CustomUser"
 
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",
+]
+
+SITE_ID = int(os.environ.get("SITE_ID", "1"))
+
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/"
+
+SOCIALACCOUNT_LOGIN_ON_GET = True
+SOCIALACCOUNT_ADAPTER = "maps.adapters.GoogleSocialAccountAdapter"
+
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
+
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+
+SOCIALACCOUNT_PROVIDERS = {
+    "google": {
+        "SCOPE": [
+            "profile",
+            "email",
+        ],
+        "AUTH_PARAMS": {
+            "access_type": "online",
+        },
+        "OAUTH_PKCE_ENABLED": True,
+    }
+}
+
+if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
+    SOCIALACCOUNT_PROVIDERS["google"]["APP"] = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "secret": GOOGLE_CLIENT_SECRET,
+    }
+
 # Media files (User uploads)
-MEDIA_URL = "media/"
-MEDIA_ROOT = BASE_DIR / "media"
+if DEBUG:
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
+        },
+    }
+
+    MEDIA_URL = "/media/"
+    MEDIA_ROOT = BASE_DIR / "media"
+else:
+    # Production: S3
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+            "OPTIONS": {
+                "location": os.environ["APP_ENV"],
+                "signature_version": "s3v4",
+                "bucket_name": os.environ["AWS_S3_BUCKET_NAME"],
+                "region_name": os.environ["AWS_S3_REGION_NAME"],
+                "querystring_auth": True,
+                "default_acl": None,
+            },
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+
+# Email configuration
+# Development:
+# - default to console backend so local testing does not require real SMTP
+# Production:
+# - use AWS SES SMTP settings from environment variables
+if DEBUG:
+    EMAIL_BACKEND = os.environ.get(
+        "EMAIL_BACKEND",
+        "django.core.mail.backends.console.EmailBackend",
+    )
+else:
+    EMAIL_BACKEND = os.environ.get(
+        "EMAIL_BACKEND",
+        "django.core.mail.backends.smtp.EmailBackend",
+    )
+
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "contact@amenity.help")
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "465"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "0") == "1"
+EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "1") == "1"

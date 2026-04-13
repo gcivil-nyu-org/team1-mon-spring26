@@ -1,0 +1,75 @@
+<nav class="topnav">
+    <div class="topnav-brand">
+        <span class="topnav-icon">🗽</span>
+        <span class="topnav-name">NYC Essentials</span>
+    </div>
+
+    <div class="topnav-links">
+        <a class="topnav-link{% if map_link_active %} active{% endif %}" href="{{ map_href|default:'/' }}">Map</a>
+        {% if request.user.is_authenticated %}
+            <a class="topnav-link{% if chats_link_active %} active{% endif %}" href="{% url 'maps:chats' %}">Chats</a>
+        {% endif %}
+    </div>
+
+    <div class="topnav-right">
+        {% if show_location %}
+            <span class="loc-indicator" id="location-dot"></span>
+            <span id="location-status" class="loc-status">Locating…</span>
+        {% endif %}
+
+        <!-- TRANSLATE BUTTON (added) -->
+        <button class="btn-icon" id="translate-btn" title="Translate page">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+            </svg>
+        </button>
+
+        {% if show_auth_button %}
+            <button class="btn-auth" id="auth-button">Login</button>
+        {% endif %}
+
+        <div id="user-menu" class="user-menu"{% if hide_user_menu %} style="display:none"{% endif %}>
+            <button id="avatar-button" class="avatar-button" type="button" aria-label="Open user menu">
+                <img id="avatar-image" class="avatar-image" src="{{ avatar_src }}" alt="User avatar" onerror="this.onerror=null;this.src='/static/maps/default-avatar.svg';">
+            </button>
+
+            <div id="user-menu-dropdown" class="user-menu-dropdown" style="display:none;">
+                <div id="user-menu-email" class="user-menu-email">{{ current_email|default:'' }}</div>
+                <div class="user-menu-divider"></div>
+                {% if show_profile_link %}
+                    <a href="{% url 'maps:profile' %}">Profile</a>
+                {% endif %}
+                {% if show_settings_link %}
+                    <a href="{% url 'maps:settings' %}">Settings</a>
+                {% endif %}
+                <button id="logout-link" type="button">Logout</button>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<!-- TRANSLATE MODAL (added) -->
+<div id="translate-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" style="max-width:420px;">
+        <button id="translate-modal-close" class="modal-close">✕</button>
+        <div class="modal-brand">🌐</div>
+        <h3 class="modal-title">Translate Page</h3>
+        <input
+            type="text"
+            id="lang-search"
+            placeholder="Search language…"
+            autocomplete="off"
+            style="width:100%;padding:9px 12px;font-size:13px;font-family:var(--font);
+                   background:var(--surface2);border:1px solid var(--border);border-radius:8px;
+                   color:var(--text-1);outline:none;margin-bottom:10px;display:block;box-sizing:border-box;">
+        <div id="lang-list"
+             style="max-height:300px;overflow-y:auto;border:1px solid var(--border);
+                    border-radius:8px;margin-bottom:14px;">
+        </div>
+        <button id="translate-reset-btn" class="btn-primary"
+                style="background:var(--surface2);color:var(--text-1);border:1px solid var(--border);margin-top:0;">
+            Reset to English
+        </button>
+    </div>
+</div>

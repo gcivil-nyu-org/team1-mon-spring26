@@ -1,6 +1,7 @@
 from django.contrib.gis.db import models
 from django.contrib.postgres.indexes import GistIndex
 from django.contrib.auth.models import AbstractUser
+from django.templatetags.static import static
 import datetime
 
 
@@ -9,6 +10,7 @@ class CustomUser(AbstractUser):
 
     email = models.EmailField(unique=True)
     bio = models.TextField(blank=True)
+    avatar = models.ImageField(upload_to="avatars/%Y/%m/%d/", blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -17,6 +19,16 @@ class CustomUser(AbstractUser):
 
     class Meta:
         ordering = ["-created_at"]
+
+    @property
+    def avatar_url(self):
+        if self.avatar:
+            if hasattr(self.avatar, "storage") and not self.avatar.storage.exists(
+                self.avatar.name
+            ):
+                return static("maps/default-avatar.svg")
+            return self.avatar.url
+        return static("maps/default-avatar.svg")
 
     def __str__(self):
         return self.email
@@ -253,11 +265,79 @@ class Review(models.Model):
         return f"Review by {user_name} for {self.amenity.name} - {self.rating}★"
 
 
+class ReviewVote(models.Model):
+    """Per-user up/down vote for a review."""
+
+    VOTE_CHOICES = [
+        (1, "Upvote"),
+        (-1, "Downvote"),
+    ]
+
+    review = models.ForeignKey(Review, on_delete=models.CASCADE, related_name="votes")
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="review_votes",
+    )
+    value = models.SmallIntegerField(choices=VOTE_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("review", "user")]
+        indexes = [
+            models.Index(fields=["review", "value"], name="review_vote_score_idx"),
+            models.Index(
+                fields=["user", "-updated_at"],
+                name="review_vote_user_updated_idx",
+            ),
+        ]
+
+    def __str__(self):
+        vote_label = "upvote" if self.value == 1 else "downvote"
+        return f"{self.user.email} {vote_label}d review {self.review_id}"
+
+
+class Favorite(models.Model):
+    """Per-user favorite amenity."""
+
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="favorites",
+    )
+    amenity = models.ForeignKey(
+        Amenity,
+        on_delete=models.CASCADE,
+        related_name="favorited_by",
+    )
+    notify_on_updates = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        unique_together = [("user", "amenity")]
+        indexes = [
+            models.Index(fields=["user", "-created_at"], name="fav_user_created_idx"),
+            models.Index(fields=["amenity", "user"], name="fav_amenity_user_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} favorited {self.amenity.name}"
+
+
 class AmenityPhoto(models.Model):
     """Photos for amenities uploaded by users."""
 
     amenity = models.ForeignKey(
         Amenity, on_delete=models.CASCADE, related_name="photos"
+    )
+    review = models.ForeignKey(
+        Review,
+        on_delete=models.CASCADE,
+        related_name="photos",
+        null=True,
+        blank=True,
     )
     photo = models.ImageField(upload_to="amenity_photos/%Y/%m/%d/")
     caption = models.CharField(max_length=300, blank=True)
@@ -271,7 +351,140 @@ class AmenityPhoto(models.Model):
         ordering = ["-is_primary", "-created_at"]
         indexes = [
             models.Index(fields=["amenity", "-is_primary"]),
+            models.Index(fields=["review"]),
         ]
 
     def __str__(self):
         return f"Photo for {self.amenity.name} by {self.uploaded_by.email}"
+
+
+class Chat(models.Model):
+    """Model for individual and group chats."""
+
+    CHAT_TYPE_CHOICES = [
+        ("direct", "Direct Message"),
+        ("group", "Group Chat"),
+        ("amenity_forum", "Amenity Forum"),
+    ]
+
+    chat_type = models.CharField(
+        max_length=20, choices=CHAT_TYPE_CHOICES, default="direct"
+    )
+    amenity = models.ForeignKey(
+        Amenity,
+        on_delete=models.CASCADE,
+        related_name="chats",
+        null=True,
+        blank=True,
+        help_text="For amenity forum chats, reference the amenity being discussed",
+    )
+    created_by = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, related_name="created_chats"
+    )
+    name = models.CharField(
+        max_length=200, blank=True, help_text="Custom name for group and forum chats"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_message_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-last_message_at"]
+        indexes = [
+            models.Index(fields=["-last_message_at"]),
+            models.Index(fields=["chat_type", "-last_message_at"]),
+        ]
+
+    def __str__(self):
+        if self.name:
+            return self.name
+        if self.chat_type == "amenity_forum" and self.amenity:
+            return f"Forum: {self.amenity.name}"
+        return f"Chat {self.id}"
+
+    def get_display_name(self, current_user):
+        """Get the display name for this chat from the perspective of a user."""
+        if self.name:
+            return self.name
+        if self.chat_type == "direct":
+            # For direct chats, show the other person's username if set, else email
+            other_user = self.participants.exclude(user=current_user).first()
+            if other_user:
+                return other_user.user.username or other_user.user.email
+            return "Unknown"
+        if self.chat_type == "amenity_forum" and self.amenity:
+            return f"Forum: {self.amenity.name}"
+        return "Chat"
+
+
+class ChatParticipant(models.Model):
+    """Model to track participants in a chat."""
+
+    chat = models.ForeignKey(
+        Chat, on_delete=models.CASCADE, related_name="participants"
+    )
+    user = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, related_name="chat_participations"
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+    last_read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = [("chat", "user")]
+        ordering = ["joined_at"]
+        indexes = [
+            models.Index(fields=["user", "-joined_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} in {self.chat}"
+
+
+class Message(models.Model):
+    """Model for individual messages in a chat."""
+
+    chat = models.ForeignKey(Chat, on_delete=models.CASCADE, related_name="messages")
+    sender = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, related_name="sent_messages"
+    )
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["chat", "-created_at"]),
+            models.Index(fields=["sender", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Message from {self.sender.email} in {self.chat}"
+
+
+class AvailabilityReport(models.Model):
+    """Crowd-sourced availability report for an amenity. Expires after 3 hours."""
+
+    amenity = models.ForeignKey(
+        Amenity,
+        on_delete=models.CASCADE,
+        related_name="availability_reports",
+    )
+    is_available = models.BooleanField()
+    reported_at = models.DateTimeField(auto_now_add=True)
+    session_key = models.CharField(max_length=64, blank=True)
+
+    class Meta:
+        ordering = ["-reported_at"]
+        indexes = [
+            models.Index(
+                fields=["amenity", "reported_at"], name="avail_amenity_time_idx"
+            ),
+            models.Index(
+                fields=["session_key", "reported_at"], name="avail_session_time_idx"
+            ),
+        ]
+
+    def __str__(self):
+        status = "available" if self.is_available else "unavailable"
+        return f"{self.amenity.name} reported {status} at {self.reported_at}"

@@ -1,9 +1,24 @@
-const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0 }).setView([40.73, -73.99], 13);
+let restoredState = null;
+try {
+    if (!new URLSearchParams(window.location.search).has('auth_required')) {
+        restoredState = JSON.parse(sessionStorage.getItem('mapState'));
+    }
+} catch (e) { /* ignore */ }
+
+const initialCenter = restoredState ? restoredState.center : [40.73, -73.99];
+const initialZoom = restoredState ? restoredState.zoom : 13;
+
+const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0 }).setView(initialCenter, initialZoom);
 
 const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const tileUrl = isLocalhost ? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' : '/tiles/{z}/{x}/{y}.png';
 L.tileLayer(tileUrl, {
-    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    maxZoom: 19,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    className: 'leaflet-tile-osm',
+    keepBuffer: 2,
+    updateWhenZooming: false,
+    updateWhenIdle: true
 }).addTo(map);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 
@@ -28,6 +43,7 @@ let pinnedHoverAmenity     = null;
 let blockNearbyHover       = false;
 let currentUser            = null;
 let hoverTooltipTimer      = null;
+let pendingAmenityFromQuery = null;
 
 const hoursFilter = {
     openNow:      false,
@@ -36,7 +52,23 @@ const hoursFilter = {
     toMinutes:    1439,
 };
 
-function initializeGeolocation() {
+// Utility function to get CSRF token from cookies
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i].trim();
+            if (cookie.substring(0, name.length + 1) === name + '=') {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
+
+function initializeGeolocation(shouldSetView = true) {
     const statusEl = document.getElementById('location-status');
     const dotEl    = document.getElementById('location-dot');
     const locBtn   = document.getElementById('location-button');
@@ -44,13 +76,15 @@ function initializeGeolocation() {
     locBtn.classList.add('locating');
     statusEl.textContent = 'Locating…';
     const tid = setTimeout(() => {
-        if (!userLocation) { statusEl.textContent = 'Default location'; locBtn.classList.remove('locating'); map.setView([40.73, -73.99], 13); }
+        if (!userLocation) { statusEl.textContent = 'Default location'; locBtn.classList.remove('locating'); if (shouldSetView) map.setView([40.73, -73.99], 13); }
     }, 8000);
     navigator.geolocation.getCurrentPosition(
         ({ coords: { latitude, longitude } }) => {
             clearTimeout(tid);
             userLocation = { latitude, longitude };
-            map.setView([latitude, longitude], 15);
+            if (shouldSetView) {
+                map.setView([latitude, longitude], 15);
+            }
             if (userMarker) map.removeLayer(userMarker);
             userMarker = L.marker([latitude, longitude], { title: 'Your Location', zIndexOffset: 100 }).addTo(map);
             userMarker.bindPopup('Your Location');
@@ -62,8 +96,10 @@ function initializeGeolocation() {
             clearTimeout(tid);
             locBtn.classList.remove('locating');
             dotEl.classList.add('denied');
-            statusEl.textContent = ({ 1: 'Permission denied', 2: 'Unavailable', 3: 'Timed out' })[err.code] || 'Unable to locate';
-            map.setView([40.73, -73.99], 13);
+            statusEl.textContent = ({ 1: 'no location found', 2: 'Unavailable', 3: 'Timed out' })[err.code] || 'Unable to locate';
+            if (shouldSetView) {
+                map.setView([40.73, -73.99], 13);
+            }
         },
         { enableHighAccuracy: true, timeout: 7000, maximumAge: 0 }
     );
@@ -73,6 +109,16 @@ function retryGeolocation() {
     userLocation = null;
     document.getElementById('location-dot').classList.remove('found', 'denied');
     if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
+    
+    if (selectedLocationMarker) {
+        map.removeLayer(selectedLocationMarker);
+        selectedLocationMarker = null;
+    }
+    const inp = document.getElementById('search-input');
+    if (inp) {
+        inp.value = '';
+        inp.closest('.search-box').classList.remove('has-value');
+    }
     initializeGeolocation();
 }
 
@@ -131,6 +177,7 @@ function loadAmenityTypes() {
             });
         });
         updateHoursFilterVisibility();
+        loadAmenities();
     }).catch(e => console.error('Error loading types:', e));
 }
 
@@ -367,11 +414,14 @@ function setupSidebarToggle() {
     const sidebar = document.getElementById('sidebar');
     const openBtn = document.getElementById('sidebar-open-btn');
     const body = document.body;
+    let isMobileViewport = window.innerWidth <= 768;
+    let viewportSwitchTimer = null;
 
     function collapse() {
         sidebar.classList.add('collapsed');
         openBtn.style.display = 'flex';
         body.classList.remove('sidebar-open');
+        requestAnimationFrame(() => map.invalidateSize());
     }
 
     function expand() {
@@ -381,17 +431,35 @@ function setupSidebarToggle() {
         if (window.innerWidth <= 768) {
             closeDetailPanel();
         }
+        requestAnimationFrame(() => map.invalidateSize());
+    }
+
+    function applyInitialSidebarState() {
+        if (window.innerWidth <= 768) {
+            collapse();
+            return;
+        }
+
+        expand();
     }
 
     document.getElementById('sidebar-toggle').addEventListener('click', collapse);
     openBtn.addEventListener('click', expand);
+    window.addEventListener('resize', () => {
+        const nextIsMobileViewport = window.innerWidth <= 768;
+        if (nextIsMobileViewport === isMobileViewport) return;
+
+        isMobileViewport = nextIsMobileViewport;
+        body.classList.add('viewport-switching');
+        clearTimeout(viewportSwitchTimer);
+        viewportSwitchTimer = setTimeout(() => {
+            body.classList.remove('viewport-switching');
+        }, 220);
+        requestAnimationFrame(() => map.invalidateSize({ pan: false }));
+    });
 
     // Default state based on screen size
-    if (window.innerWidth <= 768) {
-        collapse();
-    } else {
-        expand();
-    }
+    applyInitialSidebarState();
 }
 
 const hoverTooltip = (() => {
@@ -449,6 +517,8 @@ const hoverTooltip = (() => {
             el.style.opacity = '0'; 
             setTimeout(() => { if (el.style.opacity === '0') el.style.display = 'none'; }, 150); 
         },
+        isVisible()         { return el.style.display !== 'none'; },
+        getCurrentAmenity() { return currentA; }
     };
 })();
 
@@ -498,11 +568,21 @@ function buildTooltipHtml(a) {
         ratingRow = `<div class="tt-row"><span class="tt-lbl">Rating</span><span class="tt-val"><span style="color:#f59e0b">${'★'.repeat(s)}${'☆'.repeat(5-s)}</span> <span class="tt-muted">${(+a.rating).toFixed(1)} (${a.review_count})</span></span></div>`;
     }
 
-    const refLat = userLocation ? userLocation.latitude  : map.getCenter().lat;
-    const refLon = userLocation ? userLocation.longitude : map.getCenter().lng;
+    let refLat, refLon, distLabel2;
+    if (selectedLocationMarker) {
+        const ll = selectedLocationMarker.getLatLng();
+        refLat = ll.lat; refLon = ll.lng;
+        distLabel2 = 'Distance';
+    } else if (userLocation) {
+        refLat = userLocation.latitude; refLon = userLocation.longitude;
+        distLabel2 = 'Distance';
+    } else {
+        refLat = map.getCenter().lat; refLon = map.getCenter().lng;
+        distLabel2 = 'From center';
+    }
+
     const mi = haversineKm(refLat, refLon, a.latitude, a.longitude) * 0.621371;
     const distStr = mi < 0.1 ? `${Math.round(mi * 5280)} ft` : `${mi.toFixed(2)} mi`;
-    const distLabel2 = userLocation ? 'Distance' : 'From center';
     const distRow = `<div class="tt-row"><span class="tt-lbl">${distLabel2}</span><span class="tt-val" style="color:var(--accent,#1a6ef5);font-weight:600">${distStr}</span></div>`;
 
     return `<style>
@@ -543,31 +623,64 @@ function addAmenityMarker(amenity) {
     }
 
     const filt = amenity.active ? '' : 'opacity(0.4)';
-    const svgPaths = {
-        droplet:   '<path d="M12 0C8 8,2 14,2 19C2 26.7,6.5 32,12 32C17.5 32,22 26.7,22 19C22 14,16 8,12 0Z"/>',
-        restroom:  '<path d="M4,8C4,6.34 5.34,5 7,5C8.66,5 10,6.34 10,8C10,9.66 8.66,11 7,11C5.34,11 4,9.66 4,8M17,5C15.34,5 14,6.34 14,8C14,9.66 15.34,11 17,11C18.66,11 20,9.66 20,8C20,6.34 18.66,5 17,5M12,13L12,30L16,30L16,20L18,20L18,30L22,30L22,13L12,13M2,13L2,30L6,30L6,20L8,20L8,30L12,30L12,13L2,13Z"/>',
-        bicycle:   '<path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>',
-        snowflake: '<path d="M12 2.5l-2.5 4.33h5L12 2.5zm0 19l-2.5-4.33h5L12 21.5zM4.33 7.5L2.5 12l1.83 4.5h4.34L4.33 7.5zm15.34 0L15.33 12l1.83 4.5h4.34L19.67 7.5zM8.67 16.5L12 10l3.33 6.5H8.67zm0-9L12 14l3.33-6.5H8.67z" transform="scale(1.2) translate(-2,-2)"/>',
-        // wifi signal bars for LinkNYC Kiosk
-        wifi:      '<path d="M12 4C7.6 4 3.6 5.8 0.7 8.7L3.5 11.5C5.7 9.3 8.7 8 12 8C15.3 8 18.3 9.3 20.5 11.5L23.3 8.7C20.4 5.8 16.4 4 12 4ZM12 12C9.8 12 7.8 12.9 6.3 14.4L9.1 17.2C9.9 16.4 11 16 12 16C13 16 14.1 16.4 14.9 17.2L17.7 14.4C16.2 12.9 14.2 12 12 12ZM12 20C10.9 20 10 20.9 10 22C10 23.1 10.9 24 12 24C13.1 24 14 23.1 14 22C14 20.9 13.1 20 12 20Z"/>',
-        default:   '<path d="M12 0C8 8,2 14,2 19C2 26.7,6.5 32,12 32C17.5 32,22 26.7,22 19C22 14,16 8,12 0Z"/>',
-    };
-    const icon = L.divIcon({
-        html: `<div style="width:24px;height:32px;filter:${filt}">
+    let icon;
+
+    if (amenity.icon === 'restroom') {
+        icon = L.divIcon({
+            // 🚽🧻🚻🚾🚹
+            html: `<div style="font-size: 24px; text-shadow: 0 0 3px #fff, 0 0 5px #fff;">🚹</div>`,
+            className: 'leaflet-div-icon-custom amenity-marker-icon',
+            iconSize: [24, 24],
+            iconAnchor: [12, 24],
+            popupAnchor: [0, -24],
+        });
+    } else {
+        const svgPaths = {
+            droplet:   '<path d="M12 0C8 8,2 14,2 19C2 26.7,6.5 32,12 32C17.5 32,22 26.7,22 19C22 14,16 8,12 0Z"/>',
+            bicycle:   '<path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>',
+            snowflake: '<path d="M12 2.5l-2.5 4.33h5L12 2.5zm0 19l-2.5-4.33h5L12 21.5zM4.33 7.5L2.5 12l1.83 4.5h4.34L4.33 7.5zm15.34 0L15.33 12l1.83 4.5h4.34L19.67 7.5zM8.67 16.5L12 10l3.33 6.5H8.67zm0-9L12 14l3.33-6.5H8.67z" transform="scale(1.2) translate(-2,-2)"/>',
+            // wifi signal bars for LinkNYC Kiosk
+            wifi:      '<path d="M12 4C7.6 4 3.6 5.8 0.7 8.7L3.5 11.5C5.7 9.3 8.7 8 12 8C15.3 8 18.3 9.3 20.5 11.5L23.3 8.7C20.4 5.8 16.4 4 12 4ZM12 12C9.8 12 7.8 12.9 6.3 14.4L9.1 17.2C9.9 16.4 11 16 12 16C13 16 14.1 16.4 14.9 17.2L17.7 14.4C16.2 12.9 14.2 12 12 12ZM12 20C10.9 20 10 20.9 10 22C10 23.1 10.9 24 12 24C13.1 24 14 23.1 14 22C14 20.9 13.1 20 12 20Z"/>',
+            default:   '<path d="M12 0C8 8,2 14,2 19C2 26.7,6.5 32,12 32C17.5 32,22 26.7,22 19C22 14,16 8,12 0Z"/>',
+        };
+        icon = L.divIcon({
+            html: `<div style="width:24px;height:32px;filter:${filt}">
             <svg viewBox="0 0 24 32" width="24" height="32" xmlns="http://www.w3.org/2000/svg">
                 <defs><style>.p${amenity.id}{fill:${amenity.color};stroke:rgba(0,0,0,.22);stroke-width:.5}</style></defs>
                 <g class="p${amenity.id}">${svgPaths[amenity.icon] || svgPaths.default}</g>
             </svg></div>`,
-        iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -32], className: 'leaflet-div-icon-custom amenity-marker-icon',
-    });
+            iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -32], className: 'leaflet-div-icon-custom amenity-marker-icon',
+        });
+    }
 
     const marker = L.marker([amenity.latitude, amenity.longitude], { icon, amenityData: amenity });
-    marker.on('mouseover', e => { clearTimeout(hoverTooltipTimer); hoverTooltip.show(amenity, e.originalEvent.clientX, e.originalEvent.clientY); });
-    marker.on('mousemove', e => hoverTooltip.move(e.originalEvent.clientX, e.originalEvent.clientY));
-    marker.on('mouseout',  () => { hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); });
+    
+    // Desktop hover behavior
+    marker.on('mouseover', e => { 
+        if (window.innerWidth > 768) { clearTimeout(hoverTooltipTimer); hoverTooltip.show(amenity, e.originalEvent.clientX, e.originalEvent.clientY); }
+    });
+    marker.on('mousemove', e => { 
+        if (window.innerWidth > 768) hoverTooltip.move(e.originalEvent.clientX, e.originalEvent.clientY); 
+    });
+    marker.on('mouseout',  () => { 
+        if (window.innerWidth > 768) hoverTooltipTimer = setTimeout(() => hoverTooltip.hide(), 80); 
+    });
+
     marker.on('click', e => {
-        hoverTooltip.hide();
-        showDetailPanel(amenity); 
+        if (window.innerWidth <= 768) {
+            if (hoverTooltip.isVisible() && hoverTooltip.getCurrentAmenity() === amenity) {
+                hoverTooltip.hide();
+                showDetailPanel(amenity);
+            } else {
+                // Calculate position relative to the pin explicitly
+                const pt = map.latLngToContainerPoint([amenity.latitude, amenity.longitude]);
+                const rect = document.getElementById('map').getBoundingClientRect();
+                hoverTooltip.show(amenity, rect.left + pt.x, rect.top + pt.y);
+            }
+        } else {
+            hoverTooltip.hide();
+            showDetailPanel(amenity); 
+        }
     });
 
     if (amenity.type === 'Bike Rack' || amenity.type.includes('Bike Rack')) bikeRackMarkers.addLayer(marker);
@@ -578,11 +691,6 @@ function haversineKm(lat1, lon1, lat2, lon2) {
     const R = 6371, dLat = (lat2 - lat1) * Math.PI / 180, dLon = (lon2 - lon1) * Math.PI / 180;
     const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function distLabel(fromLat, fromLon, toLat, toLon) {
-    const mi = haversineKm(fromLat, fromLon, toLat, toLon) * 0.621371;
-    return mi < 0.1 ? `${Math.round(mi * 5280)} ft` : `${mi.toFixed(2)} mi`;
 }
 
 function showDetailPanel(amenity, activeTab = 'overview') {
@@ -623,6 +731,8 @@ function showDetailPanel(amenity, activeTab = 'overview') {
             document.body.classList.remove('sidebar-open');
         }
     }
+
+    wireFavoriteToggle(amenity);
 }
 
 function switchDetailTab(name) {
@@ -649,9 +759,24 @@ function closeDetailPanel(keepPinned = false) {
 
 function renderOverviewTab(amenity) {
     const todayIdx = jsToDbIdx(new Date().getDay());
+    const isFavorited = Boolean(amenity.is_favorited);
     let html = '';
 
     html += `<div class="dp-section"><span class="dp-status ${amenity.active ? 'active' : 'inactive'}">${amenity.active ? 'Active' : 'Inactive'}</span></div>`;
+    html += `<div class="dp-section" id="availability-section-${amenity.id}">
+    <div class="dp-field-label">Is it available right now?</div>
+    <div class="avail-loading" style="font-size:12px;color:var(--text-3);">Loading reports…</div>
+    </div>`;
+
+    if (currentUser && currentUser.is_authenticated) {
+        html += `<div class="dp-section">
+            <button type="button" class="dp-favorite-btn ${isFavorited ? 'is-active' : ''}" data-action="toggle-favorite" data-amenity-id="${amenity.id}">
+                ${isFavorited ? '★ Remove from favorites' : '☆ Add to favorites'}
+            </button>
+        </div>`;
+    } else {
+        html += `<div class="dp-section"><div class="review-login-prompt">Please <a href="#" class="js-open-auth">sign in</a> to save this amenity as a favorite.</div></div>`;
+    }
 
     const locParts = [amenity.prop_name, amenity.position, amenity.address].filter(Boolean);
     if (locParts.length) html += `<div class="dp-section"><div class="dp-field-label">Location</div><div class="dp-field-value">${locParts.join(' · ')}</div></div>`;
@@ -688,14 +813,173 @@ function renderOverviewTab(amenity) {
 
     html += `<div class="dp-section"><div class="dp-field-label">Coordinates</div><div class="dp-field-value" style="font-family:var(--mono);font-size:12px;color:var(--text-2)">${amenity.latitude.toFixed(5)}, ${amenity.longitude.toFixed(5)}</div></div>`;
 
-    const walkUrl  = `https://www.google.com/maps/dir/?api=1&destination=${amenity.latitude},${amenity.longitude}&travelmode=walking`;
-    const bikeUrl  = `https://www.google.com/maps/dir/?api=1&destination=${amenity.latitude},${amenity.longitude}&travelmode=bicycling`;
+    let origin = '';
+    if (selectedLocationMarker) {
+        const { lat, lng } = selectedLocationMarker.getLatLng();
+        origin = `&origin=${lat},${lng}`;
+    }
+    const walkUrl  = `https://www.google.com/maps/dir/?api=1&destination=${amenity.latitude},${amenity.longitude}${origin}&travelmode=walking`;
+    const bikeUrl  = `https://www.google.com/maps/dir/?api=1&destination=${amenity.latitude},${amenity.longitude}${origin}&travelmode=bicycling`;
     html += `<div class="dp-section"><div class="dp-nav">
         <a href="${walkUrl}" target="_blank" class="dp-nav-btn">🚶 Walk there</a>
         <a href="${bikeUrl}" target="_blank" class="dp-nav-btn">🚴 Bike there</a>
     </div></div>`;
 
     document.getElementById('tab-overview').innerHTML = html;
+    loadAvailabilitySection(amenity);
+
+    const loginLink = document.querySelector('#tab-overview .js-open-auth');
+    if (loginLink) {
+        loginLink.addEventListener('click', e => {
+            e.preventDefault();
+            switchAuthTab('login-tab');
+            showAuthModal();
+        });
+    }
+}
+
+function loadAvailabilitySection(amenity) {
+    fetch(`/api/amenities/${amenity.id}/availability/`)
+        .then(r => r.json())
+        .then(data => {
+            const section = document.getElementById(`availability-section-${amenity.id}`);
+            if (!section) return;
+
+            const total = data.total || 0;
+            const availPct = total > 0 ? Math.round((data.available / total) * 100) : null;
+            const userVote = data.user_vote;
+
+            let timeAgo = '';
+            if (data.last_reported) {
+                const mins = Math.round((Date.now() - new Date(data.last_reported)) / 60000);
+                timeAgo = mins < 2 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.floor(mins/60)}h ago`;
+            }
+
+            const barHtml = total > 0 ? `
+                <div style="margin:8px 0 6px;">
+                    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-3);margin-bottom:4px;">
+                        <span style="color:var(--green)">✓ Available · ${data.available}</span>
+                        <span style="color:var(--red)">✗ Unavailable · ${data.unavailable}</span>
+                    </div>
+                    <div style="height:6px;border-radius:3px;background:var(--red-lt);overflow:hidden;">
+                        <div style="height:100%;width:${availPct}%;background:var(--green);border-radius:3px;transition:width .3s ease;"></div>
+                    </div>
+                    <div style="font-size:11px;color:var(--text-3);margin-top:4px;">${total} report${total !== 1 ? 's' : ''} · last ${timeAgo} · resets every 3h</div>
+                </div>` : `<div style="font-size:12px;color:var(--text-3);margin:6px 0 8px;">No reports yet in the last 3 hours. Be the first!</div>`;
+
+            const availActive = userVote === 'available';
+            const unavailActive = userVote === 'unavailable';
+
+            section.innerHTML = `
+                <div class="dp-field-label">Is it available right now?</div>
+                ${barHtml}
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;">
+                    <button type="button" class="avail-btn" data-vote="true"
+                        style="padding:9px 0;border-radius:8px;border:1.5px solid ${availActive ? 'var(--green)' : 'var(--border)'};
+                               background:${availActive ? 'var(--green-lt)' : 'var(--surface2)'};
+                               color:${availActive ? 'var(--green)' : 'var(--text-2)'};
+                               font-size:13px;font-weight:600;font-family:var(--font);cursor:pointer;transition:all .15s ease;">
+                        ✓ Available${availActive ? ' ✓' : ''}
+                    </button>
+                    <button type="button" class="avail-btn" data-vote="false"
+                        style="padding:9px 0;border-radius:8px;border:1.5px solid ${unavailActive ? 'var(--red)' : 'var(--border)'};
+                               background:${unavailActive ? 'var(--red-lt)' : 'var(--surface2)'};
+                               color:${unavailActive ? 'var(--red)' : 'var(--text-2)'};
+                               font-size:13px;font-weight:600;font-family:var(--font);cursor:pointer;transition:all .15s ease;">
+                        ✗ Unavailable${unavailActive ? ' ✓' : ''}
+                    </button>
+                </div>`;
+
+            section.querySelectorAll('.avail-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const isAvailable = btn.dataset.vote === 'true';
+                    btn.disabled = true;
+                    btn.textContent = 'Saving…';
+                    fetch(`/api/amenities/${amenity.id}/availability/report/`, {
+                        method: 'POST',
+                        headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken'),
+                        },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({ is_available: isAvailable }),
+                    })
+                    .then(r => r.json())
+                    .then(d => {
+                        if (d.ok) {
+                            showToast(isAvailable ? 'Marked as available!' : 'Marked as unavailable.', isAvailable ? 'success' : 'warn');
+                            loadAvailabilitySection(amenity);
+                        }
+                    })
+                    .catch(() => showToast('Could not save report.', 'error'));
+                });
+            });
+        })
+        .catch(() => {
+            const section = document.getElementById(`availability-section-${amenity.id}`);
+            if (section) section.querySelector('.avail-loading').textContent = 'Could not load availability.';
+        });
+}
+
+function wireFavoriteToggle(amenity) {
+    const favoriteButton = document.querySelector('#tab-overview [data-action="toggle-favorite"]');
+    if (!favoriteButton) return;
+
+    favoriteButton.addEventListener('click', () => {
+        toggleAmenityFavorite(amenity, favoriteButton);
+    });
+}
+
+function updateAmenityFavoriteStateInCache(amenityId, isFavorited) {
+    Object.values(allAmenitiesData).forEach(items => {
+        items.forEach(item => {
+            if (Number(item.id) === Number(amenityId)) {
+                item.is_favorited = isFavorited;
+            }
+        });
+    });
+}
+
+function toggleAmenityFavorite(amenity, buttonEl) {
+    if (!currentUser || !currentUser.is_authenticated) {
+        showToast('Please sign in to save favorites.', 'warn');
+        return;
+    }
+
+    const isCurrentlyFavorited = Boolean(amenity.is_favorited);
+    const method = isCurrentlyFavorited ? 'DELETE' : 'POST';
+
+    buttonEl.disabled = true;
+
+    fetch(`/api/amenities/${amenity.id}/favorite/`, {
+        method,
+        credentials: 'same-origin',
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400) {
+                showToast(b.error || 'Unable to update favorite.', 'error');
+                return;
+            }
+
+            const nextValue = Boolean(b.is_favorited);
+            amenity.is_favorited = nextValue;
+            updateAmenityFavoriteStateInCache(amenity.id, nextValue);
+
+            if (currentDetailAmenity && Number(currentDetailAmenity.id) === Number(amenity.id)) {
+                currentDetailAmenity.is_favorited = nextValue;
+            }
+
+            renderOverviewTab(amenity);
+            wireFavoriteToggle(amenity);
+            showToast(nextValue ? 'Added to favorites.' : 'Removed from favorites.', 'success');
+        })
+        .catch(() => {
+            showToast('Network error while updating favorite.', 'error');
+        })
+        .finally(() => {
+            buttonEl.disabled = false;
+        });
 }
 
 function renderNearbyTab(a) {
@@ -897,28 +1181,48 @@ function renderReviewsTab(amenity) {
     html += `<div class="dp-section">
         <div class="dp-field-label">Community Rating</div>
         <div class="rv-rating-row">`;
+
     if (hasRating) {
         const avg = +amenity.rating;
         const filled = Math.round(avg);
         const stars  = '★'.repeat(filled) + '☆'.repeat(5 - filled);
-        html += `<span class="rv-rating-big">${avg.toFixed(1)}</span>
-            <div class="rv-rating-right">
-                <div class="rv-stars">${stars}</div>
-                <div class="rv-count">${amenity.review_count} review${amenity.review_count !== 1 ? 's' : ''}</div>
-            </div>`;
+        const totalReviews = amenity.review_count || 0;
+
+        html += `<div class="rv-rating-left">
+                    <span class="rv-rating-big">${avg.toFixed(1)}</span>
+                    <div class="rv-stars">${stars}</div>
+                    <div class="rv-count">${totalReviews} review${totalReviews !== 1 ? 's' : ''}</div>
+                </div>
+                <div class="rv-rating-right">
+                    <div class="rating-histo-container">
+                        <div class="loading-spinner"></div>
+                    </div>
+                </div>`;
     } else {
-        html += `<span class="rv-rating-big" style="font-size:26px">-</span>
-            <div class="rv-rating-right">
-                <div class="rv-stars">☆☆☆☆☆</div>
-                <div class="rv-count">No ratings yet</div>
-            </div>`;
+        html += `<div class="rv-rating-left">
+                    <span class="rv-rating-big" style="font-size:26px">-</span>
+                    <div class="rv-stars">☆☆☆☆☆</div>
+                    <div class="rv-count">No ratings yet</div>
+                </div>
+                <div class="rv-rating-right">
+                    <div class="rating-histo">`;
+        for (let i = 5; i >= 1; i--) {
+             html += `<div class="rating-histo-row">
+                        <div class="rating-histo-label">${i} ★</div>
+                        <div class="rating-histo-bar-wrap">
+                            <div class="rating-histo-bar" style="width: 0%"></div>
+                        </div>
+                         <div class="rating-histo-count">0</div>
+                    </div>`;
+        }
+        html += `</div></div>`;
     }
     html += `</div></div>`;
 
     const reviews = amenity.reviews || [];
     const loggedIn = currentUser && currentUser.is_authenticated;
     const currentEmail = (currentUser?.email || '').toLowerCase();
-    const alreadyReviewed = loggedIn && reviews.some(r => (r.user_name || '').toLowerCase() === currentEmail);
+    const alreadyReviewed = loggedIn && reviews.some(r => (r.user_email || r.user_name || '').toLowerCase() === currentEmail);
 
     if (!loggedIn) {
         html += `<div class="review-login-prompt">Please <a href="#" class="js-open-auth">sign in</a> to add a review.</div>`;
@@ -935,50 +1239,70 @@ function renderReviewsTab(amenity) {
                 <button type="button" class="star-btn lit" data-value="5" aria-label="Rate 5 stars">★</button>
             </div>
             <textarea class="review-textarea js-review-text" rows="3" maxlength="600" placeholder="Share your experience at this location (optional)..."></textarea>
-            <input type="file" class="js-review-photo" accept="image/*" style="margin-top:8px;font-size:12px;color:var(--text-2)">
-            <div style="display:flex;justify-content:flex-end">
+            <div style="margin-top:12px">
+                <label style="display:block;font-size:12px;color:var(--text-2);margin-bottom:6px;font-weight:500">Add Photos (optional)</label>
+                <p style="font-size:11px;color:var(--text-3);margin:0 0 6px 0">Max 5MB per photo, up to 5 photos</p>
+                <input type="file" class="js-review-photos" accept="image/*" multiple style="font-size:12px;color:var(--text-2)">
+                <div class="js-photo-preview" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:8px;margin-top:8px"></div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;margin-top:12px">
                 <button type="button" class="review-submit js-review-submit">Submit Review</button>
             </div>
         </div>`;
     }
 
     if (reviews.length) {
-        const byRecent = [...reviews].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        const top  = [...reviews].sort((a, b) => (b.rating - a.rating) || (new Date(b.created_at) - new Date(a.created_at)))[0];
+        const byVote = [...reviews].sort(compareReviewsByVotes);
+        const top = byVote[0];
         const stars = '★'.repeat(top.rating) + '☆'.repeat(5 - top.rating);
         const date  = new Date(top.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-        const initial = (top.user_name || '?').charAt(0).toUpperCase();
+        const topReviewerName = getReviewerName(top);
+        const isTopOtherUser = loggedIn && currentEmail !== (top.user_email || '').toLowerCase();
         html += `<div class="dp-section">
-            <div class="dp-field-label">Most Popular Review</div>
+            <div class="dp-field-label">Top Voted Review</div>
             <div class="rv-review-card">
                 <div class="rv-review-header">
-                    <div class="rv-avatar">${initial}</div>
+                    ${renderReviewerAvatar(top)}
                     <div class="rv-review-meta">
-                        <div class="rv-reviewer">${top.user_name}</div>
+                        <div class="rv-reviewer ${isTopOtherUser ? 'clickable-username' : ''}" 
+                            data-user-email="${top.user_email || top.user_name}">
+                            ${topReviewerName}
+                        </div>
                         <div class="rv-review-stars">${stars}</div>
                     </div>
                     <div class="rv-review-date">${date}</div>
                 </div>
                 <div class="rv-review-text">${top.review_text || 'No written comment.'}</div>
-                ${top.photo_url ? `<img class="rv-review-photo" src="${top.photo_url}" alt="Review photo">` : ''}
+                ${renderVoteControls(top, loggedIn, currentEmail, true)}
+                ${renderReviewPhotos(top)}
             </div>
         </div>`;
 
-        const otherReviews = byRecent.filter(r => r !== top);
+        const otherReviews = byVote.filter(r => r !== top);
         if (otherReviews.length) {
             html += `<div class="dp-section">
                 <div class="dp-field-label">Recent Reviews</div>
                 <div class="review-list">${otherReviews.map(r => {
+                    const reviewerName = getReviewerName(r);
                     const rStars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
                     const rDate = new Date(r.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                    const isOtherUser = loggedIn && currentEmail !== (r.user_email || '').toLowerCase();
                     return `<div class="review-card">
                         <div class="review-card-top">
-                            <div class="review-user">${r.user_name}</div>
+                            <div class="review-reviewer-row">
+                                ${renderReviewerAvatar(r, 'review-avatar')}
+                                <div class="review-user ${isOtherUser ? 'clickable-username' : ''}" 
+                                    data-user-email="${r.user_email || r.user_name}">
+                                    ${reviewerName}
+                                </div>
+                            </div>
+
                             <div class="review-date">${rDate}</div>
                         </div>
                         <div class="review-stars">${rStars}</div>
                         <div class="review-text">${r.review_text || 'No written comment.'}</div>
-                        ${r.photo_url ? `<img class="review-photo" src="${r.photo_url}" alt="Review photo">` : ''}
+                        ${renderVoteControls(r, loggedIn, currentEmail)}
+                        ${renderReviewPhotos(r)}
                     </div>`;
                 }).join('')}</div>
             </div>`;
@@ -988,6 +1312,59 @@ function renderReviewsTab(amenity) {
     }
 
     pane.innerHTML = html;
+
+    if (hasRating) {
+        fetch(`/api/amenities/${amenity.id}/rating-distribution/`)
+            .then(response => response.json())
+            .then(data => {
+                const histoContainer = pane.querySelector('.rating-histo-container');
+                if (!histoContainer) return;
+
+                const distribution = data.rating_distribution || [];
+                const ratingCounts = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+                let maxCount = 0;
+
+                distribution.forEach(item => {
+                    const rating = Math.round(Number(item.rating));
+                    if (rating >= 1 && rating <= 5) {
+                        ratingCounts[rating] = item.count;
+                        if (item.count > maxCount) {
+                            maxCount = item.count;
+                        }
+                    }
+                });
+
+                let histoHtml = '<div class="rating-histo">';
+                for (let i = 5; i >= 1; i--) {
+                    const count = ratingCounts[i];
+                    const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                    histoHtml += `<div class="rating-histo-row">
+                                <div class="rating-histo-label">${i}</div>
+                                <div class="rating-histo-bar-wrap">
+                                    <div class="rating-histo-bar" style="width: ${percentage}%"></div>
+                                </div>
+                            </div>`;
+                }
+                histoHtml += '</div>';
+                histoContainer.innerHTML = histoHtml;
+            }).catch(e => {
+                const histoContainer = pane.querySelector('.rating-histo-container');
+                if (histoContainer) {
+                    histoContainer.innerHTML = '<div class="rv-count">Could not load rating details.</div>';
+                }
+                console.error('Failed to load rating distribution', e);
+            });
+    }
+
+    // Setup clickable usernames for messaging
+    pane.querySelectorAll('.clickable-username').forEach(username => {
+        username.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const userEmail = username.dataset.userEmail;
+            showMessagingMenu(userEmail, amenity);
+        });
+    });
 
     const loginLink = pane.querySelector('.js-open-auth');
     if (loginLink) {
@@ -1003,6 +1380,9 @@ function renderReviewsTab(amenity) {
         submitBtn.addEventListener('click', () => submitReview(amenity, pane));
     }
 
+    attachVoteHandlers(amenity, pane);
+    attachReviewPhotoCarousels(pane);
+
     const starPicker = pane.querySelector('.js-star-picker');
     if (starPicker) {
         const stars = starPicker.querySelectorAll('.star-btn');
@@ -1014,6 +1394,79 @@ function renderReviewsTab(amenity) {
             });
         });
     }
+
+    // Handle multiple photo uploads with preview
+    const photoInput = pane.querySelector('.js-review-photos');
+    if (photoInput) {
+        photoInput.addEventListener('change', () => {
+            updatePhotoPreview(pane);
+        });
+    }
+}
+
+function updatePhotoPreview(pane) {
+    const photoInput = pane.querySelector('.js-review-photos');
+    const previewContainer = pane.querySelector('.js-photo-preview');
+    if (!photoInput || !previewContainer) return;
+
+    const files = Array.from(photoInput.files);
+    if (files.length > 5) {
+        const dt = new DataTransfer();
+        files.slice(0, 5).forEach(file => dt.items.add(file));
+        photoInput.files = dt.files;
+        showToast('You can upload up to 5 photos per review.', 'warn');
+    }
+
+    const previewFiles = Array.from(photoInput.files);
+    previewContainer.innerHTML = '';
+
+    previewFiles.forEach((file, index) => {
+        // Validate file size
+        const maxSize = 5 * 1024 * 1024;
+        if (file.size > maxSize) {
+            showToast(`Photo "${file.name}" exceeds 5MB limit and will be skipped`, 'warn');
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const thumb = document.createElement('div');
+            thumb.className = 'photo-thumb';
+            thumb.style.cssText = 'position:relative;border-radius:4px;overflow:hidden;background:#f0f0f0;aspect-ratio:1;cursor:pointer';
+            thumb.innerHTML = `
+                <img src="${e.target.result}" style="width:100%;height:100%;object-fit:cover;display:block">
+                <button type="button" class="photo-thumb-delete" data-index="${index}" 
+                    style="position:absolute;top:2px;right:2px;background:#ff4444;color:white;border:none;border-radius:3px;width:20px;height:20px;padding:0;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center">×</button>
+            `;
+            previewContainer.appendChild(thumb);
+
+            thumb.querySelector('.photo-thumb-delete').addEventListener('click', (evt) => {
+                evt.preventDefault();
+                evt.stopPropagation();
+                const dt = new DataTransfer();
+                Array.from(photoInput.files).forEach((f, i) => {
+                    if (i !== index) dt.items.add(f);
+                });
+                photoInput.files = dt.files;
+                updatePhotoPreview(pane);
+            });
+        };
+        reader.readAsDataURL(file);
+    });
+
+    if (previewFiles.length > 0) {
+        // Show file count
+        if (previewContainer.previousElementSibling && previewContainer.previousElementSibling.classList.contains('photo-count')) {
+            previewContainer.previousElementSibling.remove();
+        }
+        const countEl = document.createElement('p');
+        countEl.className = 'photo-count';
+        countEl.style.cssText = 'font-size:11px;color:var(--text-3);margin:0 0 6px 0';
+        countEl.textContent = `${previewFiles.length} photo${previewFiles.length !== 1 ? 's' : ''} selected`;
+        previewContainer.parentNode.insertBefore(countEl, previewContainer);
+    } else if (previewContainer.previousElementSibling && previewContainer.previousElementSibling.classList.contains('photo-count')) {
+        previewContainer.previousElementSibling.remove();
+    }
 }
 
 function submitReview(amenity, pane) {
@@ -1024,12 +1477,11 @@ function submitReview(amenity, pane) {
 
     const textEl = pane.querySelector('.js-review-text');
     const starPicker = pane.querySelector('.js-star-picker');
-    const photoEl = pane.querySelector('.js-review-photo');
+    const photoInput = pane.querySelector('.js-review-photos');
     const btn = pane.querySelector('.js-review-submit');
     if (!textEl || !btn || !starPicker) return;
 
     const rating = Math.min(5, Math.max(1, parseInt(starPicker.dataset.rating || '5', 10) || 5));
-
     const reviewText = textEl.value.trim();
 
     btn.disabled = true;
@@ -1039,7 +1491,14 @@ function submitReview(amenity, pane) {
     formData.append('amenity_id', String(amenity.id));
     formData.append('rating', String(rating));
     formData.append('review_text', reviewText);
-    if (photoEl && photoEl.files && photoEl.files[0]) formData.append('photo', photoEl.files[0]);
+
+    // Add all selected photos
+    if (photoInput && photoInput.files) {
+        const files = Array.from(photoInput.files).slice(0, 5);
+        files.forEach(file => {
+            formData.append('photos', file);
+        });
+    }
 
     fetch('/api/reviews/', {
         method: 'POST',
@@ -1056,10 +1515,16 @@ function submitReview(amenity, pane) {
             }
 
             const newReview = {
-                user_name: b.user_name || currentUser.email || currentUser.username || 'You',
+                id: b.id,
+                user_name: b.user_name || currentUser.username || currentUser.email || 'You',
+                user_email: b.user_email || currentUser.email || '',
+                user_avatar_url: b.user_avatar_url || currentUser.avatar_url || '',
                 rating: b.rating || rating,
+                vote_score: Number(b.vote_score || 0),
+                user_vote: Number(b.user_vote || 0),
                 review_text: b.review_text || reviewText,
-                photo_url: b.photo_url || null,
+                photo_url: b.photo_url || null,  // Backward compatibility
+                photo_urls: b.photo_urls || (b.photo_url ? [b.photo_url] : []),
                 created_at: b.created_at || new Date().toISOString(),
             };
 
@@ -1121,6 +1586,163 @@ function to12(hhmm) {
     if (!hhmm || typeof hhmm !== 'string' || !hhmm.includes(':')) return hhmm || '';
     let [h, m] = hhmm.split(':').map(Number);
     return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+function getReviewerName(review) {
+    return review.user_name || review.user_email || 'Anonymous';
+}
+
+function compareReviewsByVotes(a, b) {
+    const scoreA = Number(a.vote_score || 0);
+    const scoreB = Number(b.vote_score || 0);
+    if (scoreB !== scoreA) return scoreB - scoreA;
+
+    const dateA = new Date(a.created_at || 0).getTime();
+    const dateB = new Date(b.created_at || 0).getTime();
+    return dateB - dateA;
+}
+
+function renderReviewPhotos(review) {
+    const photoUrls = review.photo_urls || [];
+    const fallbackPhoto = review.photo_url;
+
+    if (photoUrls.length > 1) {
+        const photos = photoUrls
+            .map((url, idx) => `<img class="rv-review-photo" src="${url}" alt="Review photo ${idx + 1}" style="min-width:100%;width:100%;height:180px;object-fit:cover;display:block;">`)
+            .join('');
+        return `<div class="review-photo-carousel" data-carousel style="position:relative;margin-top:8px;overflow:hidden;border-radius:10px;">
+            <div class="review-photo-track" data-carousel-track data-index="0" style="display:flex;transition:transform .25s ease;">${photos}</div>
+            <button type="button" class="review-photo-arrow prev" data-carousel-prev aria-label="Previous photo" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);border:none;border-radius:999px;width:30px;height:30px;background:rgba(0,0,0,.55);color:#fff;cursor:pointer;font-size:16px;line-height:1;">&#8249;</button>
+            <button type="button" class="review-photo-arrow next" data-carousel-next aria-label="Next photo" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);border:none;border-radius:999px;width:30px;height:30px;background:rgba(0,0,0,.55);color:#fff;cursor:pointer;font-size:16px;line-height:1;">&#8250;</button>
+        </div>`;
+    }
+
+    if (photoUrls.length === 1) {
+        return `<img class="rv-review-photo" src="${photoUrls[0]}" alt="Review photo" style="width:100%;height:180px;object-fit:cover;display:block;margin-top:8px;border-radius:10px;">`;
+    }
+
+    // Fallback to single photo for backward compatibility
+    if (fallbackPhoto) {
+        return `<img class="rv-review-photo" src="${fallbackPhoto}" alt="Review photo" style="width:100%;height:180px;object-fit:cover;display:block;margin-top:8px;border-radius:10px;">`;
+    }
+
+    return '';
+}
+
+function attachReviewPhotoCarousels(pane) {
+    pane.querySelectorAll('[data-carousel]').forEach(carousel => {
+        const track = carousel.querySelector('[data-carousel-track]');
+        const prevBtn = carousel.querySelector('[data-carousel-prev]');
+        const nextBtn = carousel.querySelector('[data-carousel-next]');
+        if (!track || !prevBtn || !nextBtn) return;
+
+        const total = track.children.length;
+        if (total <= 1) return;
+
+        const setIndex = (nextIndex) => {
+            let idx = nextIndex;
+            if (idx < 0) idx = total - 1;
+            if (idx >= total) idx = 0;
+            track.dataset.index = String(idx);
+            track.style.transform = `translateX(-${idx * 100}%)`;
+        };
+
+        prevBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            const current = Number(track.dataset.index || 0);
+            setIndex(current - 1);
+        });
+
+        nextBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            const current = Number(track.dataset.index || 0);
+            setIndex(current + 1);
+        });
+    });
+}
+
+function renderVoteControls(review, loggedIn, currentEmail, featured = false) {
+    const reviewId = Number(review.id || 0);
+    if (!reviewId) return '';
+
+    const userEmail = (review.user_email || '').toLowerCase();
+    const isOwn = Boolean(loggedIn && currentEmail && userEmail === currentEmail);
+    const userVote = Number(review.user_vote || 0);
+    const voteScore = Number(review.vote_score || 0);
+    const rowClass = featured ? 'rv-review-vote-row' : 'review-vote-row';
+    const title = isOwn
+        ? 'You cannot vote on your own review'
+        : (!loggedIn ? 'Sign in to vote on reviews' : 'Vote on this review');
+
+    return `<div class="${rowClass}" data-review-vote-row="${reviewId}">
+        <button type="button" class="review-vote-btn js-vote-btn up ${userVote === 1 ? 'active' : ''}" data-review-id="${reviewId}" data-vote="1" ${isOwn ? 'disabled' : ''} title="${title}" aria-label="Upvote review">▲</button>
+        <span class="review-vote-score" data-review-score="${reviewId}">${voteScore}</span>
+        <button type="button" class="review-vote-btn js-vote-btn down ${userVote === -1 ? 'active' : ''}" data-review-id="${reviewId}" data-vote="-1" ${isOwn ? 'disabled' : ''} title="${title}" aria-label="Downvote review">▼</button>
+    </div>`;
+}
+
+function attachVoteHandlers(amenity, pane) {
+    pane.querySelectorAll('.js-vote-btn').forEach(btn => {
+        btn.addEventListener('click', () => submitReviewVote(amenity, pane, btn));
+    });
+}
+
+function submitReviewVote(amenity, pane, clickedButton) {
+    if (!currentUser || !currentUser.is_authenticated) {
+        showToast('Please sign in to vote on reviews.', 'warn');
+        return;
+    }
+
+    const reviewId = Number(clickedButton.dataset.reviewId || 0);
+    const requestedVote = Number(clickedButton.dataset.vote || 0);
+    if (!reviewId || !requestedVote) return;
+
+    const review = (amenity.reviews || []).find(r => Number(r.id) === reviewId);
+    if (!review) {
+        showToast('Could not find that review.', 'error');
+        return;
+    }
+
+    const currentVote = Number(review.user_vote || 0);
+    const payloadVote = currentVote === requestedVote ? 'clear' : requestedVote;
+    const row = pane.querySelector(`[data-review-vote-row="${reviewId}"]`);
+    const buttons = row ? row.querySelectorAll('.js-vote-btn') : [clickedButton];
+    buttons.forEach(button => {
+        button.disabled = true;
+    });
+
+    fetch(`/api/reviews/${reviewId}/vote/`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ vote: payloadVote }),
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400) {
+                showToast(b.error || 'Unable to save vote.', 'error');
+                return;
+            }
+
+            review.vote_score = Number(b.vote_score || 0);
+            review.user_vote = Number(b.user_vote || 0);
+            renderReviewsTab(amenity);
+        })
+        .catch(() => {
+            showToast('Network error while saving vote.', 'error');
+        })
+        .finally(() => {
+            buttons.forEach(button => {
+                button.disabled = false;
+            });
+        });
+}
+
+function renderReviewerAvatar(review, className = 'rv-avatar') {
+    const reviewerName = getReviewerName(review);
+    return `<div class="${className}"><img class="reviewer-avatar-image" src="${review.user_avatar_url}" alt="${reviewerName} avatar" onerror="this.onerror=null;this.src='/static/maps/default-avatar.svg';"></div>`;
 }
 
 function showToast(msg, type = 'info', duration = 2800) {
@@ -1186,7 +1808,7 @@ function searchLocations(query) {
                             iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
                         }),
                     }).addTo(map).bindPopup(name);
-                    saveSearchHistory(name);
+                    saveSearchHistory(name, lat, lon);
                     const inp = document.getElementById('search-input');
                     inp.value = name;
                     inp.closest('.search-box').classList.add('has-value');
@@ -1198,22 +1820,41 @@ function searchLocations(query) {
 }
 
 function getSearchHistory()   { try { return JSON.parse(localStorage.getItem('mapSearchHistory') || '[]'); } catch { return []; } }
-function saveSearchHistory(q) {
-    if (!q?.trim()) return;
-    const h = getSearchHistory().filter(x => x.toLowerCase() !== q.toLowerCase());
-    localStorage.setItem('mapSearchHistory', JSON.stringify([q, ...h].slice(0, 5)));
+function saveSearchHistory(name, lat, lon) {
+    if (!name?.trim()) return;
+    const h = getSearchHistory().filter(x => {
+        const xName = typeof x === 'string' ? x : x.name;
+        return xName.toLowerCase() !== name.toLowerCase();
+    });
+    localStorage.setItem('mapSearchHistory', JSON.stringify([{ name, lat, lon }, ...h].slice(0, 5)));
 }
 function showSearchHistory() {
     const h = getSearchHistory(), c = document.getElementById('search-results');
     if (!h.length) { c.classList.remove('active'); return; }
-    c.innerHTML = h.map(s => `<div class="search-result-item search-history-item" data-search="${s}"><div class="result-name">🕐 ${s}</div></div>`).join('');
+    c.innerHTML = h.map((item, i) => {
+        const name = typeof item === 'string' ? item : item.name;
+        return `<div class="search-result-item search-history-item" data-index="${i}"><div class="result-name">🕐 ${name}</div></div>`;
+    }).join('');
     positionSearchResults();
     c.classList.add('active');
     c.querySelectorAll('.search-history-item').forEach(el => el.addEventListener('click', () => {
+        const item = h[parseInt(el.dataset.index, 10)];
+        const name = typeof item === 'string' ? item : item.name;
         const inp = document.getElementById('search-input');
-        inp.value = el.dataset.search;
+        inp.value = name;
         inp.closest('.search-box').classList.add('has-value');
-        searchLocations(el.dataset.search);
+        
+        if (item && typeof item === 'object' && item.lat !== undefined && item.lon !== undefined) {
+            map.setView([item.lat, item.lon], 16);
+            if (selectedLocationMarker) map.removeLayer(selectedLocationMarker);
+            selectedLocationMarker = L.marker([item.lat, item.lon], {
+                title: name, zIndexOffset: 50,
+                icon: L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] }),
+            }).addTo(map).bindPopup(name);
+            hideSearchResults();
+        } else {
+            searchLocations(name);
+        }
     }));
 }
 function positionSearchResults() {
@@ -1250,6 +1891,7 @@ function normalizeAuthUser(data) {
         email: data.email || '',
         username: data.username || '',
         bio: data.bio || '',
+        avatar_url: data.avatar_url || '/static/maps/default-avatar.svg',
         is_authenticated: true,
     };
 }
@@ -1280,6 +1922,10 @@ function fetchCurrentUser() {
     .then(data => {
         currentUser = normalizeAuthUser(data);
         updateUserUI();
+        if (pendingAmenityFromQuery) {
+            focusAmenityFromQuery(pendingAmenityFromQuery);
+            pendingAmenityFromQuery = null;
+        }
         return currentUser;
     })
     .catch(error => {
@@ -1295,6 +1941,17 @@ function fetchCurrentUser() {
 function setCurrentUser(data) {
     currentUser = normalizeAuthUser(data);
     updateUserUI();
+    
+    // Check for pending messages if user is authenticated
+    if (currentUser && currentUser.is_authenticated && typeof checkPendingMessages === 'function') {
+        console.log('[Map] User authenticated, checking for pending messages');
+        checkPendingMessages();
+    }
+
+        // Start SSE stream for new session
+        if (currentUser && currentUser.is_authenticated && window.initNotificationsSSE) {
+            window.initNotificationsSSE();
+        }
 }
 
 // submit login/register form data and handle auth errors.
@@ -1374,6 +2031,11 @@ function logoutUser() {
 
             currentUser = null;
             updateUserUI();
+                
+                // Close SSE connection on logout
+                if (window.closeNotificationsSSE) {
+                    window.closeNotificationsSSE();
+                }
             return null;
         })
         .catch(() => {
@@ -1381,24 +2043,140 @@ function logoutUser() {
         });
 }
 
+// Show messaging menu for a reviewer
+function showMessagingMenu(userEmail, amenity) {
+    if (!currentUser || !currentUser.is_authenticated) {
+        showAuthModal();
+        return;
+    }
+
+    const modal = document.getElementById('messaging-menu-modal');
+    document.getElementById('messaging-user-name').textContent = userEmail;
+
+    // Direct message button
+    document.getElementById('message-direct-btn').onclick = async () => {
+        modal.style.display = 'none';
+        try {
+            const response = await fetch('/api/chats/direct/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]')?.value || getCookie('csrftoken'),
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({ recipient_email: userEmail }),
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                window.location.href = `/chats/?chat_id=${data.id}`;
+            } else {
+                alert('Error: ' + (data.error || 'Could not create chat'));
+            }
+        } catch (err) {
+            console.error('Error creating direct chat:', err);
+            alert('Error creating chat');
+        }
+    };
+
+    // Group chat button (add to group with other reviewers)
+    document.getElementById('message-group-btn').onclick = () => {
+        modal.style.display = 'none';
+        const params = new URLSearchParams({
+            new_group: '1',
+            amenity_id: amenity.id,
+            amenity_name: amenity.prop_name || amenity.name,
+            participant: userEmail,
+        });
+        window.location.href = `/chats/?${params.toString()}`;
+    };
+
+    // Profile link
+    document.getElementById('view-profile-btn').href = `/profile/?user=${encodeURIComponent(userEmail)}`;
+
+    modal.style.display = 'flex';
+    document.getElementById('messaging-menu-close').addEventListener('click', () => {
+        modal.style.display = 'none';
+    });
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.style.display = 'none';
+    });
+}
+
 // render login/logout button and current user label.
 function updateUserUI() {
     const btn = document.getElementById('auth-button');
-    const disp = document.getElementById('user-display');
+    const userMenu = document.getElementById('user-menu');
+    const avatarImage = document.getElementById('avatar-image');
+    const userMenuEmail = document.getElementById('user-menu-email');
 
-    if (!btn || !disp) return;
+    if (!btn || !userMenu || !avatarImage || !userMenuEmail) return;
 
     if (currentUser && currentUser.is_authenticated) {
-        disp.textContent = currentUser.username || currentUser.email;
-        disp.style.display = '';
-        btn.textContent = 'Logout';
+        btn.style.display = 'none';
+        userMenu.style.display = 'inline-flex';
+        avatarImage.src = currentUser.avatar_url || '/static/maps/default-avatar.svg';
+        userMenuEmail.textContent = currentUser.email || '';
+        // Show chats link for authenticated users
+        if (typeof ensureChatsLinkVisible === 'function') {
+            ensureChatsLinkVisible();
+        }
     } else {
-        disp.textContent = '';
-        disp.style.display = 'none';
-        btn.textContent = 'Login';
+        btn.style.display = '';
+        userMenu.style.display = 'none';
+        userMenuEmail.textContent = '';
+        // Hide chats link for unauthenticated users
+        if (typeof hideChatsLink === 'function') {
+            hideChatsLink();
+        }
     }
 
-    if (currentDetailAmenity) renderReviewsTab(currentDetailAmenity);
+    if (currentDetailAmenity) {
+        renderOverviewTab(currentDetailAmenity);
+        wireFavoriteToggle(currentDetailAmenity);
+        renderReviewsTab(currentDetailAmenity);
+    }
+}
+
+function focusAmenityFromQuery(amenityId) {
+    const numericAmenityId = Number(amenityId || 0);
+    if (!numericAmenityId) return;
+
+    fetch(`/api/amenities/${numericAmenityId}/`, {
+        method: 'GET',
+        credentials: 'same-origin',
+    })
+        .then(r => r.json().then(b => ({ s: r.status, b })).catch(() => ({ s: r.status, b: {} })))
+        .then(({ s, b }) => {
+            if (s >= 400 || !b.amenity) {
+                return;
+            }
+
+            const amenity = b.amenity;
+            map.flyTo([amenity.latitude, amenity.longitude], Math.max(map.getZoom(), 16));
+
+            if (selectedLocationMarker) {
+                map.removeLayer(selectedLocationMarker);
+            }
+            selectedLocationMarker = L.marker([amenity.latitude, amenity.longitude], {
+                title: amenity.prop_name || amenity.name,
+                zIndexOffset: 50,
+                icon: L.icon({
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
+                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                    iconSize: [25, 41],
+                    iconAnchor: [12, 41],
+                    popupAnchor: [1, -34],
+                    shadowSize: [41, 41],
+                }),
+            }).addTo(map);
+
+            updateAmenityFavoriteStateInCache(amenity.id, Boolean(amenity.is_favorited));
+            showDetailPanel(amenity);
+        })
+        .catch(() => {
+            // Keep the rest of the map experience working if deep-link focus fails.
+        });
 }
 
 /** Auth Wiring */
@@ -1409,6 +2187,21 @@ function setupAuth() {
     document.querySelectorAll('.auth-tab-link').forEach(l => l.addEventListener('click', () => switchAuthTab(l.dataset.tab)));
     setupAuthForm('login-form',    '/api/auth/login/',    'login-error');
     setupAuthForm('register-form', '/api/auth/register/', 'register-error', true);
+    const avatarButton = document.getElementById('avatar-button');
+    const dropdown = document.getElementById('user-menu-dropdown');
+    const logoutLink = document.getElementById('logout-link');
+    avatarButton.addEventListener('click', () => {
+        dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+    });
+    logoutLink.addEventListener('click', () => {
+        dropdown.style.display = 'none';
+        logoutUser();
+    });
+    document.addEventListener('click', e => {
+        if (!dropdown.contains(e.target) && !avatarButton.contains(e.target)) {
+            dropdown.style.display = 'none';
+        }
+    });
     fetchCurrentUser();
 }
 
@@ -1420,31 +2213,70 @@ function setupPWA() {
     const promptEl = document.getElementById('pwa-install-prompt');
     const installBtn = document.getElementById('pwa-install-btn');
     const closeBtn = document.getElementById('pwa-close-btn');
+    const releaseMeta = document.querySelector('meta[name="app-release"]');
+    const appRelease = releaseMeta ? (releaseMeta.getAttribute('content') || '').trim() : '';
+    const dismissKey = 'pwa_install_prompt_dismissed_release';
     let deferredPrompt;
+
+    const hidePrompt = () => {
+        if (promptEl) promptEl.style.display = 'none';
+    };
+
+    const getDismissedRelease = () => {
+        try {
+            return localStorage.getItem(dismissKey) || '';
+        } catch {
+            return '';
+        }
+    };
+
+    const markPromptDismissed = () => {
+        if (!appRelease) return;
+        try {
+            localStorage.setItem(dismissKey, appRelease);
+        } catch {
+            // Ignore storage failures and keep the prompt ephemeral.
+        }
+    };
+
+    const isIos = () => /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+    const isInStandaloneMode = () =>
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (('standalone' in window.navigator) && window.navigator.standalone);
+
+    const shouldShowInstallPrompt = () =>
+        Boolean(promptEl) &&
+        !isInStandaloneMode() &&
+        (!appRelease || getDismissedRelease() !== appRelease);
+
+    const showPrompt = () => {
+        if (shouldShowInstallPrompt()) {
+            promptEl.style.display = 'block';
+        }
+    };
 
     // Handle Android/Chrome automatic prompt
     window.addEventListener('beforeinstallprompt', (e) => {
         e.preventDefault();
         deferredPrompt = e;
-        if (promptEl) promptEl.style.display = 'block';
+        if (installBtn) installBtn.style.display = '';
+        showPrompt();
     });
 
     if (installBtn) {
         installBtn.addEventListener('click', async () => {
             if (!deferredPrompt) return;
-            promptEl.style.display = 'none';
-            deferredPrompt.prompt();
+            hidePrompt();
+            const activePrompt = deferredPrompt;
             deferredPrompt = null;
+            await activePrompt.prompt();
         });
     }
 
     // Handle iOS Manual Prompt
-    const isIos = () => /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
-    const isInStandaloneMode = () => ('standalone' in window.navigator) && (window.navigator.standalone);
-
-    if (isIos() && !isInStandaloneMode()) {
+    if (isIos() && shouldShowInstallPrompt()) {
         if (promptEl) {
-            promptEl.style.display = 'block';
+            showPrompt();
             if (installBtn) installBtn.style.display = 'none'; // Hide the button since iOS doesn't support the auto-trigger
             const textEl = promptEl.querySelector('.pwa-prompt-text span');
             if (textEl) textEl.innerHTML = `To install, tap <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin:0 2px"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg> and <strong>Add to Home Screen</strong>`;
@@ -1452,25 +2284,168 @@ function setupPWA() {
     }
 
     if (closeBtn) {
-        closeBtn.addEventListener('click', () => { if (promptEl) promptEl.style.display = 'none'; });
+        closeBtn.addEventListener('click', () => {
+            markPromptDismissed();
+            hidePrompt();
+        });
     }
+
+    window.addEventListener('appinstalled', () => {
+        deferredPrompt = null;
+        hidePrompt();
+    });
 }
 
+window.addEventListener('beforeunload', () => {
+    const mapState = {
+        center: map.getCenter(),
+        zoom: map.getZoom(),
+    };
+    if (selectedLocationMarker) {
+        mapState.selectedLocation = selectedLocationMarker.getLatLng();
+        if (selectedLocationMarker.getPopup()) {
+             mapState.selectedLocationName = selectedLocationMarker.getPopup().getContent();
+        }
+    }
+    sessionStorage.setItem('mapState', JSON.stringify(mapState));
+});
+
 document.addEventListener('DOMContentLoaded', () => {
+    const queryAmenityId = new URLSearchParams(window.location.search).get('amenity_id');
+
     setupAuth();
     setupSidebarToggle();
     setupHoursFilter();
     setupDetailTabs();
-    initializeGeolocation();
+    
+    if (restoredState) {
+        if (restoredState.selectedLocation) {
+            const { lat, lng } = restoredState.selectedLocation;
+            const name = restoredState.selectedLocationName || 'Selected Location';
+            if (selectedLocationMarker) map.removeLayer(selectedLocationMarker);
+            selectedLocationMarker = L.marker([lat, lng], {
+                title: name, zIndexOffset: 50,
+                icon: L.icon({
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
+                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                    iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+                }),
+            }).addTo(map).bindPopup(name);
+            const inp = document.getElementById('search-input');
+            if (inp) {
+                inp.value = name;
+                inp.closest('.search-box').classList.add('has-value');
+            }
+        }
+        initializeGeolocation(false);
+    } else {
+        initializeGeolocation();
+    }
+
     loadAmenityTypes();
-    loadAmenities();
     setupPWA();
+
+    if (queryAmenityId) {
+        pendingAmenityFromQuery = queryAmenityId;
+    }
 
     map.addLayer(bikeRackMarkers);
     map.addLayer(otherAmenityMarkers);
     map.on('moveend', loadAmenities);
-    map.on('dragstart', () => hoverTooltip.hide());
-    map.on('zoomstart', () => hoverTooltip.hide());
+    map.on('dragstart', () => {
+        hoverTooltip.hide();
+    });
+    map.on('zoomstart', () => {
+        hoverTooltip.hide();
+    });
+
+    // --- Custom Touch Timer for Mobile Long Press Fallback ---
+    let mapTouchTimer;
+    let mapTouchPos;
+
+    map.on('touchstart', (e) => {
+        if (e.originalEvent.touches && e.originalEvent.touches.length > 1) return;
+        mapTouchPos = e.latlng;
+        mapTouchTimer = setTimeout(() => {
+            map.fire('contextmenu', { latlng: mapTouchPos, originalEvent: e.originalEvent });
+        }, 800);
+    });
+
+    map.on('touchend', () => clearTimeout(mapTouchTimer));
+    map.on('touchmove', () => clearTimeout(mapTouchTimer));
+
+    let contextMenuFired = false;
+
+    // --- Right Click / Long Press to Set Location ---
+    map.on('contextmenu', (e) => {
+        clearTimeout(mapTouchTimer);
+        if (contextMenuFired) return;
+        contextMenuFired = true;
+        setTimeout(() => contextMenuFired = false, 500); // debounce to avoid double firing on some devices
+
+        if (e.originalEvent && typeof e.originalEvent.preventDefault === 'function') {
+            e.originalEvent.preventDefault();
+        }
+        
+        const lat = e.latlng.lat;
+        const lon = e.latlng.lng;
+        
+        showToast('Setting custom location...', 'info', 1000);
+        
+        fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`)
+            .then(r => r.json())
+            .then(data => {
+                let name = 'Custom Location';
+                if (data && data.display_name) {
+                    const parts = [];
+                    if (data.name) parts.push(data.name);
+
+                    if (data.address) {
+                        if (data.address.road) {
+                            const street = data.address.house_number ? `${data.address.house_number} ${data.address.road}` : data.address.road;
+                            if (street !== data.name) parts.push(street);
+                        }
+                        const city = data.address.city || data.address.town || data.address.village || data.address.borough;
+                        if (city && !parts.includes(city)) parts.push(city);
+                        if (data.address.state && !parts.includes(data.address.state)) parts.push(data.address.state);
+                    }
+
+                    if (parts.length === 0) {
+                        parts.push(data.display_name.split(',')[0]);
+                    }
+                    name = parts.join(', ');
+                }
+                
+                updateHomeLocation(lat, lon, name);
+                saveSearchHistory(name, lat, lon);
+                showToast('Location set to ' + name, 'success');
+            })
+            .catch(err => {
+                console.error('Reverse geocode failed', err);
+                updateHomeLocation(lat, lon, 'Custom Location');
+                showToast('Custom location set', 'success');
+            });
+    });
+
+    function updateHomeLocation(lat, lon, name) {
+        if (selectedLocationMarker) {
+            selectedLocationMarker.setLatLng([lat, lon]).bindPopup(name).openPopup();
+            const inp = document.getElementById('search-input');
+            if (inp) {
+                inp.value = name;
+                inp.closest('.search-box').classList.add('has-value');
+            }
+        } else {
+            userLocation = { latitude: lat, longitude: lon };
+            if (userMarker) {
+                userMarker.setLatLng([lat, lon]).bindPopup('📍 ' + name).openPopup();
+            } else {
+                userMarker = L.marker([lat, lon], { title: name, zIndexOffset: 100 }).addTo(map).bindPopup('📍 ' + name).openPopup();
+            }
+            document.getElementById('location-status').textContent = 'Custom location';
+            document.getElementById('location-dot').classList.add('found');
+        }
+    }
 
     document.getElementById('reset-filters-btn').addEventListener('click', resetAllFilters);
     document.getElementById('location-button').addEventListener('click', retryGeolocation);

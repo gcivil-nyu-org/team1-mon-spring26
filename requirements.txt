@@ -3,4 +3,14 @@ Pillow
 requests
 dateparser
 stateplane
-psycopg2-binary
+boto3
+django-storages
+django-allauth
+PyJWT
+cryptography
+gevent
+psycopg[binary]
+psycopg-pool
+starlette
+uvicorn[standard]
+gunicorn

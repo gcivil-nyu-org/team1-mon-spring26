@@ -136,6 +136,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
 .envrc
 .venv
 env/
@@ -214,4 +215,17 @@ __marimo__/
 *.zip
 
 # part of the test data, but we don't want to commit the actual photos
-media/amenity_photos/
+media/
+
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+**/.terraform/*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
