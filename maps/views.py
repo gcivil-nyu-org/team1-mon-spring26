@@ -1501,7 +1501,10 @@ def get_user_chats_api(request):
 
             is_unread = False
             if last_message and last_message.sender_id != request.user.id:
-                if my_participant and (not my_participant.last_read_at or last_message.created_at > my_participant.last_read_at):
+                if my_participant and (
+                    not my_participant.last_read_at
+                    or last_message.created_at > my_participant.last_read_at
+                ):
                     is_unread = True
 
             avatar_url = None
