@@ -22,33 +22,8 @@ const ChatsApp = (() => {
         console.log('[ChatsApp] New message event received');
         const msgData = e.detail;
         
-        // Thundering Herd optimization: If the payload contains the message, 
-        // inject it directly into the DOM instead of firing N+1 API queries!
-        if (msgData.message && currentChat && currentChat.id == msgData.chat_id) {
-            // Abort any in-flight message fetches so they don't overwrite this new message
-            if (messagesAbortController) messagesAbortController.abort();
-
-            const messagesContainer = document.getElementById('chat-messages');
-            const emptyState = messagesContainer?.querySelector('.empty-messages');
-            if (emptyState) emptyState.remove();
-            
-            const msgHtml = `
-                <div class="message ${msgData.message.sender_email === currentUser.email ? 'message-own' : 'message-other'}">
-                    <div class="message-header">
-                        <strong>${escapeHtml(msgData.message.sender_email)}</strong>
-                        <span class="message-time">${formatTime(new Date(msgData.message.created_at))}</span>
-                    </div>
-                    <div class="message-content">${escapeHtml(msgData.message.content)}</div>
-                </div>
-            `;
-            messagesContainer?.insertAdjacentHTML('beforeend', msgHtml);
-            scrollToBottom();
-            
-            // Silently refresh the sidebar list in the background
-            loadChats();
-        } else {
-            refreshActiveChat();
-        }
+        // Let refreshActiveChat fetch the messages so the backend read receipt is updated
+        refreshActiveChat();
     }, { passive: true });
 
     // Handle reconnection by syncing the chat state
@@ -266,7 +241,7 @@ const ChatsApp = (() => {
         }
 
         chatsList.innerHTML = visibleChats.map(chat => {
-            const isPending = pendingChatIds.includes(chat.id);
+            const isPending = pendingChatIds.includes(chat.id) || chat.is_unread;
             const pendingBadge = isPending ? '<span class="chat-pending-badge">New</span>' : '';
             const pendingClass = isPending ? ' chat-item-pending' : '';
             
