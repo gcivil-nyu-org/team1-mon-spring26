@@ -142,20 +142,9 @@ async function checkPendingMessages() {
         
         console.log('[Auth] Total chats:', data.chats.length);
         
-        // Get current user to check who sent the last message
-        const userResponse = await fetch('/api/auth/me/', {
-            method: 'GET',
-            credentials: 'same-origin',
-        });
-        const userData = await userResponse.json();
-        const currentUserEmail = userData.email;
-        console.log('[Auth] Current user email:', currentUserEmail);
-        
-        // Find chats with unread messages (last message from someone else)
         const pendingChats = data.chats.filter(chat => {
-            console.log(`[Auth] Checking chat "${chat.name}" - last_message_sender: ${chat.last_message_sender}, last_message: ${chat.last_message}`);
-            return chat.last_message_sender && 
-                   chat.last_message_sender !== currentUserEmail;
+            console.log(`[Auth] Checking chat "${chat.name}" - is_unread: ${chat.is_unread}`);
+            return chat.is_unread;
         });
         
         console.log('[Auth] Pending chats:', pendingChats.length, pendingChats);

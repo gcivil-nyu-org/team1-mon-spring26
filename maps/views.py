@@ -1494,6 +1494,19 @@ def get_user_chats_api(request):
             messages_list = list(chat.messages.all())
             last_message = messages_list[-1] if messages_list else None
 
+            my_participant = next(
+                (p for p in chat.participants.all() if p.user_id == request.user.id),
+                None,
+            )
+
+            is_unread = False
+            if last_message and last_message.sender_id != request.user.id:
+                if my_participant and (
+                    not my_participant.last_read_at
+                    or last_message.created_at > my_participant.last_read_at
+                ):
+                    is_unread = True
+
             avatar_url = None
             other_user_email = None
             if chat.chat_type == "direct":
@@ -1543,6 +1556,7 @@ def get_user_chats_api(request):
                     "created_at": (
                         chat.created_at.isoformat() if chat.created_at else None
                     ),
+                    "is_unread": is_unread,
                 }
             )
 
@@ -1579,10 +1593,14 @@ def get_chat_messages_api(request):
             return JsonResponse({"error": "Chat not found"}, status=404)
 
         # Check if user is a participant in this chat
-        if not chat.participants.filter(user=request.user).exists():
+        participant = chat.participants.filter(user=request.user).first()
+        if not participant:
             return JsonResponse(
                 {"error": "You are not a participant in this chat"}, status=403
             )
+
+        participant.last_read_at = timezone.now()
+        participant.save(update_fields=["last_read_at"])
 
         # Get messages with pagination
         messages = chat.messages.select_related("sender").order_by("-created_at", "-id")
