@@ -201,74 +201,116 @@ const ChatsApp = (() => {
         } catch (e) {}
 
         let hiddenChatsUpdated = false;
-        const visibleChats = chats.filter(chat => {
+        const visibleChats = [];
+        const hiddenChatsList = [];
+
+        chats.forEach(chat => {
             if (hiddenChats[chat.id]) {
                 if (hiddenChats[chat.id] === chat.last_message_at) {
-                    return false; // Still hidden
+                    hiddenChatsList.push(chat); // Still hidden
                 } else {
                     // New message arrived, unhide it!
                     delete hiddenChats[chat.id];
                     hiddenChatsUpdated = true;
-                    return true;
+                    visibleChats.push(chat);
                 }
+            } else {
+                visibleChats.push(chat);
             }
-            return true;
         });
 
         if (hiddenChatsUpdated) {
             localStorage.setItem('hiddenChats', JSON.stringify(hiddenChats));
         }
         
-        if (visibleChats.length === 0) {
-            if (chats.length > 0) {
-                chatsList.innerHTML = `
-                    <div class="empty-chats">
-                        <div class="empty-icon">🙈</div>
-                        <div class="empty-text">All chats are hidden</div>
-                        <button class="btn-secondary" onclick="localStorage.removeItem('hiddenChats'); ChatsApp.loadChats();">Unhide all</button>
-                    </div>
-                `;
-            } else {
-                chatsList.innerHTML = `
-                    <div class="empty-chats">
-                        <div class="empty-icon">💬</div>
-                        <div class="empty-text">No chats yet</div>
-                        <button class="btn-secondary" onclick="ChatsApp.openNewChatModal()">Start a conversation</button>
-                    </div>
-                `;
-            }
+        if (visibleChats.length === 0 && hiddenChatsList.length === 0) {
+            chatsList.innerHTML = `
+                <div class="empty-chats">
+                    <div class="empty-icon">💬</div>
+                    <div class="empty-text">No chats yet</div>
+                    <button class="btn-secondary" onclick="ChatsApp.openNewChatModal()">Start a conversation</button>
+                </div>
+            `;
             return;
         }
 
-        chatsList.innerHTML = visibleChats.map(chat => {
-            const isPending = pendingChatIds.includes(chat.id) || chat.is_unread;
-            const pendingBadge = isPending ? '<span class="chat-pending-badge">New</span>' : '';
-            const pendingClass = isPending ? ' chat-item-pending' : '';
-            
-            return `
-                <div class="chat-item${pendingClass}" data-chat-id="${chat.id}" style="display: flex; gap: 12px; align-items: center;">
-                    <div class="chat-item-avatar-wrapper" style="flex-shrink: 0;">
-                        <img src="${chat.avatar_url || '/static/maps/default-avatar.svg'}" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--surface, #fff);" alt="Avatar" onerror="this.src='/static/maps/default-avatar.svg'">
-                    </div>
-                    <div class="chat-item-content" style="flex-grow: 1; min-width: 0;">
-                        <div class="chat-item-header">
-                            <div class="chat-item-name">${escapeHtml(chat.name)} ${pendingBadge}</div>
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <div class="chat-item-time">${formatTime(new Date(chat.last_message_at))}</div>
-                                <button class="chat-item-hide-btn" data-chat-id="${chat.id}" data-last-msg="${chat.last_message_at}" title="Hide chat" style="background: none; border: none; color: var(--text-3, #999); cursor: pointer; padding: 0 4px; font-size: 16px; line-height: 1; border-radius: 4px;">&times;</button>
-                            </div>
-                        </div>
-                        <div class="chat-item-preview">
-                            ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
-                        </div>
-                        ${chat.chat_type !== 'direct' && chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
-                    </div>
+        let html = '';
+        
+        if (visibleChats.length === 0) {
+            html += `
+                <div class="empty-chats" style="padding-bottom: 16px;">
+                    <div class="empty-icon">🙈</div>
+                    <div class="empty-text">All active chats are hidden</div>
                 </div>
             `;
-        }).join('');
+        } else {
+            html += visibleChats.map(chat => {
+                const isPending = pendingChatIds.includes(chat.id) || chat.is_unread;
+                const pendingBadge = isPending ? '<span class="chat-pending-badge">New</span>' : '';
+                const pendingClass = isPending ? ' chat-item-pending' : '';
+                
+                return `
+                    <div class="chat-item${pendingClass}" data-chat-id="${chat.id}" style="display: flex; gap: 12px; align-items: center;">
+                        <div class="chat-item-avatar-wrapper" style="flex-shrink: 0;">
+                            <img src="${chat.avatar_url || '/static/maps/default-avatar.svg'}" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--surface, #fff);" alt="Avatar" onerror="this.src='/static/maps/default-avatar.svg'">
+                        </div>
+                        <div class="chat-item-content" style="flex-grow: 1; min-width: 0;">
+                            <div class="chat-item-header">
+                                <div class="chat-item-name">${escapeHtml(chat.name)} ${pendingBadge}</div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <div class="chat-item-time">${formatTime(new Date(chat.last_message_at))}</div>
+                                    <button class="chat-item-hide-btn" data-chat-id="${chat.id}" data-last-msg="${chat.last_message_at}" title="Hide chat" style="background: none; border: none; color: var(--text-3, #999); cursor: pointer; padding: 0 4px; font-size: 16px; line-height: 1; border-radius: 4px;">&times;</button>
+                                </div>
+                            </div>
+                            <div class="chat-item-preview">
+                                ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
+                            </div>
+                            ${chat.chat_type !== 'direct' && chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
 
-        // Add click listeners
-        document.querySelectorAll('.chat-item').forEach(item => {
+        if (hiddenChatsList.length > 0) {
+            html += `
+                <details class="hidden-chats-section" style="margin-top: 16px; border-top: 1px solid var(--border, #e8e8e5); padding-top: 12px;">
+                    <summary style="cursor: pointer; font-size: 13px; color: var(--text-3, #999); user-select: none; padding: 4px 8px; border-radius: 4px; font-weight: 500;">
+                        Hidden Chats (${hiddenChatsList.length})
+                    </summary>
+                    <div class="hidden-chats-list" style="margin-top: 8px;">
+                        ${hiddenChatsList.map(chat => `
+                            <div class="chat-item hidden-chat-item" data-chat-id="${chat.id}" style="display: flex; gap: 12px; align-items: center; opacity: 0.65; cursor: default;">
+                                <div class="chat-item-avatar-wrapper" style="flex-shrink: 0;">
+                                    <img src="${chat.avatar_url || '/static/maps/default-avatar.svg'}" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--surface, #fff);" alt="Avatar" onerror="this.src='/static/maps/default-avatar.svg'">
+                                </div>
+                                <div class="chat-item-content" style="flex-grow: 1; min-width: 0;">
+                                    <div class="chat-item-header">
+                                        <div class="chat-item-name" style="color: var(--text-1, #111);">${escapeHtml(chat.name)}</div>
+                                        <div style="display: flex; align-items: center; gap: 12px;">
+                                            <button class="chat-item-unhide-btn" data-chat-id="${chat.id}" title="Unhide chat" style="background: none; border: none; color: var(--accent, #1a6ef5); cursor: pointer; padding: 4px; font-size: 14px; display: flex; align-items: center; gap: 4px; border-radius: 4px;">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                            </button>
+                                            <button class="chat-item-delete-btn" data-chat-id="${chat.id}" title="Leave / Delete chat" style="background: none; border: none; color: var(--red, #dc2626); cursor: pointer; padding: 4px; font-size: 14px; display: flex; align-items: center; gap: 4px; border-radius: 4px;">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="chat-item-preview">
+                                        ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
+                                    </div>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </details>
+            `;
+        }
+
+        chatsList.innerHTML = html;
+
+        // Add click listeners (exclude hidden chats)
+        document.querySelectorAll('.chat-item:not(.hidden-chat-item)').forEach(item => {
             item.addEventListener('click', (e) => {
                 if (e.target.closest('.chat-item-hide-btn')) return;
 
@@ -308,6 +350,67 @@ const ChatsApp = (() => {
             
             btn.addEventListener('mouseenter', () => btn.style.color = 'var(--text-1, #111)');
             btn.addEventListener('mouseleave', () => btn.style.color = 'var(--text-3, #999)');
+        });
+
+        // Add unhide button listeners
+        document.querySelectorAll('.chat-item-unhide-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const chatId = btn.dataset.chatId;
+                
+                let hidden = {};
+                try { hidden = JSON.parse(localStorage.getItem('hiddenChats') || '{}'); } catch(err) {}
+                delete hidden[chatId];
+                localStorage.setItem('hiddenChats', JSON.stringify(hidden));
+                
+                displayChatsList(chats); // Re-render immediately
+            });
+            btn.addEventListener('mouseenter', () => btn.style.background = 'var(--accent-lt, #e8f0fe)');
+            btn.addEventListener('mouseleave', () => btn.style.background = 'none');
+        });
+
+        // Add delete button listeners
+        document.querySelectorAll('.chat-item-delete-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (!confirm("Are you sure you want to permanently leave and delete this chat?")) return;
+                
+                const chatId = btn.dataset.chatId;
+                try {
+                    const res = await fetch('/api/chats/leave/', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCookie('csrftoken'),
+                        },
+                        body: JSON.stringify({ chat_id: chatId })
+                    });
+                    
+                    if (res.ok) {
+                        let hidden = {};
+                        try { hidden = JSON.parse(localStorage.getItem('hiddenChats') || '{}'); } catch(err){}
+                        delete hidden[chatId];
+                        localStorage.setItem('hiddenChats', JSON.stringify(hidden));
+                        
+                        // If it was currently open, clear it
+                        if (currentChat && currentChat.id == chatId) {
+                            const chatMain = document.getElementById('chat-main');
+                            if (chatMain) chatMain.innerHTML = '<div class="empty-messages">Select a chat to start messaging</div>';
+                            currentChat = null;
+                        }
+                        
+                        loadChats(); // reload the whole list from server
+                    } else {
+                        const data = await res.json();
+                        alert('Failed to delete chat: ' + (data.error || 'Unknown error'));
+                    }
+                } catch(error) {
+                    console.error('Error deleting chat:', error);
+                    alert('Error deleting chat');
+                }
+            });
+            btn.addEventListener('mouseenter', () => btn.style.background = 'var(--red-lt, #fee2e2)');
+            btn.addEventListener('mouseleave', () => btn.style.background = 'none');
         });
     }
 
