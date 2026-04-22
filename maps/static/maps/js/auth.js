@@ -346,16 +346,26 @@ async function handleRegisterSubmit(e) {
     e.preventDefault();
     const form = e.target;
     const email = form.querySelector('input[type="email"]').value.trim();
-    const password = form.querySelector('input[type="password"]').value;
+    const password = form.querySelector('input[name="password"], input[type="password"]').value;
+    const confirmInput = form.querySelector('input[name="confirm_password"]');
+    const confirmPassword = confirmInput ? confirmInput.value : password;
     const errorEl = document.getElementById('register-error');
 
     if (errorEl) errorEl.style.display = 'none';
+
+    if (password !== confirmPassword) {
+        if (errorEl) {
+            errorEl.textContent = 'Password and confirmation do not match';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
 
     try {
         const response = await fetch('/api/auth/register/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password }),
+            body: JSON.stringify({ email, password, confirm_password: confirmPassword }),
         });
 
         const data = await response.json();
