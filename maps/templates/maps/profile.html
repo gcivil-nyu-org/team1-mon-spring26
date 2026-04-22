@@ -27,6 +27,7 @@
         data-update-review-base="/api/reviews/"
         data-current-user-name="{{ profile_user.username|default:profile_user.email }}"
         data-current-user-avatar="{{ profile_user.avatar_url }}"
+        data-is-own-profile="{% if profile_user == request.user %}true{% else %}false{% endif %}"
     >
         <div class="profile-page-container">
             <div class="profile-unified-shell">
