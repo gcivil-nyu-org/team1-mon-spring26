@@ -5,7 +5,7 @@ from django.test import SimpleTestCase
 
 class MapDeepLinkRegressionTests(SimpleTestCase):
     def test_focus_amenity_from_query_does_not_set_selected_marker_to_destination(self):
-        map_js_path = Path(__file__).resolve().parent / "static" / "maps" / "js" / "map.js"
+        map_js_path = Path(__file__).parent / "static" / "maps" / "js" / "map.js"
         map_js = map_js_path.read_text(encoding="utf-8")
 
         function_start = map_js.find("function focusAmenityFromQuery(amenityId) {")
