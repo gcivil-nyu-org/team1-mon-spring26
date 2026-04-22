@@ -889,10 +889,20 @@ def serialize_profile_favorite(favorite):
 @require_http_methods(["GET"])
 def profile_reviews_api(request):
     """
-    Return all reviews written by the current user for the profile page.
+    Return all reviews written by a user for the profile page.
+    Defaults to the current user; pass ?user=<email> to view another user's reviews.
     """
+    user_email = request.GET.get("user")
+    if user_email:
+        try:
+            target_user = CustomUser.objects.get(email=user_email)
+        except CustomUser.DoesNotExist:
+            return JsonResponse({"error": "User not found"}, status=404)
+    else:
+        target_user = request.user
+
     reviews = (
-        annotate_reviews_with_vote_score(Review.objects.filter(user=request.user))
+        annotate_reviews_with_vote_score(Review.objects.filter(user=target_user))
         .select_related("amenity", "amenity__amenity_type")
         .prefetch_related("amenity__photos")
         .order_by("-updated_at", "-created_at")
@@ -909,8 +919,21 @@ def profile_reviews_api(request):
 @login_required(login_url="/?auth_required=1")
 @require_http_methods(["GET"])
 def profile_favorites_api(request):
+    """
+    Return all favorites for a user's profile page.
+    Defaults to the current user; pass ?user=<email> to view another user's favorites.
+    """
+    user_email = request.GET.get("user")
+    if user_email:
+        try:
+            target_user = CustomUser.objects.get(email=user_email)
+        except CustomUser.DoesNotExist:
+            return JsonResponse({"error": "User not found"}, status=404)
+    else:
+        target_user = request.user
+
     favorites = (
-        Favorite.objects.filter(user=request.user)
+        Favorite.objects.filter(user=target_user)
         .select_related("amenity", "amenity__amenity_type")
         .order_by("-created_at")
     )
@@ -1934,6 +1957,87 @@ def get_chat_participants_api(request):
         )
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST"])
+def add_chat_participants_api(request):
+    """Add one or more participants to an existing group or forum chat."""
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    chat_id = data.get("chat_id")
+    participant_emails = data.get("participant_emails", [])
+
+    if not chat_id:
+        return JsonResponse({"error": "chat_id required"}, status=400)
+
+    if not participant_emails:
+        return JsonResponse({"error": "participant_emails required"}, status=400)
+
+    try:
+        chat = Chat.objects.get(id=chat_id)
+    except Chat.DoesNotExist:
+        return JsonResponse({"error": "Chat not found"}, status=404)
+
+    if not chat.participants.filter(user=request.user).exists():
+        return JsonResponse(
+            {"error": "You are not a participant in this chat"}, status=403
+        )
+
+    if chat.chat_type == "direct":
+        return JsonResponse(
+            {"error": "Cannot add participants to a direct message chat"}, status=400
+        )
+
+    existing_user_ids = set(chat.participants.values_list("user_id", flat=True))
+
+    users_to_add = []
+    for email in participant_emails:
+        email = email.strip()
+        if not email:
+            continue
+        try:
+            user = CustomUser.objects.get(email=email)
+        except CustomUser.DoesNotExist:
+            return JsonResponse(
+                {"error": f"No user found with email '{email}'"}, status=404
+            )
+        if user.id in existing_user_ids:
+            return JsonResponse(
+                {"error": f"{email} is already a participant in this chat"}, status=400
+            )
+        users_to_add.append(user)
+
+    if not users_to_add:
+        return JsonResponse({"error": "No valid new participants provided"}, status=400)
+
+    for user in users_to_add:
+        ChatParticipant.objects.create(chat=chat, user=user)
+
+    participants_data = [
+        {
+            "user_id": p.user.id if p.user else None,
+            "email": p.user.email if p.user else None,
+            "username": p.user.username or p.user.email,
+            "avatar_url": getattr(p.user, "avatar_url", None) or "",
+            "joined_at": p.joined_at.isoformat() if p.joined_at else None,
+        }
+        for p in chat.participants.select_related("user")
+    ]
+
+    return JsonResponse(
+        {
+            "chat_id": chat.id,
+            "participants": participants_data,
+            "participant_count": len(participants_data),
+            "message": f"Added {len(users_to_add)} participant(s) successfully",
+        },
+        status=200,
+    )
 
 
 @csrf_exempt

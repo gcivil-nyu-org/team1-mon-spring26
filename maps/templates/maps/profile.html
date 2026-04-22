@@ -27,6 +27,7 @@
         data-update-review-base="/api/reviews/"
         data-current-user-name="{{ profile_user.username|default:profile_user.email }}"
         data-current-user-avatar="{{ profile_user.avatar_url }}"
+        data-is-own-profile="{% if profile_user == request.user %}true{% else %}false{% endif %}"
     >
         <div class="profile-page-container">
             <div class="profile-unified-shell">
@@ -114,14 +115,14 @@
 
                     <div class="profile-tab-panel is-active" data-panel="reviews">
                         <div id="profile-reviews-state" class="profile-reviews-state">
-                            Loading your reviews...
+                            Loading reviews...
                         </div>
                         <div id="profile-reviews-list" class="profile-reviews-list" hidden></div>
                     </div>
 
                     <div class="profile-tab-panel" data-panel="favorites">
                         <div id="profile-favorites-state" class="profile-favorites-state">
-                            Loading your favorites...
+                            Loading favorites...
                         </div>
                         <div id="profile-favorites-list" class="profile-reviews-list" hidden></div>
                     </div>

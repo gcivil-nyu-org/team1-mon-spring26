@@ -1332,9 +1332,10 @@ body.profile-review-sheet-open { overflow: hidden; }
     display: flex;
     flex-direction: column;
     background: var(--bg);
-    overflow: visible;
+    overflow: hidden;
     position: relative;
     z-index: 2;
+    min-width: 0;
 }
 
 .chat-empty {
@@ -1520,6 +1521,7 @@ body.profile-review-sheet-open { overflow: hidden; }
 .chat-messages {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 16px;
     display: flex;
     flex-direction: column;
@@ -1554,8 +1556,11 @@ body.profile-review-sheet-open { overflow: hidden; }
     padding: 8px 12px;
     border-radius: 8px;
     word-wrap: break-word;
+    overflow-wrap: break-word;
+    word-break: break-word;
     font-size: 13px;
     line-height: 1.4;
+    min-width: 0;
 }
 
 .message-own .message-content {

@@ -2,6 +2,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const pageRoot = document.getElementById('profile-page-root');
     if (!pageRoot) return;
 
+    const isOwnProfile = pageRoot.dataset.isOwnProfile === 'true';
+
     const state = {
         reviews: [],
         reviewsLoaded: false,
@@ -388,14 +390,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderReviewCard(review) {
         const amenityDisplayName = review.amenity_prop_name || review.amenity_name || 'Amenity';
+        const clickableAttrs = isOwnProfile
+            ? `class="profile-review-card profile-review-card-clickable" data-review-id="${review.id}" tabindex="0" role="button" aria-label="Open review for ${escapeHtml(amenityDisplayName)}"`
+            : `class="profile-review-card"`;
 
         return `
             <article
-                class="profile-review-card profile-review-card-clickable"
-                data-review-id="${review.id}"
-                tabindex="0"
-                role="button"
-                aria-label="Open review for ${escapeHtml(amenityDisplayName)}"
+                ${clickableAttrs}
             >
                 <div class="profile-review-card-top">
                     <div>
@@ -423,10 +424,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!state.reviews.length) {
             reviewsState.hidden = false;
-            reviewsState.innerHTML = `
-                <div class="profile-empty-title">You haven't written any reviews yet.</div>
-                <p class="profile-empty-copy">Your reviews will appear here once you start sharing feedback.</p>
-            `;
+            if (isOwnProfile) {
+                reviewsState.innerHTML = `
+                    <div class="profile-empty-title">You haven't written any reviews yet.</div>
+                    <p class="profile-empty-copy">Your reviews will appear here once you start sharing feedback.</p>
+                `;
+            } else {
+                const name = escapeHtml(String(pageRoot.dataset.currentUserName || '').trim() || 'This user');
+                reviewsState.innerHTML = `
+                    <div class="profile-empty-title">${name} hasn't written any reviews yet.</div>
+                `;
+            }
             reviewsList.hidden = true;
             reviewsList.innerHTML = '';
             return;
@@ -462,6 +470,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 ${address ? `<p class="profile-review-text">${escapeHtml(address)}</p>` : ''}
 
+                ${isOwnProfile ? `
                 <label class="favorite-notify-row">
                     <input
                         class="favorite-notify-checkbox js-favorite-notify-toggle"
@@ -471,6 +480,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     >
                     <span>Notify me when new reviews are added</span>
                 </label>
+                ` : ''}
 
                 <a class="profile-empty-link" href="${escapeHtml(buildFavoriteMapUrl(favorite))}">
                     View on map
@@ -484,10 +494,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!state.favorites.length) {
             favoritesState.hidden = false;
-            favoritesState.innerHTML = `
-                <div class="profile-empty-title">No favorites yet.</div>
-                <p class="profile-empty-copy">Save places from the map and they will appear here.</p>
-            `;
+            if (isOwnProfile) {
+                favoritesState.innerHTML = `
+                    <div class="profile-empty-title">No favorites yet.</div>
+                    <p class="profile-empty-copy">Save places from the map and they will appear here.</p>
+                `;
+            } else {
+                const name = escapeHtml(String(pageRoot.dataset.currentUserName || '').trim() || 'This user');
+                favoritesState.innerHTML = `
+                    <div class="profile-empty-title">${name} has no favorites yet.</div>
+                `;
+            }
             favoritesList.hidden = true;
             favoritesList.innerHTML = '';
             return;
@@ -665,7 +682,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         reviewsState.hidden = false;
         reviewsState.removeAttribute('hidden');
-        reviewsState.textContent = 'Loading your reviews...';
+        reviewsState.textContent = isOwnProfile ? 'Loading your reviews...' : 'Loading reviews...';
         reviewsList.hidden = true;
         reviewsList.setAttribute('hidden', '');
         reviewsList.innerHTML = '';
@@ -695,7 +712,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         favoritesState.hidden = false;
         favoritesState.removeAttribute('hidden');
-        favoritesState.textContent = 'Loading your favorites...';
+        favoritesState.textContent = isOwnProfile ? 'Loading your favorites...' : 'Loading favorites...';
         favoritesList.hidden = true;
         favoritesList.setAttribute('hidden', '');
         favoritesList.innerHTML = '';
