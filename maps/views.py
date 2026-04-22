@@ -192,7 +192,9 @@ def get_review_prefetch_queryset(user):
         .annotate(
             vote_score=Coalesce(
                 Sum("votes__value"), Value(0), output_field=IntegerField()
-            )
+            ),
+            upvote_count=Count("votes", filter=Q(votes__value=1)),
+            downvote_count=Count("votes", filter=Q(votes__value=-1)),
         )
         .order_by("-vote_score", "-created_at")
     )
@@ -502,13 +504,29 @@ def register_api(request):
     try:
         data = json.loads(request.body)
         email = data.get("email", "").strip()
-        password = data.get("password", "").strip()
+        password = data.get("password") or ""
+        confirm_password = data.get("confirm_password") or ""
 
-        if not email or not password:
-            return JsonResponse({"error": "Email and password required"}, status=400)
+        if not email or not password or not confirm_password:
+            return JsonResponse(
+                {"error": "Email, password, and confirmation required"},
+                status=400,
+            )
+
+        if password != confirm_password:
+            return JsonResponse(
+                {"error": "Password and confirmation do not match"},
+                status=400,
+            )
 
         if CustomUser.objects.filter(email=email).exists():
             return JsonResponse({"error": "Email already registered"}, status=400)
+
+        pending_user = CustomUser(username=email, email=email)
+        try:
+            validate_password(password, pending_user)
+        except ValidationError as exc:
+            return JsonResponse({"error": " ".join(exc.messages)}, status=400)
 
         # Create user with email as username and custom fields
         user = CustomUser.objects.create_user(
@@ -557,6 +575,8 @@ def serialize_amenity_review(
         "user_avatar_url": review.user.avatar_url,
         "rating": review.rating,
         "vote_score": int(getattr(review, "vote_score", 0)),
+        "upvote_count": int(getattr(review, "upvote_count", 0)),
+        "downvote_count": int(getattr(review, "downvote_count", 0)),
         "user_vote": int(current_user_vote or 0),
         "review_text": review.review_text,
         "photo_url": photo_url,
@@ -636,6 +656,16 @@ def current_user_api(request):
     return JsonResponse(serialize_auth_user(request.user), status=200)
 
 
+def get_profile_target_user(request):
+    user_email = request.GET.get("user")
+    if user_email:
+        try:
+            return CustomUser.objects.get(email=user_email)
+        except CustomUser.DoesNotExist:
+            return request.user
+    return request.user
+
+
 @login_required(login_url="/?auth_required=1")
 def profile_view(request):
     """
@@ -643,24 +673,7 @@ def profile_view(request):
     Anonymous users are redirected back to the map page.
     If a ?user=<email> query param is provided, show that user's profile.
     """
-    user_email = request.GET.get("user")
-    if user_email:
-        try:
-            profile_user = CustomUser.objects.get(email=user_email)
-        except CustomUser.DoesNotExist:
-            profile_user = request.user
-    else:
-        profile_user = request.user
-
-    user_email = request.GET.get("user")
-    if user_email:
-        try:
-            profile_user = CustomUser.objects.get(email=user_email)
-        except CustomUser.DoesNotExist:
-            profile_user = request.user
-    else:
-        profile_user = request.user
-
+    profile_user = get_profile_target_user(request)
     return render(
         request,
         "maps/profile.html",
@@ -843,6 +856,9 @@ def serialize_profile_review(review):
         "amenity_type": review.amenity.amenity_type.name,
         "rating": review.rating,
         "vote_score": int(getattr(review, "vote_score", 0)),
+        "upvote_count": int(getattr(review, "upvote_count", 0)),
+        "downvote_count": int(getattr(review, "downvote_count", 0)),
+        "user_vote": int(getattr(review, "user_vote", 0) or 0),
         "review_text": review.review_text,
         "photo_id": review_photo_ids[0] if review_photo_ids else None,
         "photo_url": review_photo_urls[0] if review_photo_urls else None,
@@ -853,10 +869,24 @@ def serialize_profile_review(review):
     }
 
 
-def annotate_reviews_with_vote_score(queryset):
-    return queryset.annotate(
-        vote_score=Coalesce(Sum("votes__value"), Value(0), output_field=IntegerField())
+def annotate_reviews_with_vote_score(queryset, user=None):
+    queryset = queryset.annotate(
+        vote_score=Coalesce(Sum("votes__value"), Value(0), output_field=IntegerField()),
+        upvote_count=Count("votes", filter=Q(votes__value=1)),
+        downvote_count=Count("votes", filter=Q(votes__value=-1)),
     )
+    if user and user.is_authenticated:
+        queryset = queryset.annotate(
+            user_vote=Coalesce(
+                Sum(
+                    "votes__value",
+                    filter=Q(votes__user=user),
+                ),
+                Value(0),
+                output_field=IntegerField(),
+            )
+        )
+    return queryset
 
 
 def parse_multipart_request(request):
@@ -889,20 +919,14 @@ def serialize_profile_favorite(favorite):
 @require_http_methods(["GET"])
 def profile_reviews_api(request):
     """
-    Return all reviews written by a user for the profile page.
-    Defaults to the current user; pass ?user=<email> to view another user's reviews.
+    Return all reviews written by the profile target user.
     """
-    user_email = request.GET.get("user")
-    if user_email:
-        try:
-            target_user = CustomUser.objects.get(email=user_email)
-        except CustomUser.DoesNotExist:
-            return JsonResponse({"error": "User not found"}, status=404)
-    else:
-        target_user = request.user
-
+    profile_user = get_profile_target_user(request)
     reviews = (
-        annotate_reviews_with_vote_score(Review.objects.filter(user=target_user))
+        annotate_reviews_with_vote_score(
+            Review.objects.filter(user=profile_user),
+            request.user,
+        )
         .select_related("amenity", "amenity__amenity_type")
         .prefetch_related("amenity__photos")
         .order_by("-updated_at", "-created_at")
@@ -919,21 +943,9 @@ def profile_reviews_api(request):
 @login_required(login_url="/?auth_required=1")
 @require_http_methods(["GET"])
 def profile_favorites_api(request):
-    """
-    Return all favorites for a user's profile page.
-    Defaults to the current user; pass ?user=<email> to view another user's favorites.
-    """
-    user_email = request.GET.get("user")
-    if user_email:
-        try:
-            target_user = CustomUser.objects.get(email=user_email)
-        except CustomUser.DoesNotExist:
-            return JsonResponse({"error": "User not found"}, status=404)
-    else:
-        target_user = request.user
-
+    profile_user = get_profile_target_user(request)
     favorites = (
-        Favorite.objects.filter(user=target_user)
+        Favorite.objects.filter(user=profile_user)
         .select_related("amenity", "amenity__amenity_type")
         .order_by("-created_at")
     )
@@ -1237,17 +1249,18 @@ def review_vote_api(request, review_id):
             )
             user_vote = vote_value
 
-        vote_score = (
-            ReviewVote.objects.filter(review=review).aggregate(
-                total=Coalesce(Sum("value"), Value(0), output_field=IntegerField())
-            )["total"]
-            or 0
+        vote_totals = ReviewVote.objects.filter(review=review).aggregate(
+            vote_score=Coalesce(Sum("value"), Value(0), output_field=IntegerField()),
+            upvote_count=Count("id", filter=Q(value=1)),
+            downvote_count=Count("id", filter=Q(value=-1)),
         )
 
         return JsonResponse(
             {
                 "review_id": review.id,
-                "vote_score": int(vote_score),
+                "vote_score": int(vote_totals["vote_score"] or 0),
+                "upvote_count": int(vote_totals["upvote_count"] or 0),
+                "downvote_count": int(vote_totals["downvote_count"] or 0),
                 "user_vote": int(user_vote),
             },
             status=200,

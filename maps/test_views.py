@@ -352,6 +352,22 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["reviews_count"], 1)
 
+    def test_profile_view_marks_other_users_profile_readonly(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(
+            reverse("maps:profile") + f"?user={self.test_user2.email}"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-is-own-profile="false"')
+
+    def test_profile_view_marks_own_profile_editable(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:profile"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-is-own-profile="true"')
+
     def test_profile_reviews_api_skips_photos_without_file(self):
         review = Review.objects.create(
             amenity=self.amenity_active,
@@ -392,6 +408,19 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(len(data["favorites"]), 1)
         self.assertEqual(data["favorites"][0]["amenity_id"], self.amenity_active.id)
         self.assertTrue(data["favorites"][0]["notify_on_updates"])
+
+    def test_profile_favorites_api_returns_requested_users_favorites(self):
+        Favorite.objects.create(user=self.test_user2, amenity=self.amenity_inactive)
+
+        self.client.force_login(self.test_user)
+        response = self.client.get(
+            reverse("maps:profile_favorites_api"), {"user": self.test_user2.email}
+        )
+        self.assertEqual(response.status_code, 200)
+
+        favorites = response.json()["favorites"]
+        self.assertEqual(len(favorites), 1)
+        self.assertEqual(favorites[0]["amenity_id"], self.amenity_inactive.id)
 
     def test_favorite_notification_preference_api_updates_flag(self):
         favorite = Favorite.objects.create(
@@ -530,15 +559,15 @@ class ViewsCoverageTest(TestCase):
             reverse("maps:change_password_api"),
             data={
                 "current_password": "password123",
-                "new_password": "new-password-456",
-                "confirm_password": "new-password-456",
+                "new_password": "New-password-456!",
+                "confirm_password": "New-password-456!",
             },
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["message"], "Password updated successfully")
 
         self.test_user.refresh_from_db()
-        self.assertTrue(self.test_user.check_password("new-password-456"))
+        self.assertTrue(self.test_user.check_password("New-password-456!"))
 
         current_user_response = self.client.get(reverse("maps:current_user_api"))
         self.assertEqual(current_user_response.status_code, 200)
@@ -573,6 +602,21 @@ class ViewsCoverageTest(TestCase):
             "New password and confirmation do not match",
         )
 
+    def test_change_password_api_rejects_missing_complexity(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:change_password_api"),
+            data={
+                "current_password": "password123",
+                "new_password": "pqrstuvw",
+                "confirm_password": "pqrstuvw",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("uppercase", response.json()["error"])
+        self.assertIn("number", response.json()["error"])
+        self.assertIn("special character", response.json()["error"])
+
     def test_change_password_api_sets_password_for_social_only_user(self):
         social_user = CustomUser.objects.create(
             username="google-only",
@@ -585,8 +629,8 @@ class ViewsCoverageTest(TestCase):
         response = self.client.post(
             reverse("maps:change_password_api"),
             data={
-                "new_password": "brand-new-password-456",
-                "confirm_password": "brand-new-password-456",
+                "new_password": "Brand-new-password-456!",
+                "confirm_password": "Brand-new-password-456!",
             },
         )
         self.assertEqual(response.status_code, 200)
@@ -595,7 +639,7 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.json()["password_action"], "set")
 
         social_user.refresh_from_db()
-        self.assertTrue(social_user.check_password("brand-new-password-456"))
+        self.assertTrue(social_user.check_password("Brand-new-password-456!"))
 
     def test_password_reset_sends_email_for_user_with_usable_password(self):
         response = self.client.post(
@@ -682,6 +726,36 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(len(reviews[0]["photo_urls"]), 2)
         self.assertEqual(reviews[0]["vote_score"], 0)
 
+    def test_profile_reviews_api_returns_requested_users_reviews(self):
+        other_review = Review.objects.create(
+            amenity=self.amenity_inactive,
+            user=self.test_user2,
+            rating=3,
+            review_text="Other user's review",
+        )
+        Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user,
+            rating=5,
+            review_text="My review",
+        )
+        ReviewVote.objects.create(review=other_review, user=self.test_user, value=-1)
+        ReviewVote.objects.create(review=other_review, user=self.test_user3, value=1)
+
+        self.client.force_login(self.test_user)
+        response = self.client.get(
+            reverse("maps:profile_reviews_api"), {"user": self.test_user2.email}
+        )
+        self.assertEqual(response.status_code, 200)
+
+        reviews = response.json()["reviews"]
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0]["id"], other_review.id)
+        self.assertEqual(reviews[0]["review_text"], "Other user's review")
+        self.assertEqual(reviews[0]["upvote_count"], 1)
+        self.assertEqual(reviews[0]["downvote_count"], 1)
+        self.assertEqual(reviews[0]["user_vote"], -1)
+
     def test_profile_reviews_api_returns_vote_score(self):
         review = Review.objects.create(
             amenity=self.amenity_active,
@@ -696,6 +770,9 @@ class ViewsCoverageTest(TestCase):
         response = self.client.get(reverse("maps:profile_reviews_api"))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["reviews"][0]["vote_score"], 2)
+        self.assertEqual(response.json()["reviews"][0]["upvote_count"], 2)
+        self.assertEqual(response.json()["reviews"][0]["downvote_count"], 0)
+        self.assertEqual(response.json()["reviews"][0]["user_vote"], 0)
 
     def test_review_detail_api_patch_updates_own_review(self):
         review = Review.objects.create(
@@ -717,6 +794,26 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(review.rating, 5)
         self.assertEqual(review.review_text, "Updated")
         self.assertEqual(response.json()["message"], "Review updated successfully")
+
+    def test_review_detail_api_patch_rejects_other_users_review(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user2,
+            rating=4,
+            review_text="Not mine",
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.patch(
+            reverse("maps:review_detail_api", args=[review.id]),
+            data=json.dumps({"rating": 1, "review_text": "Changed"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+        review.refresh_from_db()
+        self.assertEqual(review.rating, 4)
+        self.assertEqual(review.review_text, "Not mine")
 
     def test_review_detail_api_patch_accepts_multipart_and_adds_photos(self):
         review = Review.objects.create(
@@ -775,6 +872,21 @@ class ViewsCoverageTest(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertFalse(Review.objects.filter(id=review.id).exists())
+
+    def test_review_detail_api_delete_rejects_other_users_review(self):
+        review = Review.objects.create(
+            amenity=self.amenity_active,
+            user=self.test_user2,
+            rating=4,
+            review_text="Not mine",
+        )
+
+        self.client.force_login(self.test_user)
+        response = self.client.delete(
+            reverse("maps:review_detail_api", args=[review.id])
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(Review.objects.filter(id=review.id).exists())
 
     def test_review_photo_detail_api_delete_removes_photo_but_keeps_review(self):
         review = Review.objects.create(
@@ -841,7 +953,11 @@ class ViewsCoverageTest(TestCase):
         response = self.client.post(
             reverse("maps:register_api"),
             data=json.dumps(
-                {"email": "newuser@example.com", "password": "newpassword123"}
+                {
+                    "email": "newuser@example.com",
+                    "password": "Str0ng-pass!",
+                    "confirm_password": "Str0ng-pass!",
+                }
             ),
             content_type="application/json",
         )
@@ -850,7 +966,11 @@ class ViewsCoverageTest(TestCase):
         response2 = self.client.post(
             reverse("maps:register_api"),
             data=json.dumps(
-                {"email": "newuser@example.com", "password": "newpassword123"}
+                {
+                    "email": "newuser@example.com",
+                    "password": "Str0ng-pass!",
+                    "confirm_password": "Str0ng-pass!",
+                }
             ),
             content_type="application/json",
         )
@@ -858,7 +978,9 @@ class ViewsCoverageTest(TestCase):
 
         response3 = self.client.post(
             reverse("maps:register_api"),
-            data=json.dumps({"password": "newpassword123"}),
+            data=json.dumps(
+                {"password": "Str0ng-pass!", "confirm_password": "Str0ng-pass!"}
+            ),
             content_type="application/json",
         )
         self.assertEqual(response3.status_code, 400)
@@ -869,6 +991,52 @@ class ViewsCoverageTest(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response4.status_code, 400)
+
+    def test_register_api_rejects_weak_mismatched_and_similar_passwords(self):
+        weak_response = self.client.post(
+            reverse("maps:register_api"),
+            data=json.dumps(
+                {
+                    "email": "weakpw@example.com",
+                    "password": "abcd",
+                    "confirm_password": "abcd",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(weak_response.status_code, 400)
+        self.assertIn("at least 8 characters", weak_response.json()["error"])
+
+        mismatch_response = self.client.post(
+            reverse("maps:register_api"),
+            data=json.dumps(
+                {
+                    "email": "mismatch@example.com",
+                    "password": "Str0ng-pass!",
+                    "confirm_password": "Different-pass-1!",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(mismatch_response.status_code, 400)
+        self.assertEqual(
+            mismatch_response.json()["error"],
+            "Password and confirmation do not match",
+        )
+
+        similar_response = self.client.post(
+            reverse("maps:register_api"),
+            data=json.dumps(
+                {
+                    "email": "abcdefgh@example.com",
+                    "password": "Abcdefgh1!",
+                    "confirm_password": "Abcdefgh1!",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(similar_response.status_code, 400)
+        self.assertIn("too similar", similar_response.json()["error"])
 
     def test_login_api(self):
         response = self.client.post(
@@ -1050,6 +1218,8 @@ class ViewsCoverageTest(TestCase):
         )
         self.assertEqual(first.status_code, 200)
         self.assertEqual(first.json()["vote_score"], 1)
+        self.assertEqual(first.json()["upvote_count"], 1)
+        self.assertEqual(first.json()["downvote_count"], 0)
         self.assertEqual(first.json()["user_vote"], 1)
 
         second = self.client.post(
@@ -1059,6 +1229,8 @@ class ViewsCoverageTest(TestCase):
         )
         self.assertEqual(second.status_code, 200)
         self.assertEqual(second.json()["vote_score"], 0)
+        self.assertEqual(second.json()["upvote_count"], 0)
+        self.assertEqual(second.json()["downvote_count"], 0)
         self.assertEqual(second.json()["user_vote"], 0)
 
         third = self.client.post(
@@ -1068,6 +1240,8 @@ class ViewsCoverageTest(TestCase):
         )
         self.assertEqual(third.status_code, 200)
         self.assertEqual(third.json()["vote_score"], -1)
+        self.assertEqual(third.json()["upvote_count"], 0)
+        self.assertEqual(third.json()["downvote_count"], 1)
         self.assertEqual(third.json()["user_vote"], -1)
 
     def test_amenities_api_returns_vote_score_ordering(self):
@@ -1123,6 +1297,8 @@ class ViewsCoverageTest(TestCase):
         first_review = amenity_payload["reviews"][0]
         self.assertEqual(first_review["id"], review_top.id)
         self.assertEqual(first_review["vote_score"], 2)
+        self.assertEqual(first_review["upvote_count"], 2)
+        self.assertEqual(first_review["downvote_count"], 0)
 
     # --- Get Amenity Reviews API ---
     def test_get_amenity_reviews_api_no_id(self):
