@@ -2157,19 +2157,13 @@ function focusAmenityFromQuery(amenityId) {
 
             if (selectedLocationMarker) {
                 map.removeLayer(selectedLocationMarker);
+                selectedLocationMarker = null;
+                const inp = document.getElementById('search-input');
+                if (inp) {
+                    inp.value = '';
+                    inp.closest('.search-box').classList.remove('has-value');
+                }
             }
-            selectedLocationMarker = L.marker([amenity.latitude, amenity.longitude], {
-                title: amenity.prop_name || amenity.name,
-                zIndexOffset: 50,
-                icon: L.icon({
-                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
-                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-                    iconSize: [25, 41],
-                    iconAnchor: [12, 41],
-                    popupAnchor: [1, -34],
-                    shadowSize: [41, 41],
-                }),
-            }).addTo(map);
 
             updateAmenityFavoriteStateInCache(amenity.id, Boolean(amenity.is_favorited));
             showDetailPanel(amenity);
