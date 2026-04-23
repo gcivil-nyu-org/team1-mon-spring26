@@ -35,7 +35,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const reviewSheetBody = document.getElementById('review-sheet-body');
     const reviewSheetClose = document.getElementById('review-sheet-close');
     const reviewSheetBackdrop = document.getElementById('review-sheet-backdrop');
-    const isOwnProfile = pageRoot.dataset.isOwnProfile === 'true';
     let reviewSheetHideTimer = null;
 
     function escapeHtml(value) {
@@ -435,9 +434,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderReviewCard(review) {
         const amenityDisplayName = review.amenity_prop_name || review.amenity_name || 'Amenity';
-        const clickableAttrs = isOwnProfile
-            ? `class="profile-review-card profile-review-card-clickable" data-review-id="${review.id}" tabindex="0" role="button" aria-label="Open review for ${escapeHtml(amenityDisplayName)}"`
-            : `class="profile-review-card"`;
+        const clickableAttrs = `class="profile-review-card profile-review-card-clickable" data-review-id="${review.id}" tabindex="0" role="button" aria-label="Open review for ${escapeHtml(amenityDisplayName)}"`;
 
         return `
             <article
