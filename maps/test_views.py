@@ -1745,6 +1745,218 @@ class ViewsCoverageTest(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    # --- Get Chat Participants API ---
+    def test_get_chat_participants_unauthenticated(self):
+        response = self.client.get(reverse("maps:get_chat_participants_api"))
+        self.assertEqual(response.status_code, 401)
+
+    def test_get_chat_participants_missing_chat_id(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(reverse("maps:get_chat_participants_api"))
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_chat_participants_chat_not_found(self):
+        self.client.force_login(self.test_user)
+        response = self.client.get(
+            reverse("maps:get_chat_participants_api"),
+            {"chat_id": 99999},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_get_chat_participants_not_participant(self):
+        self.client.force_login(self.test_user3)
+        chat = Chat.objects.create(chat_type="group", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+
+        response = self.client.get(
+            reverse("maps:get_chat_participants_api"),
+            {"chat_id": chat.id},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_get_chat_participants_success(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="group", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+
+        response = self.client.get(
+            reverse("maps:get_chat_participants_api"),
+            {"chat_id": chat.id},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["chat_id"], chat.id)
+        self.assertEqual(len(data["participants"]), 2)
+        participant_emails = [p["email"] for p in data["participants"]]
+        self.assertIn(self.test_user.email, participant_emails)
+        self.assertIn(self.test_user2.email, participant_emails)
+
+    # --- Add Chat Participants API ---
+    def test_add_chat_participants_invalid_json(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:add_chat_participants_api"),
+            data="not json",
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_add_chat_participants_missing_chat_id(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:add_chat_participants_api"),
+            data=json.dumps({"participant_emails": [self.test_user2.email]}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_add_chat_participants_missing_participants(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="group", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+
+        response = self.client.post(
+            reverse("maps:add_chat_participants_api"),
+            data=json.dumps({"chat_id": chat.id, "participant_emails": []}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_add_chat_participants_not_participant(self):
+        self.client.force_login(self.test_user3)
+        chat = Chat.objects.create(chat_type="group", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+
+        response = self.client.post(
+            reverse("maps:add_chat_participants_api"),
+            data=json.dumps(
+                {
+                    "chat_id": chat.id,
+                    "participant_emails": [self.test_user2.email],
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_chat_participants_rejects_direct_chat(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="direct", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+
+        response = self.client.post(
+            reverse("maps:add_chat_participants_api"),
+            data=json.dumps(
+                {
+                    "chat_id": chat.id,
+                    "participant_emails": [self.test_user3.email],
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_add_chat_participants_rejects_unknown_user(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="group", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+
+        response = self.client.post(
+            reverse("maps:add_chat_participants_api"),
+            data=json.dumps(
+                {
+                    "chat_id": chat.id,
+                    "participant_emails": ["ghost@example.com"],
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_add_chat_participants_rejects_existing_user(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="group", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+
+        response = self.client.post(
+            reverse("maps:add_chat_participants_api"),
+            data=json.dumps(
+                {
+                    "chat_id": chat.id,
+                    "participant_emails": [self.test_user2.email],
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_add_chat_participants_success(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="group", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+
+        response = self.client.post(
+            reverse("maps:add_chat_participants_api"),
+            data=json.dumps(
+                {
+                    "chat_id": chat.id,
+                    "participant_emails": [self.test_user3.email],
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["chat_id"], chat.id)
+        self.assertEqual(data["participant_count"], 3)
+        self.assertTrue(chat.participants.filter(user=self.test_user3).exists())
+
+    # --- Leave Chat API ---
+    def test_leave_chat_unauthenticated(self):
+        response = self.client.post(
+            reverse("maps:leave_chat_api"),
+            data=json.dumps({"chat_id": 1}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_leave_chat_invalid_json(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:leave_chat_api"),
+            data="not json",
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_leave_chat_missing_chat_id(self):
+        self.client.force_login(self.test_user)
+        response = self.client.post(
+            reverse("maps:leave_chat_api"),
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_leave_chat_success(self):
+        self.client.force_login(self.test_user)
+        chat = Chat.objects.create(chat_type="group", created_by=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user)
+        ChatParticipant.objects.create(chat=chat, user=self.test_user2)
+
+        response = self.client.post(
+            reverse("maps:leave_chat_api"),
+            data=json.dumps({"chat_id": chat.id}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(chat.participants.filter(user=self.test_user).exists())
+
     # --- chats_view requires login ---
     def test_chats_view_requires_login(self):
         response = self.client.get(reverse("maps:chats"))
