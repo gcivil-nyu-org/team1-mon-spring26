@@ -192,7 +192,9 @@ def get_review_prefetch_queryset(user):
         .annotate(
             vote_score=Coalesce(
                 Sum("votes__value"), Value(0), output_field=IntegerField()
-            )
+            ),
+            upvote_count=Count("votes", filter=Q(votes__value=1)),
+            downvote_count=Count("votes", filter=Q(votes__value=-1)),
         )
         .order_by("-vote_score", "-created_at")
     )
@@ -502,13 +504,29 @@ def register_api(request):
     try:
         data = json.loads(request.body)
         email = data.get("email", "").strip()
-        password = data.get("password", "").strip()
+        password = data.get("password") or ""
+        confirm_password = data.get("confirm_password") or ""
 
-        if not email or not password:
-            return JsonResponse({"error": "Email and password required"}, status=400)
+        if not email or not password or not confirm_password:
+            return JsonResponse(
+                {"error": "Email, password, and confirmation required"},
+                status=400,
+            )
+
+        if password != confirm_password:
+            return JsonResponse(
+                {"error": "Password and confirmation do not match"},
+                status=400,
+            )
 
         if CustomUser.objects.filter(email=email).exists():
             return JsonResponse({"error": "Email already registered"}, status=400)
+
+        pending_user = CustomUser(username=email, email=email)
+        try:
+            validate_password(password, pending_user)
+        except ValidationError as exc:
+            return JsonResponse({"error": " ".join(exc.messages)}, status=400)
 
         # Create user with email as username and custom fields
         user = CustomUser.objects.create_user(
@@ -557,6 +575,8 @@ def serialize_amenity_review(
         "user_avatar_url": review.user.avatar_url,
         "rating": review.rating,
         "vote_score": int(getattr(review, "vote_score", 0)),
+        "upvote_count": int(getattr(review, "upvote_count", 0)),
+        "downvote_count": int(getattr(review, "downvote_count", 0)),
         "user_vote": int(current_user_vote or 0),
         "review_text": review.review_text,
         "photo_url": photo_url,
@@ -636,6 +656,16 @@ def current_user_api(request):
     return JsonResponse(serialize_auth_user(request.user), status=200)
 
 
+def get_profile_target_user(request):
+    user_email = request.GET.get("user")
+    if user_email:
+        try:
+            return CustomUser.objects.get(email=user_email)
+        except CustomUser.DoesNotExist:
+            return request.user
+    return request.user
+
+
 @login_required(login_url="/?auth_required=1")
 def profile_view(request):
     """
@@ -643,24 +673,7 @@ def profile_view(request):
     Anonymous users are redirected back to the map page.
     If a ?user=<email> query param is provided, show that user's profile.
     """
-    user_email = request.GET.get("user")
-    if user_email:
-        try:
-            profile_user = CustomUser.objects.get(email=user_email)
-        except CustomUser.DoesNotExist:
-            profile_user = request.user
-    else:
-        profile_user = request.user
-
-    user_email = request.GET.get("user")
-    if user_email:
-        try:
-            profile_user = CustomUser.objects.get(email=user_email)
-        except CustomUser.DoesNotExist:
-            profile_user = request.user
-    else:
-        profile_user = request.user
-
+    profile_user = get_profile_target_user(request)
     return render(
         request,
         "maps/profile.html",
@@ -843,6 +856,9 @@ def serialize_profile_review(review):
         "amenity_type": review.amenity.amenity_type.name,
         "rating": review.rating,
         "vote_score": int(getattr(review, "vote_score", 0)),
+        "upvote_count": int(getattr(review, "upvote_count", 0)),
+        "downvote_count": int(getattr(review, "downvote_count", 0)),
+        "user_vote": int(getattr(review, "user_vote", 0) or 0),
         "review_text": review.review_text,
         "photo_id": review_photo_ids[0] if review_photo_ids else None,
         "photo_url": review_photo_urls[0] if review_photo_urls else None,
@@ -853,10 +869,24 @@ def serialize_profile_review(review):
     }
 
 
-def annotate_reviews_with_vote_score(queryset):
-    return queryset.annotate(
-        vote_score=Coalesce(Sum("votes__value"), Value(0), output_field=IntegerField())
+def annotate_reviews_with_vote_score(queryset, user=None):
+    queryset = queryset.annotate(
+        vote_score=Coalesce(Sum("votes__value"), Value(0), output_field=IntegerField()),
+        upvote_count=Count("votes", filter=Q(votes__value=1)),
+        downvote_count=Count("votes", filter=Q(votes__value=-1)),
     )
+    if user and user.is_authenticated:
+        queryset = queryset.annotate(
+            user_vote=Coalesce(
+                Sum(
+                    "votes__value",
+                    filter=Q(votes__user=user),
+                ),
+                Value(0),
+                output_field=IntegerField(),
+            )
+        )
+    return queryset
 
 
 def parse_multipart_request(request):
@@ -889,10 +919,14 @@ def serialize_profile_favorite(favorite):
 @require_http_methods(["GET"])
 def profile_reviews_api(request):
     """
-    Return all reviews written by the current user for the profile page.
+    Return all reviews written by the profile target user.
     """
+    profile_user = get_profile_target_user(request)
     reviews = (
-        annotate_reviews_with_vote_score(Review.objects.filter(user=request.user))
+        annotate_reviews_with_vote_score(
+            Review.objects.filter(user=profile_user),
+            request.user,
+        )
         .select_related("amenity", "amenity__amenity_type")
         .prefetch_related("amenity__photos")
         .order_by("-updated_at", "-created_at")
@@ -909,8 +943,9 @@ def profile_reviews_api(request):
 @login_required(login_url="/?auth_required=1")
 @require_http_methods(["GET"])
 def profile_favorites_api(request):
+    profile_user = get_profile_target_user(request)
     favorites = (
-        Favorite.objects.filter(user=request.user)
+        Favorite.objects.filter(user=profile_user)
         .select_related("amenity", "amenity__amenity_type")
         .order_by("-created_at")
     )
@@ -1214,17 +1249,18 @@ def review_vote_api(request, review_id):
             )
             user_vote = vote_value
 
-        vote_score = (
-            ReviewVote.objects.filter(review=review).aggregate(
-                total=Coalesce(Sum("value"), Value(0), output_field=IntegerField())
-            )["total"]
-            or 0
+        vote_totals = ReviewVote.objects.filter(review=review).aggregate(
+            vote_score=Coalesce(Sum("value"), Value(0), output_field=IntegerField()),
+            upvote_count=Count("id", filter=Q(value=1)),
+            downvote_count=Count("id", filter=Q(value=-1)),
         )
 
         return JsonResponse(
             {
                 "review_id": review.id,
-                "vote_score": int(vote_score),
+                "vote_score": int(vote_totals["vote_score"] or 0),
+                "upvote_count": int(vote_totals["upvote_count"] or 0),
+                "downvote_count": int(vote_totals["downvote_count"] or 0),
                 "user_vote": int(user_vote),
             },
             status=200,
@@ -1494,6 +1530,19 @@ def get_user_chats_api(request):
             messages_list = list(chat.messages.all())
             last_message = messages_list[-1] if messages_list else None
 
+            my_participant = next(
+                (p for p in chat.participants.all() if p.user_id == request.user.id),
+                None,
+            )
+
+            is_unread = False
+            if last_message and last_message.sender_id != request.user.id:
+                if my_participant and (
+                    not my_participant.last_read_at
+                    or last_message.created_at > my_participant.last_read_at
+                ):
+                    is_unread = True
+
             avatar_url = None
             other_user_email = None
             if chat.chat_type == "direct":
@@ -1543,6 +1592,7 @@ def get_user_chats_api(request):
                     "created_at": (
                         chat.created_at.isoformat() if chat.created_at else None
                     ),
+                    "is_unread": is_unread,
                 }
             )
 
@@ -1579,10 +1629,14 @@ def get_chat_messages_api(request):
             return JsonResponse({"error": "Chat not found"}, status=404)
 
         # Check if user is a participant in this chat
-        if not chat.participants.filter(user=request.user).exists():
+        participant = chat.participants.filter(user=request.user).first()
+        if not participant:
             return JsonResponse(
                 {"error": "You are not a participant in this chat"}, status=403
             )
+
+        participant.last_read_at = timezone.now()
+        participant.save(update_fields=["last_read_at"])
 
         # Get messages with pagination
         messages = chat.messages.select_related("sender").order_by("-created_at", "-id")
@@ -1916,6 +1970,87 @@ def get_chat_participants_api(request):
         )
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+@login_required(login_url="/?auth_required=1")
+@require_http_methods(["POST"])
+def add_chat_participants_api(request):
+    """Add one or more participants to an existing group or forum chat."""
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    chat_id = data.get("chat_id")
+    participant_emails = data.get("participant_emails", [])
+
+    if not chat_id:
+        return JsonResponse({"error": "chat_id required"}, status=400)
+
+    if not participant_emails:
+        return JsonResponse({"error": "participant_emails required"}, status=400)
+
+    try:
+        chat = Chat.objects.get(id=chat_id)
+    except Chat.DoesNotExist:
+        return JsonResponse({"error": "Chat not found"}, status=404)
+
+    if not chat.participants.filter(user=request.user).exists():
+        return JsonResponse(
+            {"error": "You are not a participant in this chat"}, status=403
+        )
+
+    if chat.chat_type == "direct":
+        return JsonResponse(
+            {"error": "Cannot add participants to a direct message chat"}, status=400
+        )
+
+    existing_user_ids = set(chat.participants.values_list("user_id", flat=True))
+
+    users_to_add = []
+    for email in participant_emails:
+        email = email.strip()
+        if not email:
+            continue
+        try:
+            user = CustomUser.objects.get(email=email)
+        except CustomUser.DoesNotExist:
+            return JsonResponse(
+                {"error": f"No user found with email '{email}'"}, status=404
+            )
+        if user.id in existing_user_ids:
+            return JsonResponse(
+                {"error": f"{email} is already a participant in this chat"}, status=400
+            )
+        users_to_add.append(user)
+
+    if not users_to_add:
+        return JsonResponse({"error": "No valid new participants provided"}, status=400)
+
+    for user in users_to_add:
+        ChatParticipant.objects.create(chat=chat, user=user)
+
+    participants_data = [
+        {
+            "user_id": p.user.id if p.user else None,
+            "email": p.user.email if p.user else None,
+            "username": p.user.username or p.user.email,
+            "avatar_url": getattr(p.user, "avatar_url", None) or "",
+            "joined_at": p.joined_at.isoformat() if p.joined_at else None,
+        }
+        for p in chat.participants.select_related("user")
+    ]
+
+    return JsonResponse(
+        {
+            "chat_id": chat.id,
+            "participants": participants_data,
+            "participant_count": len(participants_data),
+            "message": f"Added {len(users_to_add)} participant(s) successfully",
+        },
+        status=200,
+    )
 
 
 @csrf_exempt

@@ -14,14 +14,15 @@ import os
 
 from pathlib import Path
 
+# generate SECRET_KEY instead of hard coding it
+# from django.core.management.utils import get_random_secret_key
+SECRET_KEY = os.environ.get("SECRET_KEY", "non-random-secret-key-for-dev-only")
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-+qycx#xxwszdp_9xr@lxekk)vb#y!71=_zk4@8)#gp_ow*ob#%"
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # Set DEBUG to False in production. Use an environment variable.
@@ -166,6 +167,9 @@ AUTH_PASSWORD_VALIDATORS = [
     },
     {
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+    },
+    {
+        "NAME": "maps.password_validation.CharacterComplexityValidator",
     },
     {
         "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",

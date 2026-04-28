@@ -79,6 +79,7 @@
                     <div class="participant-tags" id="participant-tags"></div>
                     <input type="text" id="participant-email-input" placeholder="Type email, press Enter or comma to add">
                 </div>
+                <p id="participant-email-error" class="error-message" style="display:none;"></p>
                 <small>Add at least 2 other participants for a group chat</small>
             </div>
             <div class="form-group">
@@ -115,7 +116,8 @@
             <form id="register-form">
                 <p id="register-error" class="error-message" style="display:none;"></p>
                 <input type="email" placeholder="Email address" required autocomplete="email">
-                <input type="password" placeholder="Password" required autocomplete="new-password">
+                <input type="password" name="password" placeholder="Password" required autocomplete="new-password">
+                <input type="password" name="confirm_password" placeholder="Confirm password" required autocomplete="new-password">
                 <button type="submit" class="btn-primary">Create Account →</button>
             </form>
         </div>

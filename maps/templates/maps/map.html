@@ -128,7 +128,7 @@
     <aside class="detail-panel" id="detail-panel">
         <div class="dp-header">
             <button class="dp-back" id="detail-close-btn">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             </button>
             <div class="dp-title-wrap">
                 <h2 class="dp-name" id="detail-name"></h2>
@@ -188,7 +188,8 @@
             <form id="register-form">
                 <p id="register-error" class="error-message" style="display:none;"></p>
                 <input type="email" placeholder="Email address" required autocomplete="email">
-                <input type="password" placeholder="Password" required autocomplete="new-password">
+                <input type="password" name="password" placeholder="Password" required autocomplete="new-password">
+                <input type="password" name="confirm_password" placeholder="Confirm password" required autocomplete="new-password">
                 <button type="submit" class="btn-primary">Create Account →</button>
             </form>
         </div>

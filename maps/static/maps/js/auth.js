@@ -142,20 +142,9 @@ async function checkPendingMessages() {
         
         console.log('[Auth] Total chats:', data.chats.length);
         
-        // Get current user to check who sent the last message
-        const userResponse = await fetch('/api/auth/me/', {
-            method: 'GET',
-            credentials: 'same-origin',
-        });
-        const userData = await userResponse.json();
-        const currentUserEmail = userData.email;
-        console.log('[Auth] Current user email:', currentUserEmail);
-        
-        // Find chats with unread messages (last message from someone else)
         const pendingChats = data.chats.filter(chat => {
-            console.log(`[Auth] Checking chat "${chat.name}" - last_message_sender: ${chat.last_message_sender}, last_message: ${chat.last_message}`);
-            return chat.last_message_sender && 
-                   chat.last_message_sender !== currentUserEmail;
+            console.log(`[Auth] Checking chat "${chat.name}" - is_unread: ${chat.is_unread}`);
+            return chat.is_unread;
         });
         
         console.log('[Auth] Pending chats:', pendingChats.length, pendingChats);
@@ -357,16 +346,26 @@ async function handleRegisterSubmit(e) {
     e.preventDefault();
     const form = e.target;
     const email = form.querySelector('input[type="email"]').value.trim();
-    const password = form.querySelector('input[type="password"]').value;
+    const password = form.querySelector('input[name="password"], input[type="password"]').value;
+    const confirmInput = form.querySelector('input[name="confirm_password"]');
+    const confirmPassword = confirmInput ? confirmInput.value : password;
     const errorEl = document.getElementById('register-error');
 
     if (errorEl) errorEl.style.display = 'none';
+
+    if (password !== confirmPassword) {
+        if (errorEl) {
+            errorEl.textContent = 'Password and confirmation do not match';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
 
     try {
         const response = await fetch('/api/auth/register/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password }),
+            body: JSON.stringify({ email, password, confirm_password: confirmPassword }),
         });
 
         const data = await response.json();

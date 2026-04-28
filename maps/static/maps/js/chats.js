@@ -8,7 +8,8 @@ const ChatsApp = (() => {
     let currentChat = null;
     let allChats = [];
     let selectedAmenityId = null;
-    let participantEmails = [];
+    let participantEmails = [];      // used by the create-group-chat modal
+    let addParticipantEmails = [];   // used by the add-people panel inside an existing chat
     let amenitySearchTimer = null;
     let userSearchTimer = null;
     let activeUserSearchInput = null;
@@ -18,37 +19,10 @@ const ChatsApp = (() => {
 
     // Set up event listener EARLY to avoid race conditions on Mac/Safari
     // This must happen before any SSE events are dispatched
-    window.addEventListener('chat:new_message', (e) => {
+    window.addEventListener('chat:new_message', () => {
         console.log('[ChatsApp] New message event received');
-        const msgData = e.detail;
-        
-        // Thundering Herd optimization: If the payload contains the message, 
-        // inject it directly into the DOM instead of firing N+1 API queries!
-        if (msgData.message && currentChat && currentChat.id == msgData.chat_id) {
-            // Abort any in-flight message fetches so they don't overwrite this new message
-            if (messagesAbortController) messagesAbortController.abort();
-
-            const messagesContainer = document.getElementById('chat-messages');
-            const emptyState = messagesContainer?.querySelector('.empty-messages');
-            if (emptyState) emptyState.remove();
-            
-            const msgHtml = `
-                <div class="message ${msgData.message.sender_email === currentUser.email ? 'message-own' : 'message-other'}">
-                    <div class="message-header">
-                        <strong>${escapeHtml(msgData.message.sender_email)}</strong>
-                        <span class="message-time">${formatTime(new Date(msgData.message.created_at))}</span>
-                    </div>
-                    <div class="message-content">${escapeHtml(msgData.message.content)}</div>
-                </div>
-            `;
-            messagesContainer?.insertAdjacentHTML('beforeend', msgHtml);
-            scrollToBottom();
-            
-            // Silently refresh the sidebar list in the background
-            loadChats();
-        } else {
-            refreshActiveChat();
-        }
+        // Let refreshActiveChat fetch the messages so the backend read receipt is updated
+        refreshActiveChat();
     }, { passive: true });
 
     // Handle reconnection by syncing the chat state
@@ -173,6 +147,19 @@ const ChatsApp = (() => {
         document.getElementById('direct-recipient-email')?.addEventListener('blur', () => setTimeout(closeUserDropdown, 150));
         document.getElementById('participant-email-input')?.addEventListener('input', onUserSearchInput);
         document.getElementById('participant-email-input')?.addEventListener('blur', () => setTimeout(closeUserDropdown, 150));
+
+        // Close participants panel when clicking outside it — registered once here
+        // so it doesn't accumulate on every openChat call.
+        document.addEventListener('click', (e) => {
+            const wrap = document.getElementById('participants-wrap');
+            if (!wrap) return;
+            const userDropdown = document.getElementById('user-dropdown');
+            // If the click was inside the panel or inside the user-search dropdown, keep the panel open
+            if (wrap.contains(e.target) || userDropdown?.contains(e.target)) return;
+            const panel = document.getElementById('participants-panel');
+            if (panel) panel.style.display = 'none';
+            addParticipantEmails = [];
+        }, { capture: true });
     }
 
     async function loadChats() {
@@ -226,74 +213,116 @@ const ChatsApp = (() => {
         } catch (e) {}
 
         let hiddenChatsUpdated = false;
-        const visibleChats = chats.filter(chat => {
+        const visibleChats = [];
+        const hiddenChatsList = [];
+
+        chats.forEach(chat => {
             if (hiddenChats[chat.id]) {
                 if (hiddenChats[chat.id] === chat.last_message_at) {
-                    return false; // Still hidden
+                    hiddenChatsList.push(chat); // Still hidden
                 } else {
                     // New message arrived, unhide it!
                     delete hiddenChats[chat.id];
                     hiddenChatsUpdated = true;
-                    return true;
+                    visibleChats.push(chat);
                 }
+            } else {
+                visibleChats.push(chat);
             }
-            return true;
         });
 
         if (hiddenChatsUpdated) {
             localStorage.setItem('hiddenChats', JSON.stringify(hiddenChats));
         }
         
-        if (visibleChats.length === 0) {
-            if (chats.length > 0) {
-                chatsList.innerHTML = `
-                    <div class="empty-chats">
-                        <div class="empty-icon">🙈</div>
-                        <div class="empty-text">All chats are hidden</div>
-                        <button class="btn-secondary" onclick="localStorage.removeItem('hiddenChats'); ChatsApp.loadChats();">Unhide all</button>
-                    </div>
-                `;
-            } else {
-                chatsList.innerHTML = `
-                    <div class="empty-chats">
-                        <div class="empty-icon">💬</div>
-                        <div class="empty-text">No chats yet</div>
-                        <button class="btn-secondary" onclick="ChatsApp.openNewChatModal()">Start a conversation</button>
-                    </div>
-                `;
-            }
+        if (visibleChats.length === 0 && hiddenChatsList.length === 0) {
+            chatsList.innerHTML = `
+                <div class="empty-chats">
+                    <div class="empty-icon">💬</div>
+                    <div class="empty-text">No chats yet</div>
+                    <button class="btn-secondary" onclick="ChatsApp.openNewChatModal()">Start a conversation</button>
+                </div>
+            `;
             return;
         }
 
-        chatsList.innerHTML = visibleChats.map(chat => {
-            const isPending = pendingChatIds.includes(chat.id);
-            const pendingBadge = isPending ? '<span class="chat-pending-badge">New</span>' : '';
-            const pendingClass = isPending ? ' chat-item-pending' : '';
-            
-            return `
-                <div class="chat-item${pendingClass}" data-chat-id="${chat.id}" style="display: flex; gap: 12px; align-items: center;">
-                    <div class="chat-item-avatar-wrapper" style="flex-shrink: 0;">
-                        <img src="${chat.avatar_url || '/static/maps/default-avatar.svg'}" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--surface, #fff);" alt="Avatar" onerror="this.src='/static/maps/default-avatar.svg'">
-                    </div>
-                    <div class="chat-item-content" style="flex-grow: 1; min-width: 0;">
-                        <div class="chat-item-header">
-                            <div class="chat-item-name">${escapeHtml(chat.name)} ${pendingBadge}</div>
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <div class="chat-item-time">${formatTime(new Date(chat.last_message_at))}</div>
-                                <button class="chat-item-hide-btn" data-chat-id="${chat.id}" data-last-msg="${chat.last_message_at}" title="Hide chat" style="background: none; border: none; color: var(--text-3, #999); cursor: pointer; padding: 0 4px; font-size: 16px; line-height: 1; border-radius: 4px;">&times;</button>
-                            </div>
-                        </div>
-                        <div class="chat-item-preview">
-                            ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
-                        </div>
-                        ${chat.chat_type !== 'direct' && chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
-                    </div>
+        let html = '';
+        
+        if (visibleChats.length === 0) {
+            html += `
+                <div class="empty-chats" style="padding-bottom: 16px;">
+                    <div class="empty-icon">🙈</div>
+                    <div class="empty-text">All active chats are hidden</div>
                 </div>
             `;
-        }).join('');
+        } else {
+            html += visibleChats.map(chat => {
+                const isPending = pendingChatIds.includes(chat.id) || chat.is_unread;
+                const pendingBadge = isPending ? '<span class="chat-pending-badge">New</span>' : '';
+                const pendingClass = isPending ? ' chat-item-pending' : '';
+                
+                return `
+                    <div class="chat-item${pendingClass}" data-chat-id="${chat.id}" style="display: flex; gap: 12px; align-items: center;">
+                        <div class="chat-item-avatar-wrapper" style="flex-shrink: 0;">
+                            <img src="${chat.avatar_url || '/static/maps/default-avatar.svg'}" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--surface, #fff);" alt="Avatar" onerror="this.src='/static/maps/default-avatar.svg'">
+                        </div>
+                        <div class="chat-item-content" style="flex-grow: 1; min-width: 0;">
+                            <div class="chat-item-header">
+                                <div class="chat-item-name">${escapeHtml(chat.name)} ${pendingBadge}</div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <div class="chat-item-time">${formatTime(new Date(chat.last_message_at))}</div>
+                                    <button class="chat-item-hide-btn" data-chat-id="${chat.id}" data-last-msg="${chat.last_message_at}" title="Hide chat" style="background: none; border: none; color: var(--text-3, #999); cursor: pointer; padding: 0 4px; font-size: 16px; line-height: 1; border-radius: 4px;">&times;</button>
+                                </div>
+                            </div>
+                            <div class="chat-item-preview">
+                                ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
+                            </div>
+                            ${chat.chat_type !== 'direct' && chat.participant_count > 1 ? `<div class="chat-item-meta">${chat.participant_count} participants</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
 
-        // Add click listeners
-        document.querySelectorAll('.chat-item').forEach(item => {
+        if (hiddenChatsList.length > 0) {
+            html += `
+                <details class="hidden-chats-section" style="margin-top: 16px; border-top: 1px solid var(--border, #e8e8e5); padding-top: 12px;">
+                    <summary style="cursor: pointer; font-size: 13px; color: var(--text-3, #999); user-select: none; padding: 4px 8px; border-radius: 4px; font-weight: 500;">
+                        Hidden Chats (${hiddenChatsList.length})
+                    </summary>
+                    <div class="hidden-chats-list" style="margin-top: 8px;">
+                        ${hiddenChatsList.map(chat => `
+                            <div class="chat-item hidden-chat-item" data-chat-id="${chat.id}" style="display: flex; gap: 12px; align-items: center; opacity: 0.65; cursor: default;">
+                                <div class="chat-item-avatar-wrapper" style="flex-shrink: 0;">
+                                    <img src="${chat.avatar_url || '/static/maps/default-avatar.svg'}" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--surface, #fff);" alt="Avatar" onerror="this.src='/static/maps/default-avatar.svg'">
+                                </div>
+                                <div class="chat-item-content" style="flex-grow: 1; min-width: 0;">
+                                    <div class="chat-item-header">
+                                        <div class="chat-item-name" style="color: var(--text-1, #111);">${escapeHtml(chat.name)}</div>
+                                        <div style="display: flex; align-items: center; gap: 12px;">
+                                            <button class="chat-item-unhide-btn" data-chat-id="${chat.id}" title="Unhide chat" style="background: none; border: none; color: var(--accent, #1a6ef5); cursor: pointer; padding: 4px; font-size: 14px; display: flex; align-items: center; gap: 4px; border-radius: 4px;">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                            </button>
+                                            <button class="chat-item-delete-btn" data-chat-id="${chat.id}" title="Leave / Delete chat" style="background: none; border: none; color: var(--red, #dc2626); cursor: pointer; padding: 4px; font-size: 14px; display: flex; align-items: center; gap: 4px; border-radius: 4px;">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="chat-item-preview">
+                                        ${chat.last_message ? `<strong>${escapeHtml(chat.last_message_sender)}:</strong> ${escapeHtml(chat.last_message)}` : 'No messages yet'}
+                                    </div>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </details>
+            `;
+        }
+
+        chatsList.innerHTML = html;
+
+        // Add click listeners (exclude hidden chats)
+        document.querySelectorAll('.chat-item:not(.hidden-chat-item)').forEach(item => {
             item.addEventListener('click', (e) => {
                 if (e.target.closest('.chat-item-hide-btn')) return;
 
@@ -333,6 +362,67 @@ const ChatsApp = (() => {
             
             btn.addEventListener('mouseenter', () => btn.style.color = 'var(--text-1, #111)');
             btn.addEventListener('mouseleave', () => btn.style.color = 'var(--text-3, #999)');
+        });
+
+        // Add unhide button listeners
+        document.querySelectorAll('.chat-item-unhide-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const chatId = btn.dataset.chatId;
+                
+                let hidden = {};
+                try { hidden = JSON.parse(localStorage.getItem('hiddenChats') || '{}'); } catch(err) {}
+                delete hidden[chatId];
+                localStorage.setItem('hiddenChats', JSON.stringify(hidden));
+                
+                displayChatsList(chats); // Re-render immediately
+            });
+            btn.addEventListener('mouseenter', () => btn.style.background = 'var(--accent-lt, #e8f0fe)');
+            btn.addEventListener('mouseleave', () => btn.style.background = 'none');
+        });
+
+        // Add delete button listeners
+        document.querySelectorAll('.chat-item-delete-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (!confirm("Are you sure you want to permanently leave and delete this chat?")) return;
+                
+                const chatId = btn.dataset.chatId;
+                try {
+                    const res = await fetch('/api/chats/leave/', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCookie('csrftoken'),
+                        },
+                        body: JSON.stringify({ chat_id: chatId })
+                    });
+                    
+                    if (res.ok) {
+                        let hidden = {};
+                        try { hidden = JSON.parse(localStorage.getItem('hiddenChats') || '{}'); } catch(err){}
+                        delete hidden[chatId];
+                        localStorage.setItem('hiddenChats', JSON.stringify(hidden));
+                        
+                        // If it was currently open, clear it
+                        if (currentChat && currentChat.id == chatId) {
+                            const chatMain = document.getElementById('chat-main');
+                            if (chatMain) chatMain.innerHTML = '<div class="empty-messages">Select a chat to start messaging</div>';
+                            currentChat = null;
+                        }
+                        
+                        loadChats(); // reload the whole list from server
+                    } else {
+                        const data = await res.json();
+                        alert('Failed to delete chat: ' + (data.error || 'Unknown error'));
+                    }
+                } catch(error) {
+                    console.error('Error deleting chat:', error);
+                    alert('Error deleting chat');
+                }
+            });
+            btn.addEventListener('mouseenter', () => btn.style.background = 'var(--red-lt, #fee2e2)');
+            btn.addEventListener('mouseleave', () => btn.style.background = 'none');
         });
     }
 
@@ -381,17 +471,20 @@ const ChatsApp = (() => {
             : '';
 
         const participantsBtnHtml = !isDirect
-            ? `<div class="chat-participants-wrap" id="participants-wrap">
-                   <button class="chat-participants-btn" id="participants-btn">
-                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                       ${currentChat.participant_count}
-                   </button>
-                   <div class="chat-participants-panel" id="participants-panel" style="display:none;">
-                       <div class="chat-participants-panel-title">Participants</div>
-                       <div class="chat-participants-list" id="participants-list">
-                           <div style="padding:8px 14px;font-size:13px;color:var(--text-3)">Loading...</div>
+            ? `<div class="chat-header-actions">
+                   <div class="chat-participants-wrap" id="participants-wrap">
+                       <button class="chat-participants-btn" id="participants-btn">
+                           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                           ${currentChat.participant_count}
+                       </button>
+                       <div class="chat-participants-panel" id="participants-panel" style="display:none;">
+                           <div class="chat-participants-panel-title">Participants</div>
+                           <div class="chat-participants-list" id="participants-list">
+                               <div style="padding:8px 14px;font-size:13px;color:var(--text-3)">Loading...</div>
+                           </div>
                        </div>
                    </div>
+                   <button class="chat-leave-btn" id="leave-chat-btn" title="Leave chat">Leave</button>
                </div>`
             : '';
 
@@ -442,8 +535,10 @@ const ChatsApp = (() => {
                 const isOpen = panel.style.display !== 'none';
                 if (isOpen) {
                     panel.style.display = 'none';
+                    addParticipantEmails = [];
                     return;
                 }
+                addParticipantEmails = [];
                 panel.style.display = 'block';
                 list.innerHTML = '<div style="padding:8px 14px;font-size:13px;color:var(--text-3)">Loading...</div>';
                 try {
@@ -452,25 +547,130 @@ const ChatsApp = (() => {
                     if (data.participants && data.participants.length) {
                         list.innerHTML = data.participants.map(p => `
                             <a class="chat-participant-item" href="/profile/?user=${encodeURIComponent(p.email)}">
-                                <img class="chat-participant-avatar" src="${escapeHtml(p.avatar_url || '/static/maps/images/default-avatar.png')}" alt="" onerror="this.style.display='none'">
+                                <img class="chat-participant-avatar" src="${escapeHtml(p.avatar_url || '/static/maps/default-avatar.svg')}" alt="" onerror="this.src='/static/maps/default-avatar.svg'">
                                 <span>${escapeHtml(p.username)}</span>
                             </a>
                         `).join('');
                     } else {
                         list.innerHTML = '<div style="padding:8px 14px;font-size:13px;color:var(--text-3)">No participants found.</div>';
                     }
+
+                    // Append add-participants form below the list (remove any stale copy first)
+                    document.getElementById('add-participants-section')?.remove();
+                    const addSection = document.createElement('div');
+                    addSection.id = 'add-participants-section';
+                    addSection.style.cssText = 'border-top:1px solid var(--border);padding:10px 14px 12px;';
+                    addSection.innerHTML = `
+                        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-3);margin-bottom:8px;">Add People</div>
+                        <div class="participant-tags-input" id="add-participant-tags-input" style="cursor:text;min-height:36px;">
+                            <div class="participant-tags" id="add-participant-tags"></div>
+                            <input
+                                type="text"
+                                id="add-participant-input"
+                                placeholder="Email or username…"
+                                autocomplete="off"
+                                style="border:none;outline:none;background:transparent;font-size:13px;flex:1;min-width:80px;padding:2px 4px;"
+                            >
+                        </div>
+                        <p id="add-participant-error" style="display:none;font-size:12px;color:var(--danger,#e53e3e);margin:6px 0 0;"></p>
+                        <button id="add-participant-submit" class="btn-primary" style="margin-top:10px;width:100%;padding:8px 16px;font-size:13px;" disabled>Add to chat</button>
+                    `;
+                    panel.appendChild(addSection);
+
+                    // Focus the input and wire up events
+                    const addInput = document.getElementById('add-participant-input');
+                    const addTagsWrap = document.getElementById('add-participant-tags-input');
+                    const submitBtn = document.getElementById('add-participant-submit');
+
+                    addTagsWrap.addEventListener('click', () => addInput.focus());
+
+                    addInput.addEventListener('input', (ev) => {
+                        activeUserSearchInput = ev.target;
+                        const panelErr = document.getElementById('add-participant-error');
+                        if (panelErr) panelErr.style.display = 'none';
+                        const q = ev.target.value.trim();
+                        if (q.length >= 2) {
+                            clearTimeout(userSearchTimer);
+                            userSearchTimer = setTimeout(() => searchUsers(q), 250);
+                        } else {
+                            closeUserDropdown();
+                        }
+                    });
+
+                    addInput.addEventListener('keydown', async (ev) => {
+                        if (handleUserDropdownKeyboard(ev)) return;
+                        if (ev.key === 'Enter' || ev.key === ',') {
+                            ev.preventDefault();
+                            const val = addInput.value.replace(/,/g, '').trim();
+                            if (!val) return;
+                            const panelErrorEl = document.getElementById('add-participant-error');
+                            if (panelErrorEl) panelErrorEl.style.display = 'none';
+                            const panelMatch = await validateUserExists(val);
+                            if (panelMatch) {
+                                addPanelParticipantTag(panelMatch.email);
+                                addInput.value = '';
+                            } else {
+                                if (panelErrorEl) {
+                                    panelErrorEl.textContent = `"${val}" does not exist`;
+                                    panelErrorEl.style.display = 'block';
+                                }
+                            }
+                        } else if (ev.key === 'Backspace' && addInput.value === '' && addParticipantEmails.length > 0) {
+                            removePanelParticipantTag(addParticipantEmails[addParticipantEmails.length - 1]);
+                        }
+                    });
+
+                    addInput.addEventListener('blur', () => setTimeout(closeUserDropdown, 150));
+
+                    submitBtn.addEventListener('click', submitAddParticipants);
+
                 } catch {
                     list.innerHTML = '<div style="padding:8px 14px;font-size:13px;color:var(--text-3)">Failed to load.</div>';
                 }
             });
+        }
 
-            document.addEventListener('click', (e) => {
-                const wrap = document.getElementById('participants-wrap');
-                if (wrap && !wrap.contains(e.target)) {
-                    const panel = document.getElementById('participants-panel');
-                    if (panel) panel.style.display = 'none';
+        // Leave chat button for group/forum chats
+        const leaveChatBtn = document.getElementById('leave-chat-btn');
+        if (leaveChatBtn) {
+            leaveChatBtn.addEventListener('click', async () => {
+                if (!confirm(`Leave "${currentChat.name}"? You won't be able to see new messages unless re-added.`)) return;
+
+                try {
+                    const res = await fetch('/api/chats/leave/', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCookie('csrftoken'),
+                        },
+                        body: JSON.stringify({ chat_id: currentChat.id }),
+                    });
+
+                    if (res.ok) {
+                        // Clear hidden-chats entry so it doesn't linger
+                        try {
+                            const hidden = JSON.parse(localStorage.getItem('hiddenChats') || '{}');
+                            delete hidden[currentChat.id];
+                            localStorage.setItem('hiddenChats', JSON.stringify(hidden));
+                        } catch {}
+
+                        currentChat = null;
+                        document.getElementById('chat-main').innerHTML = `
+                            <div class="chat-empty">
+                                <div class="empty-icon">💬</div>
+                                <div class="empty-title">Select a chat to start messaging</div>
+                                <div class="empty-subtitle">or start a new conversation</div>
+                            </div>
+                        `;
+                        await loadChats();
+                    } else {
+                        const data = await res.json();
+                        alert('Failed to leave chat: ' + (data.error || 'Unknown error'));
+                    }
+                } catch {
+                    alert('Error leaving chat. Please try again.');
                 }
-            }, { capture: true });
+            });
         }
     }
 
@@ -617,6 +817,7 @@ const ChatsApp = (() => {
         document.getElementById('recent-reviewers').style.display = 'none';
         document.getElementById('direct-chat-error').style.display = 'none';
         document.getElementById('group-chat-error').style.display = 'none';
+        document.getElementById('participant-email-error').style.display = 'none';
         selectedAmenityId = null;
         participantEmails = [];
         renderParticipantTags();
@@ -656,6 +857,12 @@ const ChatsApp = (() => {
             return;
         }
 
+        const match = await validateUserExists(email);
+        if (!match) {
+            showError(errorEl, `"${email}" does not exist`);
+            return;
+        }
+
         try {
             const response = await fetch('/api/chats/direct/', {
                 method: 'POST',
@@ -688,8 +895,20 @@ const ChatsApp = (() => {
         // Flush any partially typed email in the input field
         const emailInput = document.getElementById('participant-email-input');
         if (emailInput && emailInput.value.trim()) {
-            addParticipantTag(emailInput.value.trim());
-            emailInput.value = '';
+            const partialVal = emailInput.value.trim();
+            const participantErrorEl = document.getElementById('participant-email-error');
+            if (participantErrorEl) participantErrorEl.style.display = 'none';
+            const partialMatch = await validateUserExists(partialVal);
+            if (partialMatch) {
+                addParticipantTag(partialMatch.email);
+                emailInput.value = '';
+            } else {
+                if (participantErrorEl) {
+                    participantErrorEl.textContent = `"${partialVal}" does not exist`;
+                    participantErrorEl.style.display = 'block';
+                }
+                return;
+            }
         }
 
         if (!name) {
@@ -802,6 +1021,15 @@ const ChatsApp = (() => {
         const q = e.target.value.trim();
         activeUserSearchInput = e.target;
 
+        // Clear inline validation errors while the user is typing
+        if (e.target.id === 'participant-email-input') {
+            const errEl = document.getElementById('participant-email-error');
+            if (errEl) errEl.style.display = 'none';
+        } else if (e.target.id === 'direct-recipient-email') {
+            const errEl = document.getElementById('direct-chat-error');
+            if (errEl) errEl.style.display = 'none';
+        }
+
         if (q.length < 2) {
             closeUserDropdown();
             return;
@@ -823,16 +1051,27 @@ const ChatsApp = (() => {
 
     function renderUserDropdown(users) {
         let dropdown = document.getElementById('user-dropdown');
+
+        const isAddPanel = activeUserSearchInput?.id === 'add-participant-input';
+        const desiredParent = isAddPanel
+            ? (document.getElementById('participants-wrap') || document.body)
+            : document.body;
+        const desiredPosition = isAddPanel ? 'fixed' : 'absolute';
+
         if (!dropdown) {
             dropdown = document.createElement('div');
             dropdown.id = 'user-dropdown';
             dropdown.style.cssText = `
-                position: absolute; background: var(--surface, #fff);
+                position: ${desiredPosition}; background: var(--surface, #fff);
                 border: 1px solid var(--border, #e8e8e5); border-radius: 8px;
                 box-shadow: 0 8px 24px rgba(0,0,0,0.12); z-index: 9999;
                 max-height: 220px; overflow-y: auto; display: none;
             `;
-            document.body.appendChild(dropdown);
+            desiredParent.appendChild(dropdown);
+        } else if (dropdown.parentElement !== desiredParent) {
+            // Re-parent if the active context changed (e.g. panel vs modal)
+            desiredParent.appendChild(dropdown);
+            dropdown.style.position = desiredPosition;
         }
 
         if (!activeUserSearchInput) return;
@@ -870,10 +1109,14 @@ const ChatsApp = (() => {
             });
         }
 
-        // Bind correctly relative to whichever input element is currently focused
         const rect = activeUserSearchInput.getBoundingClientRect();
-        dropdown.style.top = (rect.bottom + window.scrollY + 4) + 'px';
-        dropdown.style.left = (rect.left + window.scrollX) + 'px';
+        if (isAddPanel) {
+            dropdown.style.top = (rect.bottom + 4) + 'px';
+            dropdown.style.left = rect.left + 'px';
+        } else {
+            dropdown.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+            dropdown.style.left = (rect.left + window.scrollX) + 'px';
+        }
         dropdown.style.width = rect.width + 'px';
         dropdown.style.display = 'block';
     }
@@ -883,11 +1126,16 @@ const ChatsApp = (() => {
             if (activeUserSearchInput.id === 'participant-email-input') {
                 addParticipantTag(email);
                 activeUserSearchInput.value = '';
+                closeUserDropdown();
+            } else if (activeUserSearchInput.id === 'add-participant-input') {
+                addPanelParticipantTag(email);
+                activeUserSearchInput.value = '';
+                closeUserDropdown();
             } else {
                 activeUserSearchInput.value = email;
+                closeUserDropdown();
             }
         }
-        closeUserDropdown();
     }
 
     function handleUserDropdownKeyboard(e) {
@@ -939,19 +1187,46 @@ const ChatsApp = (() => {
         if (dropdown) dropdown.style.display = 'none';
     }
 
-    function onParticipantKeydown(e) {
+    async function validateUserExists(value) {
+        try {
+            const res = await fetch(`/api/users/search/?q=${encodeURIComponent(value)}&limit=10`);
+            const data = await res.json();
+            const users = data.users || [];
+            return users.find(u =>
+                u.email.toLowerCase() === value.toLowerCase() ||
+                (u.username && u.username.toLowerCase() === value.toLowerCase())
+            ) || null;
+        } catch {
+            return null;
+        }
+    }
+
+    async function onParticipantKeydown(e) {
         if (handleUserDropdownKeyboard(e)) return;
 
         if (e.key === 'Enter' || e.key === ',') {
             e.preventDefault();
             const input = e.target;
-            const email = input.value.replace(/,/g, '').trim();
-            if (email) addParticipantTag(email);
-            input.value = '';
+            const value = input.value.replace(/,/g, '').trim();
+            if (!value) return;
+            const errorEl = document.getElementById('participant-email-error');
+            if (errorEl) errorEl.style.display = 'none';
+            const match = await validateUserExists(value);
+            if (match) {
+                addParticipantTag(match.email);
+                input.value = '';
+            } else {
+                if (errorEl) {
+                    errorEl.textContent = `"${value}" does not exist`;
+                    errorEl.style.display = 'block';
+                }
+            }
         } else if (e.key === 'Backspace' && e.target.value === '' && participantEmails.length > 0) {
             removeParticipantTag(participantEmails[participantEmails.length - 1]);
         }
     }
+
+    // --- Create-modal participant tag helpers (use participantEmails) ---
 
     function addParticipantTag(email) {
         if (participantEmails.includes(email)) return;
@@ -976,6 +1251,124 @@ const ChatsApp = (() => {
         container.querySelectorAll('.participant-tag-remove').forEach(btn => {
             btn.addEventListener('click', () => removeParticipantTag(btn.dataset.email));
         });
+    }
+
+    // --- Add-people panel tag helpers (use addParticipantEmails) ---
+
+    function addPanelParticipantTag(email) {
+        if (addParticipantEmails.includes(email)) return;
+        addParticipantEmails.push(email);
+        renderPanelParticipantTags();
+    }
+
+    function removePanelParticipantTag(email) {
+        addParticipantEmails = addParticipantEmails.filter(e => e !== email);
+        renderPanelParticipantTags();
+    }
+
+    function renderPanelParticipantTags() {
+        const container = document.getElementById('add-participant-tags');
+        if (!container) return;
+        container.innerHTML = addParticipantEmails.map(email => `
+            <span class="participant-tag">
+                ${escapeHtml(email)}
+                <button class="participant-tag-remove" data-email="${escapeHtml(email)}" title="Remove">×</button>
+            </span>
+        `).join('');
+        container.querySelectorAll('.participant-tag-remove').forEach(btn => {
+            btn.addEventListener('click', () => removePanelParticipantTag(btn.dataset.email));
+        });
+        const submitBtn = document.getElementById('add-participant-submit');
+        if (submitBtn) submitBtn.disabled = addParticipantEmails.length === 0;
+    }
+
+    async function submitAddParticipants() {
+        const errorEl = document.getElementById('add-participant-error');
+        const submitBtn = document.getElementById('add-participant-submit');
+        const addInput = document.getElementById('add-participant-input');
+
+        // Flush any partially typed value
+        if (addInput && addInput.value.trim()) {
+            const flushVal = addInput.value.trim();
+            const flushErrorEl = document.getElementById('add-participant-error');
+            if (flushErrorEl) flushErrorEl.style.display = 'none';
+            const flushMatch = await validateUserExists(flushVal);
+            if (flushMatch) {
+                addPanelParticipantTag(flushMatch.email);
+                addInput.value = '';
+            } else {
+                if (flushErrorEl) {
+                    flushErrorEl.textContent = `"${flushVal}" does not exist`;
+                    flushErrorEl.style.display = 'block';
+                }
+                if (submitBtn) submitBtn.disabled = addParticipantEmails.length === 0;
+                return;
+            }
+        }
+
+        if (!addParticipantEmails.length) return;
+
+        if (errorEl) errorEl.style.display = 'none';
+        if (submitBtn) submitBtn.disabled = true;
+
+        try {
+            const res = await fetch('/api/chats/participants/add/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken'),
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    chat_id: currentChat.id,
+                    participant_emails: addParticipantEmails,
+                }),
+            });
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                if (errorEl) {
+                    errorEl.textContent = data.error || 'Failed to add participants.';
+                    errorEl.style.display = 'block';
+                }
+                if (submitBtn) submitBtn.disabled = addParticipantEmails.length === 0;
+                return;
+            }
+
+            // Update participant count on the header button and in currentChat
+            if (currentChat) currentChat.participant_count = data.participant_count;
+            const participantsBtn = document.getElementById('participants-btn');
+            if (participantsBtn) {
+                participantsBtn.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    ${data.participant_count}
+                `;
+            }
+
+            // Refresh the participant list in place
+            const list = document.getElementById('participants-list');
+            if (list && data.participants) {
+                list.innerHTML = data.participants.map(p => `
+                    <a class="chat-participant-item" href="/profile/?user=${encodeURIComponent(p.email)}">
+                        <img class="chat-participant-avatar" src="${escapeHtml(p.avatar_url || '/static/maps/default-avatar.svg')}" alt="" onerror="this.src='/static/maps/default-avatar.svg'">
+                        <span>${escapeHtml(p.username)}</span>
+                    </a>
+                `).join('');
+            }
+
+            // Reset the add form
+            addParticipantEmails = [];
+            renderPanelParticipantTags();
+            if (addInput) addInput.value = '';
+
+        } catch {
+            if (errorEl) {
+                errorEl.textContent = 'Network error. Please try again.';
+                errorEl.style.display = 'block';
+            }
+            if (submitBtn) submitBtn.disabled = addParticipantEmails.length === 0;
+        }
     }
 
     function showError(element, message) {
@@ -1047,14 +1440,21 @@ const ChatsApp = (() => {
         e.preventDefault();
         const form = e.target;
         const email = form.querySelector('input[type="email"]').value;
-        const password = form.querySelector('input[type="password"]').value;
+        const password = form.querySelector('input[name="password"], input[type="password"]').value;
+        const confirmInput = form.querySelector('input[name="confirm_password"]');
+        const confirmPassword = confirmInput ? confirmInput.value : password;
         const errorEl = document.getElementById('register-error');
+
+        if (password !== confirmPassword) {
+            showError(errorEl, 'Password and confirmation do not match');
+            return;
+        }
 
         try {
             const response = await fetch('/api/auth/register/', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password }),
+                body: JSON.stringify({ email, password, confirm_password: confirmPassword }),
             });
 
             const data = await response.json();
