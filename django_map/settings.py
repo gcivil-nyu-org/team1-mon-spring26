@@ -294,6 +294,8 @@ else:
                 "region_name": os.environ["AWS_S3_REGION_NAME"],
                 "querystring_auth": True,
                 "default_acl": None,
+                "endpoint_url": "https://s3.us-east-2.amazonaws.com",
+                "addressing_style": "virtual",
             },
         },
         "staticfiles": {
