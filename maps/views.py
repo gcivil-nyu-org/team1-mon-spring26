@@ -10,6 +10,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from django.core.exceptions import ValidationError
+from django.views.decorators.cache import cache_control
 from django.utils import timezone
 from datetime import timedelta
 import json
@@ -242,6 +243,7 @@ def get_review_prefetch_queryset(user):
     return queryset
 
 
+@cache_control(public=True, max_age=300)
 def amenities_api(request):
     """API endpoint to fetch amenities from DynamoDB,
     optionally filtered by type and bounding box."""
@@ -356,14 +358,6 @@ def amenities_api(request):
 
     amenity_types_map = {t.name: t for t in AmenityType.objects.all()}
 
-    favorite_ids = set()
-    if request.user.is_authenticated:
-        fav_qs = Favorite.objects.filter(user=request.user).select_related("amenity")
-        for fav in fav_qs:
-            if fav.amenity.external_id:
-                favorite_ids.add(fav.amenity.external_id)
-            favorite_ids.add(str(fav.amenity.id))
-
     # In-Memory Single-Table Design Filtering
     filtered_amenities = []
     for item in unique_amenities:
@@ -431,8 +425,6 @@ def amenities_api(request):
             fallback_icon = "bicycle"
             fallback_color = "#FF9800"
 
-        is_fav = str(a.get("Id")) in favorite_ids
-
         final_amenities_list.append(
             {
                 "id": a.get("Id"),
@@ -455,7 +447,7 @@ def amenities_api(request):
                 "type_id": amenity_type_obj.id if amenity_type_obj else None,
                 "icon": amenity_type_obj.icon if amenity_type_obj else fallback_icon,
                 "color": amenity_type_obj.color if amenity_type_obj else fallback_color,
-                "is_favorited": is_fav,
+                "is_favorited": False,
             }
         )
 
