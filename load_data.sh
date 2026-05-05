@@ -25,11 +25,19 @@ Site.objects.update_or_create(id=1, defaults={'domain': domain, 'name': 'NYC Now
 
 python manage.py create_dynamodb_table
 
-python manage.py import_nyc_water_fountains
-python manage.py import_nyc_public_restrooms
-python manage.py import_cooling_sites
-python manage.py import_bike_racks
-python manage.py import_linknyc_kiosks
+echo "Setting up background data imports..."
+cat << 'EOF' > /home/ec2-user/app/run_imports.sh
+#!/bin/bash
+source /home/ec2-user/app/venv/bin/activate
+export $(cat /home/ec2-user/app/.env | xargs)
+python manage.py import_nyc_water_fountains && python manage.py import_nyc_public_restrooms && python manage.py import_cooling_sites && python manage.py import_linknyc_kiosks && python manage.py import_bike_racks
+EOF
+chmod +x /home/ec2-user/app/run_imports.sh
+
+if [ ! -f "/home/ec2-user/app/.imports_started" ]; then
+    nohup /home/ec2-user/app/run_imports.sh > /home/ec2-user/app/imports.log 2>&1 &
+    touch /home/ec2-user/app/.imports_started
+fi
 
 echo "Setting up automatic S3 backup for SQLite database..."
 cat << 'EOF' > /home/ec2-user/app/backup_db.py
