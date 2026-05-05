@@ -547,22 +547,17 @@ class ViewsCoverageTest(TestCase):
             ).exists()
         )
 
-    def test_amenities_api_marks_favorited_amenities(self):
+    def test_amenity_detail_api_marks_favorited_amenities(self):
         Favorite.objects.create(user=self.test_user, amenity=self.amenity_active)
 
         self.client.force_login(self.test_user)
-        response = self.client.get(reverse("maps:amenities_api"))
+        response = self.client.get(
+            reverse("maps:amenity_detail_api", args=[self.amenity_active.external_id])
+        )
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
-        active = next(
-            (
-                a
-                for a in data["amenities"]
-                if a.get("id") == self.amenity_active.external_id
-            ),
-            None,
-        )
+        active = data.get("amenity")
         self.assertIsNotNone(active)
         self.assertTrue(active.get("is_favorited"))
 

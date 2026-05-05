@@ -231,7 +231,11 @@ function loadAmenities() {
         include_inactive: document.getElementById('include-inactive').checked,
         only_accessible:  document.getElementById('only-accessible').checked,
     });
-    activeAmenityTypes.forEach(id => params.append('type_id', id));
+    
+    // Sort type IDs so clicking "Restrooms" then "Fountains" generates the exact same 
+    // cacheable URL as clicking "Fountains" then "Restrooms"
+    Array.from(activeAmenityTypes).sort().forEach(id => params.append('type_id', id));
+    
     fetch(`/api/amenities/?${params}`, { signal: amenityAbortController.signal }).then(r => r.json()).then(data => {
         allAmenitiesData = {};
         data.amenities.forEach(a => {
