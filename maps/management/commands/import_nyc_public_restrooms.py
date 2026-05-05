@@ -1,5 +1,4 @@
 import re
-import json
 import datetime
 import requests
 from decimal import Decimal
@@ -9,12 +8,14 @@ from maps.models import AmenityType, Amenity
 import boto3
 import geohash2
 
+
 def get_dynamodb_table():
-    kwargs = {'region_name': settings.DYNAMODB_REGION}
-    if getattr(settings, 'DYNAMODB_ENDPOINT_URL', None):
-        kwargs['endpoint_url'] = settings.DYNAMODB_ENDPOINT_URL
-    dynamodb = boto3.resource('dynamodb', **kwargs)
+    kwargs = {"region_name": settings.DYNAMODB_REGION}
+    if getattr(settings, "DYNAMODB_ENDPOINT_URL", None):
+        kwargs["endpoint_url"] = settings.DYNAMODB_ENDPOINT_URL
+    dynamodb = boto3.resource("dynamodb", **kwargs)
     return dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
+
 
 # ---------------------------------------------------------------------------
 # Hours parsing
@@ -336,7 +337,6 @@ def parse_hours(raw: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # Management command
 # ---------------------------------------------------------------------------
@@ -445,34 +445,34 @@ class Command(BaseCommand):
                             == "operational"
                         )
 
-                        lat = float(geom['coordinates'][1])
-                        lon = float(geom['coordinates'][0])
+                        lat = float(geom["coordinates"][1])
+                        lon = float(geom["coordinates"][0])
                         amenity_id = str(external_id)
                         location_hash = geohash2.encode(lat, lon, precision=6)
-                        
+
                         item = {
-                            'PK': f"AMENITY#{amenity_id}",
-                            'SK': f"AMENITY#{amenity_id}",
-                            'GSI1PK': f"GEOHASH#{location_hash}", 
-                            'GSI1SK': f"TYPE#Restroom#ACTIVE#{active}", 
-                            'Id': amenity_id,
-                            'Name': str(name)[:200],
-                            'Type': "Restroom",
-                            'Description': str(description)[:1000],
-                            'Operator': str(operator)[:200],
-                            'HoursOfOperation': hours_dict,
-                            'ChangingStations': changing_stations,
-                            'Accessibility': accessibility,
-                            'Seasonal': seasonal,
-                            'Latitude': Decimal(str(lat)),
-                            'Longitude': Decimal(str(lon)),
-                            'Active': active,
-                            'AverageRating': Decimal('0'),
-                            'ReviewCount': 0
+                            "PK": f"AMENITY#{amenity_id}",
+                            "SK": f"AMENITY#{amenity_id}",
+                            "GSI1PK": f"GEOHASH#{location_hash}",
+                            "GSI1SK": f"TYPE#Restroom#ACTIVE#{active}",
+                            "Id": amenity_id,
+                            "Name": str(name)[:200],
+                            "Type": "Restroom",
+                            "Description": str(description)[:1000],
+                            "Operator": str(operator)[:200],
+                            "HoursOfOperation": hours_dict,
+                            "ChangingStations": changing_stations,
+                            "Accessibility": accessibility,
+                            "Seasonal": seasonal,
+                            "Latitude": Decimal(str(lat)),
+                            "Longitude": Decimal(str(lon)),
+                            "Active": active,
+                            "AverageRating": Decimal("0"),
+                            "ReviewCount": 0,
                         }
                         batch.put_item(Item=item)
                         processed_count += 1
-                        
+
                         Amenity.objects.update_or_create(
                             amenity_type=amenity_type,
                             external_id=amenity_id,
@@ -481,7 +481,7 @@ class Command(BaseCommand):
                                 "latitude": float(lat),
                                 "longitude": float(lon),
                                 "active": active,
-                            }
+                            },
                         )
 
                     except (ValueError, IndexError, TypeError, KeyError) as e:

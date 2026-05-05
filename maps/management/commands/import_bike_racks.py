@@ -2,16 +2,16 @@ import requests
 from django.core.management.base import BaseCommand
 from django.conf import settings
 from maps.models import AmenityType, Amenity
-import json
 import boto3
 import geohash2
 from decimal import Decimal
 
+
 def get_dynamodb_table():
-    kwargs = {'region_name': settings.DYNAMODB_REGION}
-    if getattr(settings, 'DYNAMODB_ENDPOINT_URL', None):
-        kwargs['endpoint_url'] = settings.DYNAMODB_ENDPOINT_URL
-    dynamodb = boto3.resource('dynamodb', **kwargs)
+    kwargs = {"region_name": settings.DYNAMODB_REGION}
+    if getattr(settings, "DYNAMODB_ENDPOINT_URL", None):
+        kwargs["endpoint_url"] = settings.DYNAMODB_ENDPOINT_URL
+    dynamodb = boto3.resource("dynamodb", **kwargs)
     return dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
 
@@ -57,10 +57,13 @@ class Command(BaseCommand):
 
             processed_count = 0
             skipped_count = 0
-            
+
             table = get_dynamodb_table()
-            
-            existing_racks = {a.external_id: a for a in Amenity.objects.filter(amenity_type=amenity_type)}
+
+            existing_racks = {
+                a.external_id: a
+                for a in Amenity.objects.filter(amenity_type=amenity_type)
+            }
             to_create = []
             to_update = []
 
@@ -82,34 +85,38 @@ class Command(BaseCommand):
                         lon = geom_dict["coordinates"][0]
                         lat = geom_dict["coordinates"][1]
 
-                        external_id = str(rack.get("site_id") or f"bikerack_{lon}_{lat}")
+                        external_id = str(
+                            rack.get("site_id") or f"bikerack_{lon}_{lat}"
+                        )
 
                         ifo_address = rack.get("ifoaddress", "")
                         name = rack.get("ntaname") or ifo_address or "Bike Rack"
                         rack_type_desc = rack.get("racktype", "Standard Rack")
                         description = f"Type: {rack_type_desc}"
-                        
-                        location_hash = geohash2.encode(float(lat), float(lon), precision=6)
-                        
+
+                        location_hash = geohash2.encode(
+                            float(lat), float(lon), precision=6
+                        )
+
                         item = {
-                            'PK': f"AMENITY#{external_id}",
-                            'SK': f"AMENITY#{external_id}",
-                            'GSI1PK': f"GEOHASH#{location_hash}", 
-                            'GSI1SK': f"TYPE#Bike Rack#ACTIVE#True", 
-                            'Id': external_id,
-                            'Name': name,
-                            'Type': "Bike Rack",
-                            'Address': ifo_address,
-                            'Description': description,
-                            'Latitude': Decimal(str(lat)),
-                            'Longitude': Decimal(str(lon)),
-                            'Active': True,
-                            'AverageRating': Decimal('0'),
-                            'ReviewCount': 0
+                            "PK": f"AMENITY#{external_id}",
+                            "SK": f"AMENITY#{external_id}",
+                            "GSI1PK": f"GEOHASH#{location_hash}",
+                            "GSI1SK": "TYPE#Bike Rack#ACTIVE#True",
+                            "Id": external_id,
+                            "Name": name,
+                            "Type": "Bike Rack",
+                            "Address": ifo_address,
+                            "Description": description,
+                            "Latitude": Decimal(str(lat)),
+                            "Longitude": Decimal(str(lon)),
+                            "Active": True,
+                            "AverageRating": Decimal("0"),
+                            "ReviewCount": 0,
                         }
                         batch.put_item(Item=item)
                         processed_count += 1
-                        
+
                         if external_id in existing_racks:
                             obj = existing_racks[external_id]
                             obj.name = name[:200]
@@ -118,14 +125,16 @@ class Command(BaseCommand):
                             obj.active = True
                             to_update.append(obj)
                         else:
-                            to_create.append(Amenity(
-                                amenity_type=amenity_type,
-                                external_id=external_id,
-                                name=name[:200],
-                                latitude=float(lat),
-                                longitude=float(lon),
-                                active=True
-                            ))
+                            to_create.append(
+                                Amenity(
+                                    amenity_type=amenity_type,
+                                    external_id=external_id,
+                                    name=name[:200],
+                                    latitude=float(lat),
+                                    longitude=float(lon),
+                                    active=True,
+                                )
+                            )
 
                     except (ValueError, IndexError, TypeError, KeyError) as e:
                         self.stdout.write(
@@ -137,7 +146,11 @@ class Command(BaseCommand):
             if to_create:
                 Amenity.objects.bulk_create(to_create, batch_size=1000)
             if to_update:
-                Amenity.objects.bulk_update(to_update, ['name', 'latitude', 'longitude', 'active'], batch_size=1000)
+                Amenity.objects.bulk_update(
+                    to_update,
+                    ["name", "latitude", "longitude", "active"],
+                    batch_size=1000,
+                )
 
             self.stdout.write(
                 self.style.SUCCESS(

@@ -7,11 +7,12 @@ from maps.models import AmenityType, Amenity
 import boto3
 import geohash2
 
+
 def get_dynamodb_table():
-    kwargs = {'region_name': settings.DYNAMODB_REGION}
-    if getattr(settings, 'DYNAMODB_ENDPOINT_URL', None):
-        kwargs['endpoint_url'] = settings.DYNAMODB_ENDPOINT_URL
-    dynamodb = boto3.resource('dynamodb', **kwargs)
+    kwargs = {"region_name": settings.DYNAMODB_REGION}
+    if getattr(settings, "DYNAMODB_ENDPOINT_URL", None):
+        kwargs["endpoint_url"] = settings.DYNAMODB_ENDPOINT_URL
+    dynamodb = boto3.resource("dynamodb", **kwargs)
     return dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
 
@@ -107,27 +108,29 @@ class Command(BaseCommand):
                             lat = geom["coordinates"][1]
 
                         amenity_id = str(external_id)
-                        location_hash = geohash2.encode(float(lat), float(lon), precision=6)
-                        
+                        location_hash = geohash2.encode(
+                            float(lat), float(lon), precision=6
+                        )
+
                         item = {
-                            'PK': f"AMENITY#{amenity_id}",
-                            'SK': f"AMENITY#{amenity_id}",
-                            'GSI1PK': f"GEOHASH#{location_hash}", 
-                            'GSI1SK': f"TYPE#Water Fountain#ACTIVE#{active}", 
-                            'Id': amenity_id,
-                            'Name': str(name)[:200],
-                            'Type': "Water Fountain",
-                            'Address': str(prop_name)[:200],
-                            'Description': str(position)[:500],
-                            'Latitude': Decimal(str(lat)),
-                            'Longitude': Decimal(str(lon)),
-                            'Active': active,
-                            'AverageRating': Decimal('0'),
-                            'ReviewCount': 0
+                            "PK": f"AMENITY#{amenity_id}",
+                            "SK": f"AMENITY#{amenity_id}",
+                            "GSI1PK": f"GEOHASH#{location_hash}",
+                            "GSI1SK": f"TYPE#Water Fountain#ACTIVE#{active}",
+                            "Id": amenity_id,
+                            "Name": str(name)[:200],
+                            "Type": "Water Fountain",
+                            "Address": str(prop_name)[:200],
+                            "Description": str(position)[:500],
+                            "Latitude": Decimal(str(lat)),
+                            "Longitude": Decimal(str(lon)),
+                            "Active": active,
+                            "AverageRating": Decimal("0"),
+                            "ReviewCount": 0,
                         }
                         batch.put_item(Item=item)
                         processed_count += 1
-                        
+
                         Amenity.objects.update_or_create(
                             amenity_type=amenity_type,
                             external_id=amenity_id,
@@ -136,7 +139,7 @@ class Command(BaseCommand):
                                 "latitude": float(lat),
                                 "longitude": float(lon),
                                 "active": active,
-                            }
+                            },
                         )
 
                     except (ValueError, IndexError, TypeError, KeyError) as e:

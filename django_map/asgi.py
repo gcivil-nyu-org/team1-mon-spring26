@@ -9,10 +9,8 @@ https://docs.djangoproject.com/en/6.0/howto/deployment/asgi/
 
 import os
 import django
-import json
 import asyncio
 import logging
-from contextlib import asynccontextmanager
 from django.conf import settings
 from asgiref.sync import sync_to_async
 from starlette.applications import Starlette

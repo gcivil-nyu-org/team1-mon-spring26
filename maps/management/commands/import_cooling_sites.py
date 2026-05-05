@@ -7,11 +7,12 @@ import stateplane
 import boto3
 import geohash2
 
+
 def get_dynamodb_table():
-    kwargs = {'region_name': settings.DYNAMODB_REGION}
-    if getattr(settings, 'DYNAMODB_ENDPOINT_URL', None):
-        kwargs['endpoint_url'] = settings.DYNAMODB_ENDPOINT_URL
-    dynamodb = boto3.resource('dynamodb', **kwargs)
+    kwargs = {"region_name": settings.DYNAMODB_REGION}
+    if getattr(settings, "DYNAMODB_ENDPOINT_URL", None):
+        kwargs["endpoint_url"] = settings.DYNAMODB_ENDPOINT_URL
+    dynamodb = boto3.resource("dynamodb", **kwargs)
     return dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
 
@@ -60,7 +61,7 @@ class Command(BaseCommand):
 
             processed_count = 0
             skipped_count = 0
-            
+
             table = get_dynamodb_table()
 
             with table.batch_writer() as batch:
@@ -139,26 +140,28 @@ class Command(BaseCommand):
                         # print(f"Final coordinates: {lat_decimal}, {lon_decimal}")
                         try:
                             amenity_id = str(external_id)
-                            location_hash = geohash2.encode(float(lat_decimal), float(lon_decimal), precision=6)
-                            
+                            location_hash = geohash2.encode(
+                                float(lat_decimal), float(lon_decimal), precision=6
+                            )
+
                             item = {
-                                'PK': f"AMENITY#{amenity_id}",
-                                'SK': f"AMENITY#{amenity_id}",
-                                'GSI1PK': f"GEOHASH#{location_hash}", 
-                                'GSI1SK': f"TYPE#{feature_type_name}#ACTIVE#{is_active}", 
-                                'Id': amenity_id,
-                                'Name': prop_name,
-                                'Type': feature_type_name,
-                                'Description': f"Type: {feature_type_name}",
-                                'Latitude': Decimal(str(lat_decimal)),
-                                'Longitude': Decimal(str(lon_decimal)),
-                                'Active': is_active,
-                                'AverageRating': Decimal('0'),
-                                'ReviewCount': 0
+                                "PK": f"AMENITY#{amenity_id}",
+                                "SK": f"AMENITY#{amenity_id}",
+                                "GSI1PK": f"GEOHASH#{location_hash}",
+                                "GSI1SK": f"TYPE#{feature_type_name}#ACTIVE#{is_active}",  # noqa: E501
+                                "Id": amenity_id,
+                                "Name": prop_name,
+                                "Type": feature_type_name,
+                                "Description": f"Type: {feature_type_name}",
+                                "Latitude": Decimal(str(lat_decimal)),
+                                "Longitude": Decimal(str(lon_decimal)),
+                                "Active": is_active,
+                                "AverageRating": Decimal("0"),
+                                "ReviewCount": 0,
                             }
                             batch.put_item(Item=item)
                             processed_count += 1
-                            
+
                             Amenity.objects.update_or_create(
                                 amenity_type=amenity_type,
                                 external_id=amenity_id,
@@ -167,7 +170,7 @@ class Command(BaseCommand):
                                     "latitude": float(lat_decimal),
                                     "longitude": float(lon_decimal),
                                     "active": is_active,
-                                }
+                                },
                             )
 
                             print(f"Added/Updated: {prop_name} (ID: {amenity_id})")
@@ -186,8 +189,10 @@ class Command(BaseCommand):
                         continue
 
             self.stdout.write(
-                self.style.SUCCESS(f"\nImport complete!\nProcessed (upserted): {processed_count}\n \
-                        Skipped: {skipped_count}")
+                self.style.SUCCESS(
+                    f"\nImport complete!\nProcessed (upserted): {processed_count}\n \
+                        Skipped: {skipped_count}"
+                )
             )
 
         except requests.exceptions.RequestException as e:

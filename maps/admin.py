@@ -49,7 +49,14 @@ class AmenityTypeAdmin(admin.ModelAdmin):
 
 @admin.register(Amenity)
 class AmenityAdmin(admin.ModelAdmin):
-    list_display = ["name", "amenity_type", "active", "latitude", "longitude", "created_at"]
+    list_display = [
+        "name",
+        "amenity_type",
+        "active",
+        "latitude",
+        "longitude",
+        "created_at",
+    ]
     list_filter = ["amenity_type", "active", "created_at"]
     search_fields = ["name", "address", "description", "external_id"]
     fieldsets = (
