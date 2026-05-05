@@ -217,8 +217,16 @@ function loadAmenities() {
     }
 
     const b = map.getBounds();
+    
+    // Snap boundaries to a fixed ~500m grid to dramatically increase Cloudflare cache hits
+    const snap = (val, step) => Math.round(val / step) * step;
+    const north = snap(b.getNorth(), 0.005);
+    const south = snap(b.getSouth(), 0.005);
+    const east = snap(b.getEast(), 0.005);
+    const west = snap(b.getWest(), 0.005);
+    
     const params = new URLSearchParams({
-        north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest(),
+        north: north.toFixed(3), south: south.toFixed(3), east: east.toFixed(3), west: west.toFixed(3),
         zoom: Math.round(map.getZoom()),
         include_inactive: document.getElementById('include-inactive').checked,
         only_accessible:  document.getElementById('only-accessible').checked,

@@ -10,6 +10,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from django.core.exceptions import ValidationError
+from django.views.decorators.cache import cache_control
 from django.utils import timezone
 from datetime import timedelta
 import json
@@ -232,22 +233,14 @@ def get_review_prefetch_queryset(user):
     return queryset
 
 
+@cache_control(public=True, max_age=300)
 def amenities_api(request):
     """API endpoint to fetch amenities from DynamoDB,
     optionally filtered by type and bounding box."""
     amenity_type_name = request.GET.get("type")
-    type_ids = request.GET.getlist("type_id")
     include_inactive = request.GET.get("include_inactive", "false").lower() == "true"
     only_accessible = request.GET.get("only_accessible", "false").lower() == "true"
     zoom = int(request.GET.get("zoom", 0))
-
-    type_names = []
-    if type_ids:
-        type_names = list(
-            AmenityType.objects.filter(id__in=type_ids).values_list("name", flat=True)
-        )
-    elif amenity_type_name:
-        type_names = [amenity_type_name]
 
     dynamodb = get_dynamodb_resource()
     table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
@@ -266,51 +259,20 @@ def amenities_api(request):
                 south_f = float(south)
                 east_f = float(east)
                 west_f = float(west)
-
-                # Prevent massive queries when zoomed out by centering in middle
-                MAX_LAT_SPAN = 0.04  # ~4.5 km
-                MAX_LON_SPAN = 0.04
-
-                if (north_f - south_f) > MAX_LAT_SPAN:
-                    center_lat = (north_f + south_f) / 2.0
-                    north_f = center_lat + (MAX_LAT_SPAN / 2.0)
-                    south_f = center_lat - (MAX_LAT_SPAN / 2.0)
-
-                if (east_f - west_f) > MAX_LON_SPAN:
-                    center_lon = (east_f + west_f) / 2.0
-                    east_f = center_lon + (MAX_LON_SPAN / 2.0)
-                    west_f = center_lon - (MAX_LON_SPAN / 2.0)
-
-                hashes = get_geohashes_in_bbox(
-                    north_f, south_f, east_f, west_f, precision=6
-                )
+                hashes = get_geohashes_in_bbox(north_f, south_f, east_f, west_f, precision=6)
             else:
                 hashes = None
         except (TypeError, ValueError):
             hashes = None
 
         if hashes is not None:
-
             def fetch_hash(h):
                 try:
-                    # Optimization: Query via DynamoDB index if only 1 type is selected
-                    if len(type_names) == 1:
-                        sk_prefix = f"TYPE#{type_names[0]}#"
-                        if not include_inactive:
-                            sk_prefix += "ACTIVE#True"
-
-                        response = table.query(
-                            IndexName="GeohashIndex",
-                            KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{h}")
-                            & Key("GSI1SK").begins_with(sk_prefix),
-                        )
-                    else:
-                        response = table.query(
-                            IndexName="GeohashIndex",
-                            KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{h}"),
-                        )
+                    response = table.query(
+                        IndexName="GeohashIndex",
+                        KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{h}"),
+                    )
                     return response.get("Items", [])
-
                 except Exception as e:
                     print(f"DynamoDB Query Error: {e}")
                     return []
@@ -344,20 +306,12 @@ def amenities_api(request):
 
     amenity_types_map = {t.name: t for t in AmenityType.objects.all()}
 
-    favorite_ids = set()
-    if request.user.is_authenticated:
-        fav_qs = Favorite.objects.filter(user=request.user).select_related("amenity")
-        for fav in fav_qs:
-            if fav.amenity.external_id:
-                favorite_ids.add(fav.amenity.external_id)
-            favorite_ids.add(str(fav.amenity.id))
-
     # In-Memory Single-Table Design Filtering
     filtered_amenities = []
     for item in unique_amenities:
         if not include_inactive and not item.get("Active", True):
             continue
-        if type_names and item.get("Type") not in type_names:
+        if amenity_type_name and item.get("Type") != amenity_type_name:
             continue
         if only_accessible and item.get("Accessibility", "") == "Not Accessible":
             continue
@@ -374,7 +328,9 @@ def amenities_api(request):
         a for a in filtered_amenities if a.get("Type") != BIKE_RACK_TYPE_NAME
     ]
 
-    is_bike_rack_query = (BIKE_RACK_TYPE_NAME in type_names) if type_names else True
+    is_bike_rack_query = (
+        amenity_type_name == BIKE_RACK_TYPE_NAME
+    ) or not amenity_type_name
 
     if is_bike_rack_query and zoom < CLUSTER_ZOOM_THRESHOLD:
         clusters = cluster_amenities_python(bike_rack_amenities, zoom)
@@ -418,9 +374,7 @@ def amenities_api(request):
         if a.get("Type") == BIKE_RACK_TYPE_NAME:
             fallback_icon = "bicycle"
             fallback_color = "#FF9800"
-
-        is_fav = str(a.get("Id")) in favorite_ids
-
+            
         final_amenities_list.append(
             {
                 "id": a.get("Id"),
@@ -443,7 +397,7 @@ def amenities_api(request):
                 "type_id": amenity_type_obj.id if amenity_type_obj else None,
                 "icon": amenity_type_obj.icon if amenity_type_obj else fallback_icon,
                 "color": amenity_type_obj.color if amenity_type_obj else fallback_color,
-                "is_favorited": is_fav,
+                "is_favorited": False,
             }
         )
 
