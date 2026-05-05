@@ -503,6 +503,7 @@ def amenity_detail_api(request, amenity_id):
         return JsonResponse({"error": str(e)}, status=500)
 
 
+@cache_control(public=True, max_age=86400)
 def amenity_types_api(request):
     """API endpoint to fetch all amenity types."""
     # Fetch only top-level types (those without a parent)
@@ -1068,6 +1069,7 @@ def toggle_favorite_api(request, amenity_id):
     )
 
 
+@cache_control(public=True, max_age=300)
 @require_http_methods(["GET"])
 def amenity_rating_distribution_api(request, amenity_id):
     """API endpoint to fetch the rating distribution for a specific amenity."""
