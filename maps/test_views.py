@@ -263,7 +263,7 @@ class ViewsCoverageTest(TestCase):
     def test_amenities_api_bbox_filter(self):
         response = self.client.get(
             reverse("maps:amenities_api"),
-            {"north": 41.0, "south": 40.0, "east": -73.0, "west": -74.0},
+            {"north": 40.74, "south": 40.72, "east": -73.98, "west": -74.00},
         )
         self.assertEqual(response.status_code, 200)
         data = response.json()
