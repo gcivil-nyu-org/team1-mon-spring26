@@ -259,13 +259,16 @@ def amenities_api(request):
                 south_f = float(south)
                 east_f = float(east)
                 west_f = float(west)
-                hashes = get_geohashes_in_bbox(north_f, south_f, east_f, west_f, precision=6)
+                hashes = get_geohashes_in_bbox(
+                    north_f, south_f, east_f, west_f, precision=6
+                )
             else:
                 hashes = None
         except (TypeError, ValueError):
             hashes = None
 
         if hashes is not None:
+
             def fetch_hash(h):
                 try:
                     response = table.query(
@@ -374,7 +377,7 @@ def amenities_api(request):
         if a.get("Type") == BIKE_RACK_TYPE_NAME:
             fallback_icon = "bicycle"
             fallback_color = "#FF9800"
-            
+
         final_amenities_list.append(
             {
                 "id": a.get("Id"),
