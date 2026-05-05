@@ -109,9 +109,7 @@ class Command(BaseCommand):
                     )
 
                     # Use a unique ID from the dataset
-                    external_id = site.get(
-                        "__id"
-                    )  # From sample: "__id":"row-2gks..."
+                    external_id = site.get("__id")  # From sample: "__id":"row-2gks..."
                     if not external_id:
                         skipped_count += 1
                         continue

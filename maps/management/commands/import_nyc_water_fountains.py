@@ -109,9 +109,7 @@ class Command(BaseCommand):
                         lat = geom["coordinates"][1]
 
                     amenity_id = str(external_id)
-                    location_hash = geohash2.encode(
-                        float(lat), float(lon), precision=6
-                    )
+                    location_hash = geohash2.encode(float(lat), float(lon), precision=6)
 
                     item = {
                         "PK": f"AMENITY#{amenity_id}",

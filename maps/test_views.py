@@ -36,9 +36,9 @@ from maps.views import normalize_longitude, get_cluster_grid_size
         "staticfiles": {
             "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
         },
-    }
+    },
     DYNAMODB_TABLE_NAME="NycNowData",
-    DYNAMODB_REGION="us-east-2"
+    DYNAMODB_REGION="us-east-2",
 )
 @mock_dynamodb
 class ViewsCoverageTest(TestCase):
@@ -125,7 +125,7 @@ class ViewsCoverageTest(TestCase):
             },
         )
         self.setup_dynamodb()
-        
+
     def setup_dynamodb(self):
         self.dynamodb = boto3.resource("dynamodb", region_name="us-east-2")
         self.table = self.dynamodb.create_table(
@@ -156,22 +156,26 @@ class ViewsCoverageTest(TestCase):
         self._put_dynamo_amenity(self.amenity_inactive)
         self._put_dynamo_amenity(self.amenity_bike_cluster1)
         self._put_dynamo_amenity(self.amenity_bike_cluster2)
-        
+
     def _put_dynamo_amenity(self, amenity):
-        location_hash = geohash2.encode(amenity.latitude, amenity.longitude, precision=6)
-        self.table.put_item(Item={
-            "PK": f"AMENITY#{amenity.external_id or amenity.id}",
-            "SK": f"AMENITY#{amenity.external_id or amenity.id}",
-            "GSI1PK": f"GEOHASH#{location_hash}",
-            "GSI1SK": f"TYPE#{amenity.amenity_type.name}#ACTIVE#{amenity.active}",
-            "Id": str(amenity.external_id or amenity.id),
-            "Name": amenity.name,
-            "Type": amenity.amenity_type.name,
-            "Latitude": Decimal(str(amenity.latitude)),
-            "Longitude": Decimal(str(amenity.longitude)),
-            "Active": amenity.active,
-            "Accessibility": amenity.accessibility,
-        })
+        location_hash = geohash2.encode(
+            amenity.latitude, amenity.longitude, precision=6
+        )
+        self.table.put_item(
+            Item={
+                "PK": f"AMENITY#{amenity.external_id or amenity.id}",
+                "SK": f"AMENITY#{amenity.external_id or amenity.id}",
+                "GSI1PK": f"GEOHASH#{location_hash}",
+                "GSI1SK": f"TYPE#{amenity.amenity_type.name}#ACTIVE#{amenity.active}",
+                "Id": str(amenity.external_id or amenity.id),
+                "Name": amenity.name,
+                "Type": amenity.amenity_type.name,
+                "Latitude": Decimal(str(amenity.latitude)),
+                "Longitude": Decimal(str(amenity.longitude)),
+                "Active": amenity.active,
+                "Accessibility": amenity.accessibility,
+            }
+        )
 
     def test_normalize_longitude(self):
         self.assertEqual(normalize_longitude(100), 100)
@@ -281,7 +285,10 @@ class ViewsCoverageTest(TestCase):
     def test_amenities_api_clustering(self, mock_cluster):
         mock_cluster.return_value = [
             (
-                [self.amenity_bike_cluster1.external_id, self.amenity_bike_cluster2.external_id],
+                [
+                    self.amenity_bike_cluster1.external_id,
+                    self.amenity_bike_cluster2.external_id,
+                ],
                 2,
                 40.74015,
                 -73.98015,
@@ -350,10 +357,12 @@ class ViewsCoverageTest(TestCase):
             amenity=self.amenity_active, uploaded_by=self.test_user, photo=photo
         )
 
-        response = self.client.get(reverse("maps:amenity_detail_api", args=[self.amenity_active.external_id]))
+        response = self.client.get(
+            reverse("maps:amenity_detail_api", args=[self.amenity_active.external_id])
+        )
         data = response.json()
         active = data.get("amenity")
-        
+
         self.assertIsNotNone(active)
         self.assertTrue(len(active["reviews"]) > 0)
         self.assertEqual(active["reviews"][0]["rating"], 4)
@@ -544,7 +553,14 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
-        active = next((a for a in data["amenities"] if a.get("id") == self.amenity_active.external_id), None)
+        active = next(
+            (
+                a
+                for a in data["amenities"]
+                if a.get("id") == self.amenity_active.external_id
+            ),
+            None,
+        )
         self.assertIsNotNone(active)
         self.assertTrue(active.get("is_favorited"))
 
@@ -2300,8 +2316,10 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(data["available"], 1)
         self.assertEqual(data["unavailable"], 0)
         self.assertEqual(data["user_vote"], "available")
-        
-        res2 = self.client.get(f"/api/amenities/{self.amenity_active.external_id}/availability/")
+
+        res2 = self.client.get(
+            f"/api/amenities/{self.amenity_active.external_id}/availability/"
+        )
         self.assertEqual(res2.json()["available"], 1)
 
     def test_change_availability_vote(self):
@@ -2315,7 +2333,9 @@ class ViewsCoverageTest(TestCase):
             data='{"is_available": false}',
             content_type="application/json",
         )
-        res2 = self.client.get(f"/api/amenities/{self.amenity_active.external_id}/availability/")
+        res2 = self.client.get(
+            f"/api/amenities/{self.amenity_active.external_id}/availability/"
+        )
         self.assertEqual(res2.json()["available"], 0)
         self.assertEqual(res2.json()["unavailable"], 1)
 

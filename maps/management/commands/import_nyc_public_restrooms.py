@@ -425,9 +425,7 @@ class Command(BaseCommand):
                         == "seasonal"
                     )
 
-                    cs_raw = (
-                        str(restroom.get("changing_stations", "")).strip().lower()
-                    )
+                    cs_raw = str(restroom.get("changing_stations", "")).strip().lower()
                     changing_stations = cs_raw.startswith("yes")
 
                     accessibility = ""
@@ -442,8 +440,7 @@ class Command(BaseCommand):
                         accessibility = "Not Accessible"
 
                     active = (
-                        str(restroom.get("status", "")).strip().lower()
-                        == "operational"
+                        str(restroom.get("status", "")).strip().lower() == "operational"
                     )
 
                     lat = float(geom["coordinates"][1])

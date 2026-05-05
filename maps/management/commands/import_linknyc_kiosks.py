@@ -368,9 +368,7 @@ class Command(BaseCommand):
                         amenity_type=amenity_type,
                         external_id=str(external_id),
                         defaults={
-                            "name": str(record.get("name") or "LinkNYC Kiosk")[
-                                :200
-                            ],
+                            "name": str(record.get("name") or "LinkNYC Kiosk")[:200],
                             "latitude": float(lat_decimal),
                             "longitude": float(lon_decimal),
                             "active": is_active,

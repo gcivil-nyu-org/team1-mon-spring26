@@ -86,18 +86,14 @@ class Command(BaseCommand):
                     lon = geom_dict["coordinates"][0]
                     lat = geom_dict["coordinates"][1]
 
-                    external_id = str(
-                        rack.get("site_id") or f"bikerack_{lon}_{lat}"
-                    )
+                    external_id = str(rack.get("site_id") or f"bikerack_{lon}_{lat}")
 
                     ifo_address = rack.get("ifoaddress", "")
                     name = rack.get("ntaname") or ifo_address or "Bike Rack"
                     rack_type_desc = rack.get("racktype", "Standard Rack")
                     description = f"Type: {rack_type_desc}"
 
-                    location_hash = geohash2.encode(
-                        float(lat), float(lon), precision=6
-                    )
+                    location_hash = geohash2.encode(float(lat), float(lon), precision=6)
 
                     item = {
                         "PK": f"AMENITY#{external_id}",

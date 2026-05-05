@@ -419,20 +419,24 @@ def amenity_detail_api(request, amenity_id):
                 sqlite_amenity = Amenity.objects.get(id=amenity_id)
             except (Amenity.DoesNotExist, ValueError):
                 sqlite_amenity = None
-                
+
         is_fav = False
         serialized_reviews = []
         avg_rating = 0.0
         review_count = 0
-        
+
         if sqlite_amenity:
             if request.user.is_authenticated:
-                is_fav = Favorite.objects.filter(user=request.user, amenity=sqlite_amenity).exists()
-                
+                is_fav = Favorite.objects.filter(
+                    user=request.user, amenity=sqlite_amenity
+                ).exists()
+
             avg_rating = sqlite_amenity.get_average_rating() or 0.0
             review_count = sqlite_amenity.get_review_count()
-            
-            reviews_qs = get_review_prefetch_queryset(request.user).filter(amenity=sqlite_amenity)[:5]
+
+            reviews_qs = get_review_prefetch_queryset(request.user).filter(
+                amenity=sqlite_amenity
+            )[:5]
             for review in reviews_qs:
                 photo_urls = [p.photo.url for p in review.photos.all()]
                 serialized_reviews.append(
@@ -440,7 +444,7 @@ def amenity_detail_api(request, amenity_id):
                         review,
                         photo_url=photo_urls[0] if photo_urls else None,
                         photo_urls=photo_urls,
-                        current_user=request.user
+                        current_user=request.user,
                     )
                 )
 
@@ -1481,8 +1485,12 @@ def get_amenity_reviews_api(request):
                 sqlite_amenity = Amenity.objects.get(id=amenity_id)
             except (Amenity.DoesNotExist, ValueError):
                 return JsonResponse({"error": "Amenity not found"}, status=404)
-                
-        reviews_qs = Review.objects.filter(amenity=sqlite_amenity).select_related("user").order_by("-created_at")
+
+        reviews_qs = (
+            Review.objects.filter(amenity=sqlite_amenity)
+            .select_related("user")
+            .order_by("-created_at")
+        )
 
         total_count = reviews_qs.count()
         start_idx = (page - 1) * page_size
@@ -2192,17 +2200,19 @@ def get_amenity_reviewers_api(request):
                 sqlite_amenity = Amenity.objects.get(id=amenity_id)
             except (Amenity.DoesNotExist, ValueError):
                 return JsonResponse({"error": "Amenity not found"}, status=404)
-                
-        reviews_qs = Review.objects.filter(amenity=sqlite_amenity, user__isnull=False).select_related("user").order_by("-created_at")[:limit]
+
+        reviews_qs = (
+            Review.objects.filter(amenity=sqlite_amenity, user__isnull=False)
+            .select_related("user")
+            .order_by("-created_at")[:limit]
+        )
 
         reviewers_data = [
             {
                 "user_id": r.user.id,
                 "email": r.user.email,
                 "rating": r.rating,
-                "review_text": (
-                    r.review_text[:100] if r.review_text else None
-                ),
+                "review_text": (r.review_text[:100] if r.review_text else None),
                 "created_at": r.created_at.isoformat(),
             }
             for r in reviews_qs
