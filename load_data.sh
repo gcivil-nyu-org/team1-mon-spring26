@@ -82,7 +82,32 @@ export $(cat /home/ec2-user/app/.env | xargs)
 EOF
 chmod +x /home/ec2-user/app/backup_db.sh
 
-(crontab -l 2>/dev/null | grep -v backup_db.sh; echo "0 * * * * /home/ec2-user/app/backup_db.sh") | crontab -
+echo "Registering systemd timer for hourly database backup..."
+sudo bash -c "cat << 'EOF' > /etc/systemd/system/db-backup.service
+[Unit]
+Description=Backup SQLite DB to S3
+
+[Service]
+Type=oneshot
+ExecStart=/home/ec2-user/app/backup_db.sh
+User=ec2-user
+EOF"
+
+sudo bash -c "cat << 'EOF' > /etc/systemd/system/db-backup.timer
+[Unit]
+Description=Run SQLite DB backup hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF"
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now db-backup.timer
+
 /home/ec2-user/app/backup_db.sh
 
 echo "Registering shutdown hook for database backup..."

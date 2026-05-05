@@ -5,13 +5,15 @@ from maps.models import AmenityType, Amenity
 import boto3
 import geohash2
 from decimal import Decimal
+from botocore.config import Config
 
 
 def get_dynamodb_table():
     kwargs = {"region_name": settings.DYNAMODB_REGION}
     if getattr(settings, "DYNAMODB_ENDPOINT_URL", None):
         kwargs["endpoint_url"] = settings.DYNAMODB_ENDPOINT_URL
-    dynamodb = boto3.resource("dynamodb", **kwargs)
+    config = Config(retries={'max_attempts': 50, 'mode': 'adaptive'})
+    dynamodb = boto3.resource("dynamodb", config=config, **kwargs)
     return dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
 

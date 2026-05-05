@@ -123,6 +123,7 @@ resource "aws_iam_role_policy" "dynamodb_access_policy" {
     Version = "2012-10-17"
     Statement = [{
       Action = [
+        "dynamodb:CreateTable",
         "dynamodb:PutItem",
         "dynamodb:GetItem",
         "dynamodb:Scan",
