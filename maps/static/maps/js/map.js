@@ -732,6 +732,18 @@ function showDetailPanel(amenity, activeTab = 'overview') {
     }
 
     wireFavoriteToggle(amenity);
+
+    fetch(`/api/amenities/${amenity.id}/`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.amenity && currentDetailAmenity && currentDetailAmenity.id === amenity.id) {
+                Object.assign(amenity, data.amenity);
+                renderOverviewTab(amenity);
+                renderReviewsTab(amenity);
+                wireFavoriteToggle(amenity);
+            }
+        })
+        .catch(e => console.error(e));
 }
 
 function switchDetailTab(name) {

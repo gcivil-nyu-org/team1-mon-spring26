@@ -1319,7 +1319,7 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(third.json()["downvote_count"], 1)
         self.assertEqual(third.json()["user_vote"], -1)
 
-    def test_amenities_api_returns_vote_score_ordering(self):
+    def test_amenity_detail_api_returns_vote_score_ordering(self):
         reviewer_one = CustomUser.objects.create_user(
             email="reviewer1@example.com",
             username="reviewer-one",
@@ -1360,15 +1360,12 @@ class ViewsCoverageTest(TestCase):
         ReviewVote.objects.create(review=review_low, user=voter_a, value=-1)
 
         self.client.force_login(voter_b)
-        response = self.client.get(reverse("maps:amenities_api"))
+        response = self.client.get(
+            reverse("maps:amenity_detail_api", args=[self.amenity_active.external_id])
+        )
         self.assertEqual(response.status_code, 200)
 
-        payload = response.json()["amenities"]
-        amenity_payload = next(
-            item
-            for item in payload
-            if item.get("id") == self.amenity_active.external_id
-        )
+        amenity_payload = response.json()["amenity"]
 
         self.assertGreaterEqual(len(amenity_payload["reviews"]), 2)
         first_review = amenity_payload["reviews"][0]
