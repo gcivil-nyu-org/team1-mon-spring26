@@ -277,7 +277,7 @@ def serialize_map_amenity(amenity, user, favorite_amenity_ids=None):
 
 def amenities_api(request):
     """API endpoint to fetch amenities from DynamoDB,
-      optionally filtered by type and bounding box."""
+    optionally filtered by type and bounding box."""
     amenity_type_name = request.GET.get("type")
     include_inactive = request.GET.get("include_inactive", "false").lower() == "true"
     only_accessible = request.GET.get("only_accessible", "false").lower() == "true"
