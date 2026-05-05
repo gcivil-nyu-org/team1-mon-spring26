@@ -243,7 +243,9 @@ def amenities_api(request):
 
     type_names = []
     if type_ids:
-        type_names = list(AmenityType.objects.filter(id__in=type_ids).values_list("name", flat=True))
+        type_names = list(
+            AmenityType.objects.filter(id__in=type_ids).values_list("name", flat=True)
+        )
     elif amenity_type_name:
         type_names = [amenity_type_name]
 
@@ -264,16 +266,16 @@ def amenities_api(request):
                 south_f = float(south)
                 east_f = float(east)
                 west_f = float(west)
-                
-                # Prevent massive queries when zoomed out by centering around the middle point
+
+                # Prevent massive queries when zoomed out by centering in middle
                 MAX_LAT_SPAN = 0.04  # ~4.5 km
                 MAX_LON_SPAN = 0.04
-                
+
                 if (north_f - south_f) > MAX_LAT_SPAN:
                     center_lat = (north_f + south_f) / 2.0
                     north_f = center_lat + (MAX_LAT_SPAN / 2.0)
                     south_f = center_lat - (MAX_LAT_SPAN / 2.0)
-                    
+
                 if (east_f - west_f) > MAX_LON_SPAN:
                     center_lon = (east_f + west_f) / 2.0
                     east_f = center_lon + (MAX_LON_SPAN / 2.0)
@@ -291,22 +293,24 @@ def amenities_api(request):
 
             def fetch_hash(h):
                 try:
-                        # Optimization: Query via DynamoDB index if only 1 type is selected
-                        if len(type_names) == 1:
-                            sk_prefix = f"TYPE#{type_names[0]}#"
-                            if not include_inactive:
-                                sk_prefix += "ACTIVE#True"
-                                
-                            response = table.query(
-                                IndexName="GeohashIndex",
-                                KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{h}") & Key("GSI1SK").begins_with(sk_prefix),
-                            )
-                        else:
-                            response = table.query(
-                                IndexName="GeohashIndex",
-                                KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{h}"),
-                            )
+                    # Optimization: Query via DynamoDB index if only 1 type is selected
+                    if len(type_names) == 1:
+                        sk_prefix = f"TYPE#{type_names[0]}#"
+                        if not include_inactive:
+                            sk_prefix += "ACTIVE#True"
+
+                        response = table.query(
+                            IndexName="GeohashIndex",
+                            KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{h}")
+                            & Key("GSI1SK").begins_with(sk_prefix),
+                        )
+                    else:
+                        response = table.query(
+                            IndexName="GeohashIndex",
+                            KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{h}"),
+                        )
                     return response.get("Items", [])
+
                 except Exception as e:
                     print(f"DynamoDB Query Error: {e}")
                     return []
