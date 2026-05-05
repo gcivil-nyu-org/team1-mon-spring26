@@ -14,7 +14,7 @@ def get_dynamodb_table():
     kwargs = {"region_name": settings.DYNAMODB_REGION}
     if getattr(settings, "DYNAMODB_ENDPOINT_URL", None):
         kwargs["endpoint_url"] = settings.DYNAMODB_ENDPOINT_URL
-    config = Config(retries={'max_attempts': 50, 'mode': 'adaptive'})
+    config = Config(retries={"max_attempts": 50, "mode": "adaptive"})
     dynamodb = boto3.resource("dynamodb", config=config, **kwargs)
     return dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
