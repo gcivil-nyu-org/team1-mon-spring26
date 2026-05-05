@@ -11,7 +11,7 @@ from datetime import timedelta
 
 import boto3
 from decimal import Decimal
-from moto import mock_dynamodb
+from moto import mock_aws
 import geohash2
 
 from maps.models import (
@@ -40,7 +40,7 @@ from maps.views import normalize_longitude, get_cluster_grid_size
     DYNAMODB_TABLE_NAME="NycNowData",
     DYNAMODB_REGION="us-east-2",
 )
-@mock_dynamodb
+@mock_aws
 class ViewsCoverageTest(TestCase):
     def setUp(self):
         self.client = Client()
