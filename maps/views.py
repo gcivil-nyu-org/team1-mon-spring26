@@ -8,7 +8,6 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.password_validation import validate_password
-from django.contrib.gis.geos import Polygon, GEOSGeometry
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.db import connection
@@ -41,11 +40,25 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from decimal import Decimal, InvalidOperation
 import os
+import requests
 import io
 from PIL import Image, ImageOps
 from django.core.files.uploadedfile import InMemoryUploadedFile
 
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+import geohash2
+import concurrent.futures
+from collections import defaultdict
+
 AVAILABILITY_WINDOW_HOURS = 3
+
+
+def get_dynamodb_resource():
+    kwargs = {'region_name': settings.DYNAMODB_REGION}
+    if getattr(settings, 'DYNAMODB_ENDPOINT_URL', None):
+        kwargs['endpoint_url'] = settings.DYNAMODB_ENDPOINT_URL
+    return boto3.resource('dynamodb', **kwargs)
 
 
 def normalize_longitude(lon):
@@ -157,33 +170,48 @@ def get_cluster_grid_size(zoom):
     return 0.001  # Very small clusters for the highest zoom level
 
 
-def cluster_amenities(amenities, zoom):
-    """
-    Performs grid-based clustering on a queryset of amenities.12
-    """
+def get_geohashes_in_bbox(north, south, east, west, precision=6):
+    """Calculates all geohashes of a given precision that intersect a bounding box."""
+    hashes = set()
+    lat_step = 0.005  # Approximate step for precision 6
+    lon_step = 0.01
+    
+    lat = float(south)
+    while lat <= float(north) + lat_step:
+        lon = float(west)
+        while lon <= float(east) + lon_step:
+            hashes.add(geohash2.encode(lat, lon, precision))
+            lon += lon_step
+        lat += lat_step
+        
+    return list(hashes)
+
+
+def cluster_amenities_python(amenities_list, zoom):
+    """Performs grid-based clustering natively in Python."""
     grid_size = get_cluster_grid_size(zoom)
-
-    # This query is more efficient for grid-based clustering than the ORM equivalent.
-    # It groups points into a grid, counts them, and finds the centroid of each group.
-    cluster_query = """
-        SELECT
-            array_agg(id) as ids,
-            COUNT(id) as point_count,
-            ST_AsText(ST_Centroid(ST_Collect(location))) as centroid,
-            MIN(id) as id
-        FROM (
-            SELECT id, ST_SnapToGrid(location, %s) as snapped_location, location
-            FROM maps_amenity
-            WHERE id = ANY(%s)
-        ) as sub
-        GROUP BY snapped_location
-    """
-
-    with connection.cursor() as cursor:
-        cursor.execute(
-            cluster_query, [grid_size, list(amenities.values_list("id", flat=True))]
+    clusters = defaultdict(list)
+    
+    for amenity in amenities_list:
+        lat = float(amenity['Latitude'])
+        lon = float(amenity['Longitude'])
+        
+        snapped_lat = round(lat / grid_size) * grid_size
+        snapped_lon = round(lon / grid_size) * grid_size
+        
+        clusters[(snapped_lat, snapped_lon)].append(amenity)
+        
+    result = []
+    for (snapped_lat, snapped_lon), items in clusters.items():
+        count = len(items)
+        centroid_lat = sum(float(i['Latitude']) for i in items) / count
+        centroid_lon = sum(float(i['Longitude']) for i in items) / count
+        
+        result.append(
+            ([i['Id'] for i in items], count, centroid_lat, centroid_lon)
         )
-        return cursor.fetchall()
+        
+    return result
 
 
 def get_review_prefetch_queryset(user):
@@ -225,8 +253,8 @@ def serialize_map_amenity(amenity, user, favorite_amenity_ids=None):
     return {
         "id": amenity.id,
         "name": amenity.name,
-        "latitude": amenity.location.y,
-        "longitude": amenity.location.x,
+        "latitude": amenity.latitude,
+        "longitude": amenity.longitude,
         "address": amenity.address,
         "prop_name": amenity.prop_name,
         "description": amenity.description,
@@ -256,164 +284,147 @@ def serialize_map_amenity(amenity, user, favorite_amenity_ids=None):
 
 
 def amenities_api(request):
-    """API endpoint to fetch amenities, optionally filtered by type and bounding box."""
-    amenity_type_ids = request.GET.getlist("type_id")
+    """API endpoint to fetch amenities from DynamoDB, optionally filtered by type and bounding box."""
     amenity_type_name = request.GET.get("type")
     include_inactive = request.GET.get("include_inactive", "false").lower() == "true"
     only_accessible = request.GET.get("only_accessible", "false").lower() == "true"
     zoom = int(request.GET.get("zoom", 0))
 
-    # Get bounding box parameters (from map pan/zoom)
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
+
+    amenities_data = []
+
     try:
         north = request.GET.get("north")
         south = request.GET.get("south")
         east = request.GET.get("east")
         west = request.GET.get("west")
 
-        # If bounding box is provided, use it for filtering
         if north and south and east and west:
-            north = Decimal(north)
-            south = Decimal(south)
-            east = Decimal(east)
-            west = Decimal(west)
+            hashes = get_geohashes_in_bbox(north, south, east, west, precision=6)
+            
+            def fetch_hash(h):
+                try:
+                    response = table.query(
+                        IndexName='GeohashIndex',
+                        KeyConditionExpression=Key('GSI1PK').eq(f"GEOHASH#{h}")
+                    )
+                    return response.get('Items', [])
+                except Exception as e:
+                    print(f"DynamoDB Query Error: {e}")
+                    return []
 
-            # Create a Polygon object for the bounding box
-            bbox = (west, south, east, north)
-            amenities = Amenity.objects.filter(
-                location__bboverlaps=Polygon.from_bbox(bbox)
-            )
-
+            # Execute DynamoDB queries concurrently
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                results = executor.map(fetch_hash, hashes)
+                for res in results:
+                    amenities_data.extend(res)
         else:
-            amenities = Amenity.objects.all()
-    except (ValueError, TypeError, InvalidOperation):
-        amenities = Amenity.objects.all()
+            # Scan fallback for broad non-bounds requests
+            response = table.scan(FilterExpression=Attr('PK').begins_with('AMENITY#'))
+            amenities_data = response.get('Items', [])
+            while 'LastEvaluatedKey' in response:
+                response = table.scan(
+                    FilterExpression=Attr('PK').begins_with('AMENITY#'),
+                    ExclusiveStartKey=response['LastEvaluatedKey']
+                )
+                amenities_data.extend(response.get('Items', []))
+    except Exception as e:
+        print("Error retrieving from DynamoDB:", str(e))
+        return JsonResponse({"error": str(e)}, status=500)
 
-    # Filter by amenity type if specified
-    if amenity_type_ids:
-        amenities = amenities.filter(amenity_type_id__in=amenity_type_ids)
-    elif amenity_type_name:
-        # Allow filtering by type name as well
-        amenities = amenities.filter(amenity_type__name__iexact=amenity_type_name)
+    # Deduplicate overlapping geohash results
+    seen_ids = set()
+    unique_amenities = []
+    for item in amenities_data:
+        if item['Id'] not in seen_ids:
+            seen_ids.add(item['Id'])
+            unique_amenities.append(item)
+            
+    amenity_types_map = {t.name: t for t in AmenityType.objects.all()}
+            
+    # In-Memory Single-Table Design Filtering
+    filtered_amenities = []
+    for item in unique_amenities:
+        if not include_inactive and not item.get('Active', True):
+            continue
+        if amenity_type_name and item.get('Type') != amenity_type_name:
+            continue
+        if only_accessible and item.get('Accessibility', '') == "Not Accessible":
+            continue
+        filtered_amenities.append(item)
 
-    # Filter by active status unless explicitly showing inactive
-    if not include_inactive:
-        amenities = amenities.filter(active=True)
-
-    # Filter by accessibility if requested
-    if only_accessible:
-        amenities = amenities.exclude(accessibility="Not Accessible")
-
-    # --- Performance Optimization: Annotate data at the database level ---
-    # This must be done BEFORE any .union() operations.
-
-    # 1. Annotate average rating and review count
-    amenities = amenities.annotate(
-        avg_rating=Avg("reviews__rating"),
-        review_count=Count("reviews__id", distinct=True),
-    )
-
-    # 2. Use a Subquery to efficiently get the primary photo URL
-    primary_photo_subquery = AmenityPhoto.objects.filter(
-        amenity=OuterRef("pk"), is_primary=True
-    ).values("photo")[:1]
-
-    amenities = amenities.annotate(primary_photo_url=Subquery(primary_photo_subquery))
-
-    # 3. Apply select_related and prefetch_related BEFORE the union.
-    review_prefetch_queryset = get_review_prefetch_queryset(request.user)
-
-    amenities = amenities.select_related("amenity_type").prefetch_related(
-        Prefetch("reviews", queryset=review_prefetch_queryset),
-        "photos",
-    )
-
-    # --- Backend Clustering Logic ---
     BIKE_RACK_TYPE_NAME = "Bike Rack"
-    CLUSTER_ZOOM_THRESHOLD = (
-        18  # Cluster below this zoom level. Increase to cluster at higher zoom levels.
-    )
+    CLUSTER_ZOOM_THRESHOLD = 18
     final_amenities_list = []
 
-    try:
-        bike_rack_type = AmenityType.objects.get(name=BIKE_RACK_TYPE_NAME)
-        is_bike_rack_query = str(bike_rack_type.id) in amenity_type_ids
-    except AmenityType.DoesNotExist:
-        is_bike_rack_query = False
-        bike_rack_type = None
+    bike_rack_amenities = [a for a in filtered_amenities if a.get('Type') == BIKE_RACK_TYPE_NAME]
+    other_amenities = [a for a in filtered_amenities if a.get('Type') != BIKE_RACK_TYPE_NAME]
+    
+    is_bike_rack_query = (amenity_type_name == BIKE_RACK_TYPE_NAME) or not amenity_type_name
 
-    # Separate bike racks for clustering, if they were requested
-    bike_rack_amenities = None
-    if is_bike_rack_query:
-        bike_rack_amenities = amenities.filter(amenity_type=bike_rack_type)
-        # Exclude bike racks from the main queryset to avoid duplication
-        amenities = amenities.exclude(amenity_type=bike_rack_type)
-
-    # Perform clustering only on bike racks and only if zoomed out
     if is_bike_rack_query and zoom < CLUSTER_ZOOM_THRESHOLD:
-        clusters = cluster_amenities(bike_rack_amenities, zoom)
-
-        single_point_ids = []
-        for ids, count, centroid_wkt, _ in clusters:
-            centroid = GEOSGeometry(centroid_wkt)
+        clusters = cluster_amenities_python(bike_rack_amenities, zoom)
+        
+        for ids, count, centroid_lat, centroid_lon in clusters:
             if count > 1:
-                # This is a cluster
+                amenity_type_obj = amenity_types_map.get(BIKE_RACK_TYPE_NAME)
                 final_amenities_list.append(
                     {
-                        "id": f"cluster_{centroid.y}_{centroid.x}",
+                        "id": f"cluster_{centroid_lat}_{centroid_lon}",
                         "is_cluster": True,
                         "point_count": count,
-                        "latitude": centroid.y,
-                        "longitude": centroid.x,
+                        "latitude": centroid_lat,
+                        "longitude": centroid_lon,
                         "type": BIKE_RACK_TYPE_NAME,
-                        "type_id": bike_rack_type.id,
-                        "icon": "bicycle",
-                        "color": "#FF9800",
+                        "type_id": amenity_type_obj.id if amenity_type_obj else None,
+                        "icon": amenity_type_obj.icon if amenity_type_obj else "bicycle",
+                        "color": amenity_type_obj.color if amenity_type_obj else "#FF9800",
                         "is_favorited": False,
                     }
                 )
             else:
-                # This is a single point. Collect its ID to be processed normally.
-                single_point_ids.extend(ids)
-
-        # Add back the single bike rack points to the main `amenities` queryset
-        # so they get full data serialization.
-        single_bike_racks = bike_rack_amenities.filter(
-            id__in=single_point_ids
-        )  # This queryset already has annotations
-        amenities = amenities.union(single_bike_racks)
-
+                single_id = ids[0]
+                single_item = next((a for a in bike_rack_amenities if a['Id'] == single_id), None)
+                if single_item:
+                    other_amenities.append(single_item)
     elif is_bike_rack_query:
-        # If bike racks were requested but we are zoomed in past the threshold,
-        # add them to the main queryset to be rendered as individual points.
-        amenities = amenities.union(bike_rack_amenities)
+        other_amenities.extend(bike_rack_amenities)
 
-    # If we have any clusters, we need to serialize the remaining individual amenities
-    # and add them to the list.
-    if final_amenities_list and not amenities.exists():
-        return JsonResponse({"amenities": final_amenities_list})
-
-    # If there are no amenities left to process (e.g., only clusters were found),
-    # return the clusters.
-    if not amenities.exists():
-        return JsonResponse({"amenities": final_amenities_list})
-
-    favorite_amenity_ids = set()
-    if request.user.is_authenticated:
-        amenity_ids = list(amenities.values_list("id", flat=True))
-        favorite_amenity_ids = set(
-            Favorite.objects.filter(
-                user=request.user, amenity_id__in=amenity_ids
-            ).values_list("amenity_id", flat=True)
-        )
-
-    # Serialize the individual amenities
-    for a in amenities:
+    for a in other_amenities:
+        amenity_type_obj = amenity_types_map.get(a.get('Type', ''))
+        
+        fallback_icon = "map-marker"
+        fallback_color = "#1E88E5"
+        if a.get('Type') == BIKE_RACK_TYPE_NAME:
+            fallback_icon = "bicycle"
+            fallback_color = "#FF9800"
+            
         final_amenities_list.append(
-            serialize_map_amenity(
-                a,
-                request.user,
-                favorite_amenity_ids=favorite_amenity_ids,
-            )
+            {
+                "id": a.get('Id'),
+                "name": a.get('Name'),
+                "latitude": float(a.get('Latitude', 0)),
+                "longitude": float(a.get('Longitude', 0)),
+                "address": a.get('Address', ''),
+                "prop_name": a.get('Name', ''),
+                "description": a.get('Description', ''),
+                "operator": a.get('Operator', ''),
+                "hours_of_operation": a.get('HoursOfOperation', {}),
+                "changing_stations": a.get('ChangingStations', False),
+                "accessibility": a.get('Accessibility', ''),
+                "rating": float(a.get('AverageRating', 0)),
+                "review_count": int(a.get('ReviewCount', 0)),
+                "reviews": [], # Dynamodb denormalized attribute goes here
+                "photo_url": a.get('PrimaryPhotoUrl', None),
+                "active": a.get('Active', True),
+                "type": a.get('Type', ''),
+                "type_id": amenity_type_obj.id if amenity_type_obj else None,
+                "icon": amenity_type_obj.icon if amenity_type_obj else fallback_icon,
+                "color": amenity_type_obj.color if amenity_type_obj else fallback_color,
+                "is_favorited": False,
+            }
         )
 
     return JsonResponse({"amenities": final_amenities_list})
@@ -421,50 +432,103 @@ def amenities_api(request):
 
 @require_http_methods(["GET"])
 def amenity_detail_api(request, amenity_id):
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
+
     try:
-        amenity = (
-            Amenity.objects.filter(id=amenity_id)
-            .annotate(
-                avg_rating=Avg("reviews__rating"),
-                review_count=Count("reviews__id", distinct=True),
-            )
-            .annotate(
-                primary_photo_url=Subquery(
-                    AmenityPhoto.objects.filter(
-                        amenity=OuterRef("pk"), is_primary=True
-                    ).values("photo")[:1]
-                )
-            )
-            .select_related("amenity_type")
-            .prefetch_related(
-                Prefetch(
-                    "reviews", queryset=get_review_prefetch_queryset(request.user)
-                ),
-                "photos",
-            )
-            .get()
+        response = table.query(
+            KeyConditionExpression=Key('PK').eq(f"AMENITY#{amenity_id}")
         )
-    except Amenity.DoesNotExist:
-        return JsonResponse({"error": "Amenity not found"}, status=404)
+        items = response.get('Items', [])
 
-    favorite_ids = set()
-    if request.user.is_authenticated:
-        favorite_ids = set(
-            Favorite.objects.filter(user=request.user, amenity=amenity).values_list(
-                "amenity_id", flat=True
-            )
-        )
+        if not items:
+            return JsonResponse({"error": "Amenity not found"}, status=404)
 
-    return JsonResponse(
-        {
-            "amenity": serialize_map_amenity(
-                amenity,
-                request.user,
-                favorite_amenity_ids=favorite_ids,
-            )
-        },
-        status=200,
-    )
+        amenity = next((item for item in items if item['SK'] == f"AMENITY#{amenity_id}"), None)
+        if not amenity:
+            return JsonResponse({"error": "Amenity not found"}, status=404)
+
+        reviews = [item for item in items if item['SK'].startswith("REVIEW#")]
+        photos = [item for item in items if item['SK'].startswith("PHOTO#")]
+
+        photo_urls_by_user = {}
+        for photo in photos:
+            user_id = photo.get('UploadedById')
+            if user_id not in photo_urls_by_user:
+                photo_urls_by_user[user_id] = []
+            photo_urls_by_user[user_id].append(photo.get('PhotoUrl'))
+
+        is_fav = False
+        if request.user.is_authenticated:
+            is_fav = Favorite.objects.filter(
+                Q(user=request.user) & 
+                (Q(amenity__external_id=amenity_id) | Q(amenity_id=int(amenity_id) if str(amenity_id).isdigit() else 0))
+            ).exists()
+
+        serialized_reviews = []
+        for review in reviews[:5]:
+            user_id = review.get('UserId')
+            user_vote = 0
+            if request.user.is_authenticated:
+                rv = ReviewVote.objects.filter(review_id=review.get('Id'), user=request.user).first()
+                if rv:
+                    user_vote = rv.value
+
+            serialized_reviews.append({
+                "id": review.get('Id'),
+                "amenity_id": amenity.get('Id'),
+                "user_name": review.get('UserName', 'Anonymous'),
+                "user_email": review.get('UserEmail', ''),
+                "user_avatar_url": review.get('UserAvatarUrl', ''),
+                "rating": int(review.get('Rating', 0)),
+                "vote_score": int(review.get('VoteScore', 0)),
+                "upvote_count": int(review.get('UpvoteCount', 0)),
+                "downvote_count": int(review.get('DownvoteCount', 0)),
+                "user_vote": user_vote,
+                "review_text": review.get('ReviewText', ''),
+                "photo_url": photo_urls_by_user.get(user_id, [None])[0] if photo_urls_by_user.get(user_id) else None,
+                "photo_urls": photo_urls_by_user.get(user_id, []),
+                "created_at": review.get('CreatedAt', ''),
+            })
+
+        amenity_data = {
+            "id": amenity.get('Id'),
+            "name": amenity.get('Name'),
+            "latitude": float(amenity.get('Latitude', 0)),
+            "longitude": float(amenity.get('Longitude', 0)),
+            "address": amenity.get('Address', ''),
+            "prop_name": amenity.get('Name', ''),
+            "description": amenity.get('Description', ''),
+            "operator": amenity.get('Operator', ''),
+            "hours_of_operation": amenity.get('HoursOfOperation', {}),
+            "changing_stations": amenity.get('ChangingStations', False),
+            "accessibility": amenity.get('Accessibility', ''),
+            "rating": float(amenity.get('AverageRating', 0)) if amenity.get('AverageRating') else None,
+            "review_count": int(amenity.get('ReviewCount', 0)),
+            "reviews": sorted(serialized_reviews, key=lambda x: (-x['vote_score'], x['created_at']))[:5],
+            "photo_url": amenity.get('PrimaryPhotoUrl', None),
+            "active": amenity.get('Active', True),
+            "type": amenity.get('Type', ''),
+            "type_id": None,
+            "icon": "map-marker",
+            "color": "#1E88E5",
+            "is_favorited": is_fav,
+        }
+
+        try:
+            amenity_type = AmenityType.objects.get(name=amenity.get('Type', ''))
+            amenity_data['icon'] = amenity_type.icon
+            amenity_data['color'] = amenity_type.color
+            amenity_data['type_id'] = amenity_type.id
+        except AmenityType.DoesNotExist:
+            if amenity.get('Type') == "Bike Rack":
+                amenity_data['icon'] = "bicycle"
+                amenity_data['color'] = "#FF9800"
+
+        return JsonResponse({"amenity": amenity_data}, status=200)
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
 
 
 def amenity_types_api(request):
@@ -569,7 +633,7 @@ def serialize_amenity_review(
 
     return {
         "id": review.id,
-        "amenity_id": review.amenity_id,
+        "amenity_id": review.amenity.external_id or review.amenity_id,
         "user_name": review.user.username or review.user.email,
         "user_email": review.user.email,
         "user_avatar_url": review.user.avatar_url,
@@ -850,7 +914,7 @@ def serialize_profile_review(review):
 
     return {
         "id": review.id,
-        "amenity_id": review.amenity_id,
+        "amenity_id": review.amenity.external_id or review.amenity_id,
         "amenity_name": review.amenity.name,
         "amenity_prop_name": review.amenity.prop_name,
         "amenity_type": review.amenity.amenity_type.name,
@@ -903,13 +967,13 @@ def serialize_profile_favorite(favorite):
     amenity = favorite.amenity
     return {
         "id": favorite.id,
-        "amenity_id": amenity.id,
+        "amenity_id": amenity.external_id or amenity.id,
         "amenity_name": amenity.name,
         "amenity_prop_name": amenity.prop_name,
         "amenity_type": amenity.amenity_type.name,
         "address": amenity.address,
-        "latitude": amenity.location.y,
-        "longitude": amenity.location.x,
+        "latitude": amenity.latitude,
+        "longitude": amenity.longitude,
         "notify_on_updates": favorite.notify_on_updates,
         "created_at": favorite.created_at.isoformat(),
     }
@@ -999,9 +1063,12 @@ def favorite_notification_preference_api(request, favorite_id):
 @require_http_methods(["POST", "DELETE"])
 def toggle_favorite_api(request, amenity_id):
     try:
-        amenity = Amenity.objects.get(id=amenity_id)
+        amenity = Amenity.objects.get(external_id=amenity_id)
     except Amenity.DoesNotExist:
-        return JsonResponse({"error": "Amenity not found"}, status=404)
+        try:
+            amenity = Amenity.objects.get(id=amenity_id)
+        except (Amenity.DoesNotExist, ValueError):
+            return JsonResponse({"error": "Amenity not found"}, status=404)
 
     if request.method == "POST":
         favorite, created = Favorite.objects.get_or_create(
@@ -1010,7 +1077,7 @@ def toggle_favorite_api(request, amenity_id):
         )
         return JsonResponse(
             {
-                "amenity_id": amenity.id,
+                "amenity_id": amenity.external_id or amenity.id,
                 "is_favorited": True,
                 "notify_on_updates": favorite.notify_on_updates,
                 "message": "Added to favorites" if created else "Already favorited",
@@ -1021,7 +1088,7 @@ def toggle_favorite_api(request, amenity_id):
     Favorite.objects.filter(user=request.user, amenity=amenity).delete()
     return JsonResponse(
         {
-            "amenity_id": amenity.id,
+            "amenity_id": amenity.external_id or amenity.id,
             "is_favorited": False,
             "message": "Removed from favorites",
         },
@@ -1033,9 +1100,12 @@ def toggle_favorite_api(request, amenity_id):
 def amenity_rating_distribution_api(request, amenity_id):
     """API endpoint to fetch the rating distribution for a specific amenity."""
     try:
-        amenity = Amenity.objects.get(id=amenity_id)
+        amenity = Amenity.objects.get(external_id=amenity_id)
     except Amenity.DoesNotExist:
-        return JsonResponse({"error": "Amenity not found"}, status=404)
+        try:
+            amenity = Amenity.objects.get(id=amenity_id)
+        except (Amenity.DoesNotExist, ValueError):
+            return JsonResponse({"error": "Amenity not found"}, status=404)
 
     rating_distribution = list(
         Review.objects.filter(amenity=amenity)
@@ -1105,9 +1175,12 @@ def create_review_api(request):
         photo_files = processed_photos
 
         try:
-            amenity = Amenity.objects.get(id=amenity_id)
+            amenity = Amenity.objects.get(external_id=amenity_id)
         except Amenity.DoesNotExist:
-            return JsonResponse({"error": "Amenity not found"}, status=404)
+            try:
+                amenity = Amenity.objects.get(id=amenity_id)
+            except (Amenity.DoesNotExist, ValueError):
+                return JsonResponse({"error": "Amenity not found"}, status=404)
 
         user = request.user
 
@@ -1149,7 +1222,7 @@ def create_review_api(request):
             payload = json.dumps(
                 {
                     "type": "amenity_review_added",
-                    "amenity_id": amenity.id,
+                    "amenity_id": amenity.external_id or amenity.id,
                     "amenity_name": amenity.name,
                     "review": {
                         "id": review.id,
@@ -1161,18 +1234,15 @@ def create_review_api(request):
             )
 
             def send_notification():
-                # Tests and local SQLite do not support Postgres NOTIFY.
-                if connection.vendor != "postgresql":
-                    return
-
-                with connection.cursor() as cursor:
-                    for recipient_id in recipient_ids:
-                        wrapped = json.dumps(
-                            {"user_id": recipient_id, "payload": payload}
+                for recipient_id in recipient_ids:
+                    try:
+                        requests.post(
+                            "http://127.0.0.1:8001/api/internal/publish/",
+                            json={"user_id": recipient_id, "payload": payload},
+                            timeout=1
                         )
-                        cursor.execute(
-                            "SELECT pg_notify('global_chat_events', %s)", [wrapped]
-                        )
+                    except Exception:
+                        pass
 
             transaction.on_commit(send_notification)
 
@@ -1451,43 +1521,44 @@ def get_amenity_reviews_api(request):
         if not amenity_id:
             return JsonResponse({"error": "amenity_id parameter required"}, status=400)
 
-        try:
-            amenity = Amenity.objects.get(id=amenity_id)
-        except Amenity.DoesNotExist:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
+
+        amenity_response = table.get_item(Key={'PK': f"AMENITY#{amenity_id}", 'SK': f"AMENITY#{amenity_id}"})
+        amenity = amenity_response.get('Item')
+        if not amenity:
             return JsonResponse({"error": "Amenity not found"}, status=404)
 
-        # Get all reviews for the amenity, ordered by most recent
-        reviews = (
-            Review.objects.filter(amenity=amenity)
-            .select_related("user")
-            .order_by("-created_at")
+        response = table.query(
+            KeyConditionExpression=Key('PK').eq(f"AMENITY#{amenity_id}") & Key('SK').begins_with('REVIEW#')
         )
+        reviews = response.get('Items', [])
+        
+        reviews = sorted(reviews, key=lambda x: x.get('CreatedAt', ''), reverse=True)
 
-        # Calculate pagination
-        total_count = reviews.count()
+        total_count = len(reviews)
         start_idx = (page - 1) * page_size
         end_idx = start_idx + page_size
         paginated_reviews = reviews[start_idx:end_idx]
 
-        # Serialize reviews
         reviews_data = [
             {
-                "id": r.id,
-                "user_name": r.user.email if r.user else "Anonymous",
-                "rating": r.rating,
-                "review_text": r.review_text,
-                "created_at": r.created_at.isoformat(),
-                "updated_at": r.updated_at.isoformat(),
+                "id": r.get('Id'),
+                "user_name": r.get('UserName', 'Anonymous'),
+                "rating": int(r.get('Rating', 0)),
+                "review_text": r.get('ReviewText', ''),
+                "created_at": r.get('CreatedAt', ''),
+                "updated_at": r.get('UpdatedAt', ''),
             }
             for r in paginated_reviews
         ]
 
         return JsonResponse(
             {
-                "amenity_id": amenity.id,
-                "amenity_name": amenity.name,
+                "amenity_id": amenity.get('Id'),
+                "amenity_name": amenity.get('Name'),
                 "total_reviews": total_count,
-                "average_rating": amenity.get_average_rating(),
+                "average_rating": float(amenity.get('AverageRating', 0)) if amenity.get('AverageRating') else None,
                 "page": page,
                 "page_size": page_size,
                 "total_pages": (total_count + page_size - 1) // page_size,
@@ -1570,7 +1641,7 @@ def get_user_chats_api(request):
                     "name": chat.get_display_name(request.user),
                     "avatar_url": avatar_url,
                     "other_user_email": other_user_email,
-                    "amenity_id": chat.amenity_id,
+                    "amenity_id": chat.amenity.external_id if (chat.amenity and chat.amenity.external_id) else (chat.amenity.id if chat.amenity else None),
                     "amenity_name": chat.amenity.name if chat.amenity else None,
                     "created_by_email": (
                         chat.created_by.email if chat.created_by else None
@@ -1664,7 +1735,7 @@ def get_chat_messages_api(request):
                 "chat_id": chat.id,
                 "chat_type": chat.chat_type,
                 "chat_name": chat.get_display_name(request.user),
-                "amenity_id": chat.amenity_id,
+                "amenity_id": chat.amenity.external_id if (chat.amenity and chat.amenity.external_id) else (chat.amenity.id if chat.amenity else None),
                 "page": page,
                 "page_size": page_size,
                 "total_messages": total_count,
@@ -1735,12 +1806,15 @@ def send_message_api(request):
         )
 
         def send_notification():
-            with connection.cursor() as cursor:
-                for p in chat.participants.exclude(user=request.user):
-                    wrapped = json.dumps({"user_id": p.user_id, "payload": payload})
-                    cursor.execute(
-                        "SELECT pg_notify('global_chat_events', %s)", [wrapped]
+            for p in chat.participants.exclude(user=request.user):
+                try:
+                    requests.post(
+                        "http://127.0.0.1:8001/api/internal/publish/",
+                        json={"user_id": p.user_id, "payload": payload},
+                        timeout=1
                     )
+                except Exception:
+                    pass
 
         transaction.on_commit(send_notification)
 
@@ -1819,9 +1893,14 @@ def create_direct_chat_api(request):
         payload = json.dumps({"type": "new_message", "chat_id": chat.id})
 
         def send_notification():
-            with connection.cursor() as cursor:
-                wrapped = json.dumps({"user_id": recipient.id, "payload": payload})
-                cursor.execute("SELECT pg_notify('global_chat_events', %s)", [wrapped])
+            try:
+                requests.post(
+                    "http://127.0.0.1:8001/api/internal/publish/",
+                    json={"user_id": recipient.id, "payload": payload},
+                    timeout=1
+                )
+            except Exception:
+                pass
 
         transaction.on_commit(send_notification)
 
@@ -1878,9 +1957,12 @@ def create_group_chat_api(request):
         amenity = None
         if amenity_id:
             try:
-                amenity = Amenity.objects.get(id=amenity_id)
+                amenity = Amenity.objects.get(external_id=amenity_id)
             except Amenity.DoesNotExist:
-                return JsonResponse({"error": "Amenity not found"}, status=404)
+                try:
+                    amenity = Amenity.objects.get(id=amenity_id)
+                except (Amenity.DoesNotExist, ValueError):
+                    return JsonResponse({"error": "Amenity not found"}, status=404)
 
         # Create the group chat
         chat_type = "amenity_forum" if amenity else "group"
@@ -1899,15 +1981,16 @@ def create_group_chat_api(request):
         payload = json.dumps({"type": "new_message", "chat_id": chat.id})
 
         def send_notification():
-            with connection.cursor() as cursor:
-                for participant in participants:
-                    if participant.id != request.user.id:
-                        wrapped = json.dumps(
-                            {"user_id": participant.id, "payload": payload}
+            for participant in participants:
+                if participant.id != request.user.id:
+                    try:
+                        requests.post(
+                            "http://127.0.0.1:8001/api/internal/publish/",
+                            json={"user_id": participant.id, "payload": payload},
+                            timeout=1
                         )
-                        cursor.execute(
-                            "SELECT pg_notify('global_chat_events', %s)", [wrapped]
-                        )
+                    except Exception:
+                        pass
 
         transaction.on_commit(send_notification)
 
@@ -2084,25 +2167,32 @@ def amenity_search_api(request):
     if len(q) < 2:
         return JsonResponse({"amenities": []})
 
-    amenities = (
-        Amenity.objects.filter(name__icontains=q, active=True)
-        .select_related("amenity_type")
-        .order_by("name")[:limit]
-    )
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
-    return JsonResponse(
-        {
-            "amenities": [
-                {
-                    "id": a.id,
-                    "name": a.name,
-                    "address": a.address or "",
-                    "type": a.amenity_type.name,
-                }
-                for a in amenities
-            ]
-        }
-    )
+    try:
+        response = table.scan(
+            FilterExpression=Attr('PK').begins_with('AMENITY#') & Attr('Name').contains(q) & Attr('Active').eq(True)
+        )
+        
+        items = response.get('Items', [])
+        items = sorted(items, key=lambda x: x.get('Name', ''))[:limit]
+
+        return JsonResponse(
+            {
+                "amenities": [
+                    {
+                        "id": a.get('Id'),
+                        "name": a.get('Name'),
+                        "address": a.get('Address', ''),
+                        "type": a.get('Type', ''),
+                    }
+                    for a in items
+                ]
+            }
+        )
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
 
 
 @require_http_methods(["GET"])
@@ -2137,33 +2227,36 @@ def get_amenity_reviewers_api(request):
         if not amenity_id:
             return JsonResponse({"error": "amenity_id parameter required"}, status=400)
 
-        try:
-            amenity = Amenity.objects.get(id=amenity_id)
-        except Amenity.DoesNotExist:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
+
+        amenity_response = table.get_item(Key={'PK': f"AMENITY#{amenity_id}", 'SK': f"AMENITY#{amenity_id}"})
+        amenity = amenity_response.get('Item')
+        if not amenity:
             return JsonResponse({"error": "Amenity not found"}, status=404)
 
-        # Get recent reviewers
-        reviewers = (
-            Review.objects.filter(amenity=amenity, user__isnull=False)
-            .select_related("user")
-            .order_by("-created_at")[:limit]
+        response = table.query(
+            KeyConditionExpression=Key('PK').eq(f"AMENITY#{amenity_id}") & Key('SK').begins_with('REVIEW#')
         )
+        reviews = response.get('Items', [])
+        
+        reviews = sorted(reviews, key=lambda x: x.get('CreatedAt', ''), reverse=True)[:limit]
 
         reviewers_data = [
             {
-                "user_id": r.user.id,
-                "email": r.user.email,
-                "rating": r.rating,
-                "review_text": r.review_text[:100] if r.review_text else None,
-                "created_at": r.created_at.isoformat(),
+                "user_id": r.get('UserId'),
+                "email": r.get('UserEmail'),
+                "rating": int(r.get('Rating', 0)),
+                "review_text": r.get('ReviewText', '')[:100] if r.get('ReviewText') else None,
+                "created_at": r.get('CreatedAt', ''),
             }
-            for r in reviewers
+            for r in reviews if r.get('UserId')
         ]
 
         return JsonResponse(
             {
-                "amenity_id": amenity.id,
-                "amenity_name": amenity.name,
+                "amenity_id": amenity.get('Id'),
+                "amenity_name": amenity.get('Name'),
                 "reviewers": reviewers_data,
                 "total_reviewers": len(reviewers_data),
             },
@@ -2177,60 +2270,59 @@ def get_amenity_reviewers_api(request):
 
 def availability_status_api(request, amenity_id):
     """GET: return available/unavailable counts for the last 3 hours."""
-    from .models import AvailabilityReport, Amenity
+    cutoff = timezone.now() - timedelta(hours=AVAILABILITY_WINDOW_HOURS)
+    cutoff_iso = cutoff.isoformat()
 
-    try:
-        amenity = Amenity.objects.get(pk=amenity_id)
-    except Amenity.DoesNotExist:
-        from django.http import JsonResponse
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
+    amenity_response = table.get_item(Key={'PK': f"AMENITY#{amenity_id}", 'SK': f"AMENITY#{amenity_id}"})
+    if not amenity_response.get('Item'):
         return JsonResponse({"error": "Not found"}, status=404)
 
-    cutoff = timezone.now() - timedelta(hours=AVAILABILITY_WINDOW_HOURS)
-    reports = AvailabilityReport.objects.filter(
-        amenity=amenity, reported_at__gte=cutoff
+    response = table.query(
+        KeyConditionExpression=Key('PK').eq(f"AMENITY#{amenity_id}") & Key('SK').begins_with('AVAILABILITY#')
     )
+    items = response.get('Items', [])
 
-    available_count = reports.filter(is_available=True).count()
-    unavailable_count = reports.filter(is_available=False).count()
-    latest = reports.order_by("-reported_at").first()
+    recent_reports = [item for item in items if item.get('ReportedAt', '') >= cutoff_iso]
+
+    available_count = sum(1 for r in recent_reports if r.get('IsAvailable') is True)
+    unavailable_count = sum(1 for r in recent_reports if r.get('IsAvailable') is False)
+    
+    recent_reports.sort(key=lambda x: x.get('ReportedAt', ''), reverse=True)
+    latest = recent_reports[0] if recent_reports else None
 
     if not request.session.session_key:
         request.session.create()
     session_key = request.session.session_key or ""
 
-    user_report = (
-        reports.filter(session_key=session_key).order_by("-reported_at").first()
-    )
+    user_report = next((r for r in recent_reports if r['SK'] == f"AVAILABILITY#{session_key}"), None)
     user_vote = None
     if user_report:
-        user_vote = "available" if user_report.is_available else "unavailable"
-
-    from django.http import JsonResponse
+        user_vote = "available" if user_report.get('IsAvailable') else "unavailable"
 
     return JsonResponse(
         {
             "available": available_count,
             "unavailable": unavailable_count,
             "total": available_count + unavailable_count,
-            "last_reported": latest.reported_at.isoformat() if latest else None,
+            "last_reported": latest.get('ReportedAt') if latest else None,
             "user_vote": user_vote,
             "window_hours": AVAILABILITY_WINDOW_HOURS,
         }
     )
 
 
+@csrf_exempt
+@require_http_methods(["POST"])
 def report_availability_api(request, amenity_id):
     """POST: submit or change an availability report."""
-    from django.http import JsonResponse
-    from .models import AvailabilityReport, Amenity
+    dynamodb = get_dynamodb_resource()
+    table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
-    if request.method != "POST":
-        return JsonResponse({"error": "Method not allowed"}, status=405)
-
-    try:
-        amenity = Amenity.objects.get(pk=amenity_id)
-    except Amenity.DoesNotExist:
+    amenity_response = table.get_item(Key={'PK': f"AMENITY#{amenity_id}", 'SK': f"AMENITY#{amenity_id}"})
+    if not amenity_response.get('Item'):
         return JsonResponse({"error": "Not found"}, status=404)
 
     try:
@@ -2246,30 +2338,38 @@ def report_availability_api(request, amenity_id):
         request.session.create()
     session_key = request.session.session_key or ""
 
+    now_iso = timezone.now().isoformat()
+    # Utilize DynamoDB's Native TTL feature to auto-expire records after 48 hours
+    expires_at = int((timezone.now() + timedelta(hours=48)).timestamp())
+
+    table.put_item(
+        Item={
+            'PK': f"AMENITY#{amenity_id}",
+            'SK': f"AVAILABILITY#{session_key}",
+            'IsAvailable': bool(is_available),
+            'ReportedAt': now_iso,
+            'ExpiresAt': expires_at
+        }
+    )
+
     cutoff = timezone.now() - timedelta(hours=AVAILABILITY_WINDOW_HOURS)
+    cutoff_iso = cutoff.isoformat()
 
-    # Delete existing report from this session so they can change their vote
-    AvailabilityReport.objects.filter(
-        amenity=amenity,
-        session_key=session_key,
-        reported_at__gte=cutoff,
-    ).delete()
-
-    AvailabilityReport.objects.create(
-        amenity=amenity,
-        is_available=bool(is_available),
-        session_key=session_key,
+    response = table.query(
+        KeyConditionExpression=Key('PK').eq(f"AMENITY#{amenity_id}") & Key('SK').begins_with('AVAILABILITY#')
     )
+    items = response.get('Items', [])
+    recent_reports = [item for item in items if item.get('ReportedAt', '') >= cutoff_iso]
 
-    reports = AvailabilityReport.objects.filter(
-        amenity=amenity, reported_at__gte=cutoff
-    )
+    available_count = sum(1 for r in recent_reports if r.get('IsAvailable') is True)
+    unavailable_count = sum(1 for r in recent_reports if r.get('IsAvailable') is False)
+
     return JsonResponse(
         {
             "ok": True,
-            "available": reports.filter(is_available=True).count(),
-            "unavailable": reports.filter(is_available=False).count(),
-            "total": reports.count(),
+            "available": available_count,
+            "unavailable": unavailable_count,
+            "total": available_count + unavailable_count,
             "user_vote": "available" if is_available else "unavailable",
         }
     )

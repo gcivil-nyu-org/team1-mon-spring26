@@ -1,9 +1,17 @@
 import requests
 from decimal import Decimal, InvalidOperation
 from django.core.management.base import BaseCommand
-from django.db import transaction
-from django.contrib.gis.geos import Point
+from django.conf import settings
 from maps.models import AmenityType, Amenity
+import boto3
+import geohash2
+
+def get_dynamodb_table():
+    kwargs = {'region_name': settings.DYNAMODB_REGION}
+    if getattr(settings, 'DYNAMODB_ENDPOINT_URL', None):
+        kwargs['endpoint_url'] = settings.DYNAMODB_ENDPOINT_URL
+    dynamodb = boto3.resource('dynamodb', **kwargs)
+    return dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
 
 class Command(BaseCommand):
@@ -314,11 +322,11 @@ class Command(BaseCommand):
                     merged duplicates: {dedupe_merges})"
             )
 
-            created_count = 0
-            updated_count = 0
+            processed_count = 0
             skipped_count = 0
+            table = get_dynamodb_table()
 
-            with transaction.atomic():
+            with table.batch_writer() as batch:
                 for record in merged_by_primary_key.values():
                     try:
                         lat_decimal = record.get("latitude")
@@ -328,31 +336,40 @@ class Command(BaseCommand):
                             continue
 
                         external_id = self._build_external_id(record)
+                        is_active = bool(record.get("active", True))
+                        location_hash = geohash2.encode(float(lat_decimal), float(lon_decimal), precision=6)
 
-                        obj, created = Amenity.objects.update_or_create(
+                        item = {
+                            'PK': f"AMENITY#{external_id}",
+                            'SK': f"AMENITY#{external_id}",
+                            'GSI1PK': f"GEOHASH#{location_hash}", 
+                            'GSI1SK': f"TYPE#LinkNYC Kiosk#ACTIVE#{is_active}", 
+                            'Id': str(external_id),
+                            'Name': str(record.get("name") or "LinkNYC Kiosk")[:200],
+                            'Type': "LinkNYC Kiosk",
+                            'Address': str(record.get("address") or "")[:300],
+                            'PropName': str(record.get("prop_name") or "")[:200],
+                            'Description': str(record.get("description") or "")[:1000],
+                            'Operator': str(record.get("provider") or "")[:200],
+                            'Latitude': Decimal(str(lat_decimal)),
+                            'Longitude': Decimal(str(lon_decimal)),
+                            'Active': is_active,
+                            'AverageRating': Decimal('0'),
+                            'ReviewCount': 0
+                        }
+                        batch.put_item(Item=item)
+                        processed_count += 1
+                        
+                        Amenity.objects.update_or_create(
                             amenity_type=amenity_type,
                             external_id=str(external_id),
                             defaults={
-                                "name": str(record.get("name") or "LinkNYC Kiosk")[
-                                    :200
-                                ],
-                                "location": Point(
-                                    float(lon_decimal), float(lat_decimal), srid=4326
-                                ),
-                                "address": str(record.get("address") or "")[:300],
-                                "prop_name": str(record.get("prop_name") or "")[:200],
-                                "description": str(record.get("description") or "")[
-                                    :1000
-                                ],
-                                "operator": str(record.get("provider") or "")[:200],
-                                "active": bool(record.get("active", True)),
-                            },
+                                "name": str(record.get("name") or "LinkNYC Kiosk")[:200],
+                                "latitude": float(lat_decimal),
+                                "longitude": float(lon_decimal),
+                                "active": is_active,
+                            }
                         )
-
-                        if created:
-                            created_count += 1
-                        else:
-                            updated_count += 1
 
                     except (ValueError, IndexError, TypeError, KeyError) as e:
                         self.stdout.write(
@@ -364,8 +381,7 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.SUCCESS(
                     f"\nImport complete!\n"
-                    f"Created: {created_count}\n"
-                    f"Updated: {updated_count}\n"
+                    f"Processed (upserted): {processed_count}\n"
                     f"Skipped: {skipped_count}"
                 )
             )

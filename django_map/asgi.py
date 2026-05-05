@@ -11,14 +11,13 @@ import os
 import django
 import json
 import asyncio
-import psycopg
 import logging
 from contextlib import asynccontextmanager
 from django.conf import settings
 from asgiref.sync import sync_to_async
 from starlette.applications import Starlette
 from starlette.routing import Route
-from starlette.responses import StreamingResponse
+from starlette.responses import StreamingResponse, JSONResponse
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
@@ -44,6 +43,29 @@ async def get_user_id_from_session(request):
         return str(data.get("_auth_user_id"))
     except Session.DoesNotExist:
         return None
+
+
+async def internal_publish(request):
+    """
+    Internal endpoint to receive events from the synchronous WSGI application
+    and broadcast them to connected SSE clients.
+    """
+    client_host = request.client.host
+    if client_host not in ("127.0.0.1", "localhost", "::1"):
+        return JSONResponse({"error": "Unauthorized"}, status_code=403)
+
+    try:
+        data = await request.json()
+        target_user_id = str(data.get("user_id"))
+        payload_str = data.get("payload")
+
+        if target_user_id in active_connections:
+            for q in active_connections[target_user_id]:
+                q.put_nowait(payload_str)
+        return JSONResponse({"status": "ok"})
+    except Exception as e:
+        logger.error("[SSE] Error publishing event: %s", e)
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 async def chat_events_sse(request):
@@ -87,48 +109,6 @@ async def chat_events_sse(request):
     return response
 
 
-async def listen_to_pg():
-    """Background task holding 1 single connection open per Uvicorn worker."""
-    host = os.environ.get("RDS_HOSTNAME", "localhost")
-    # Bypass PgBouncer transaction pooling for LISTEN/NOTIFY
-    port = str(os.environ.get("RDS_PORT", "5432"))
-    dbname = os.environ.get("RDS_DB_NAME", os.environ.get("DB_NAME", "amenities"))
-    username = os.environ.get("RDS_USERNAME", os.environ.get("DB_USERNAME", dbname))
-    if os.environ.get("APP_ENV"):
-        username = f"{dbname}_{os.environ.get('APP_ENV')}"
-    password = os.environ.get(
-        "RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword")
-    )
-
-    dsn = f"dbname={dbname} user={username} password={password} host={host} port={port}"  # noqa: E501
-
-    while True:
-        try:
-            async with await psycopg.AsyncConnection.connect(
-                dsn, autocommit=True
-            ) as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute("LISTEN global_chat_events")
-
-                async for notify in conn.notifies():
-                    try:
-                        event_data = json.loads(notify.payload)
-                        target_user_id = str(event_data.get("user_id"))
-                        payload_str = event_data.get("payload")
-
-                        # Fan-out to all browser tabs connected under this user_id
-                        if target_user_id in active_connections:
-                            for q in active_connections[target_user_id]:
-                                q.put_nowait(payload_str)
-                    except Exception as e:
-                        logger.error("[SSE] Error processing notify: %s", e)
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.error("[SSE] Postgres Connection Error: %s", e)
-            await asyncio.sleep(5)  # Reconnect delay
-
-
 # Allow frontend running on port 8000 to connect locally and send cookies
 middleware = [
     Middleware(
@@ -147,15 +127,10 @@ middleware = [
 ]
 
 
-@asynccontextmanager
-async def lifespan(app):
-    app.state.bg_task = asyncio.create_task(listen_to_pg())
-    yield
-    app.state.bg_task.cancel()
-
-
 application = Starlette(
-    routes=[Route("/api/chats/events/", chat_events_sse)],
+    routes=[
+        Route("/api/chats/events/", chat_events_sse),
+        Route("/api/internal/publish/", internal_publish, methods=["POST"]),
+    ],
     middleware=middleware,
-    lifespan=lifespan,
 )

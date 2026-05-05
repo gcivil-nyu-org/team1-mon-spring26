@@ -1,6 +1,5 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
-from django.contrib.gis.geos import Point
 import datetime
 
 from maps.models import (
@@ -36,7 +35,8 @@ class ModelsCoverageTest(TestCase):
             external_id="test_model_am",
             defaults={
                 "name": "Test Amenity",
-                "location": Point(-73.0, 40.0),
+                "latitude": 40.0,
+                "longitude": -73.0,
                 "active": True,
             },
         )
@@ -46,7 +46,8 @@ class ModelsCoverageTest(TestCase):
             external_id="test_model_am_in",
             defaults={
                 "name": "Inactive Amenity",
-                "location": Point(-73.0, 40.0),
+                "latitude": 40.0,
+                "longitude": -73.0,
                 "active": False,
             },
         )

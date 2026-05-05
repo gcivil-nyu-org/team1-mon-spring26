@@ -1,10 +1,18 @@
 import requests
 from decimal import Decimal, InvalidOperation
 from django.core.management.base import BaseCommand
-from django.db import transaction
-from django.contrib.gis.geos import Point
+from django.conf import settings
 from maps.models import AmenityType, Amenity
 import stateplane
+import boto3
+import geohash2
+
+def get_dynamodb_table():
+    kwargs = {'region_name': settings.DYNAMODB_REGION}
+    if getattr(settings, 'DYNAMODB_ENDPOINT_URL', None):
+        kwargs['endpoint_url'] = settings.DYNAMODB_ENDPOINT_URL
+    dynamodb = boto3.resource('dynamodb', **kwargs)
+    return dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
 
 class Command(BaseCommand):
@@ -50,11 +58,12 @@ class Command(BaseCommand):
             sites = data["value"]
             self.stdout.write(f"Found {len(sites)} cooling sites")
 
-            created_count = 0
-            updated_count = 0
+            processed_count = 0
             skipped_count = 0
+            
+            table = get_dynamodb_table()
 
-            with transaction.atomic():
+            with table.batch_writer() as batch:
                 for site in sites:
                     try:
                         if not isinstance(site, dict):
@@ -71,8 +80,8 @@ class Command(BaseCommand):
 
                         # Add robust validation for coordinates
                         try:
-                            lat_decimal = Decimal(latitude)
-                            lon_decimal = Decimal(longitude)
+                            lat_decimal = Decimal(str(latitude))
+                            lon_decimal = Decimal(str(longitude))
                         except (ValueError, InvalidOperation):
                             print(f"Invalid coordinates for site: \
                                 {site.get('propertyname', 'Unknown')} - \
@@ -121,41 +130,53 @@ class Command(BaseCommand):
                             lat, lon = stateplane.to_latlon(
                                 longitude, latitude, abbr="NY_LI"
                             )
-                            lat_decimal = Decimal(lat)
-                            lon_decimal = Decimal(lon)
+                            lat_decimal = Decimal(str(lat))
+                            lon_decimal = Decimal(str(lon))
                             print(f"{prop_name} converted from Long Island format: \
                                      {lat_decimal}, {lon_decimal}")
                             # continue
 
                         # print(f"Final coordinates: {lat_decimal}, {lon_decimal}")
                         try:
-                            obj, created = Amenity.objects.update_or_create(
+                            amenity_id = str(external_id)
+                            location_hash = geohash2.encode(float(lat_decimal), float(lon_decimal), precision=6)
+                            
+                            item = {
+                                'PK': f"AMENITY#{amenity_id}",
+                                'SK': f"AMENITY#{amenity_id}",
+                                'GSI1PK': f"GEOHASH#{location_hash}", 
+                                'GSI1SK': f"TYPE#{feature_type_name}#ACTIVE#{is_active}", 
+                                'Id': amenity_id,
+                                'Name': prop_name,
+                                'Type': feature_type_name,
+                                'Description': f"Type: {feature_type_name}",
+                                'Latitude': Decimal(str(lat_decimal)),
+                                'Longitude': Decimal(str(lon_decimal)),
+                                'Active': is_active,
+                                'AverageRating': Decimal('0'),
+                                'ReviewCount': 0
+                            }
+                            batch.put_item(Item=item)
+                            processed_count += 1
+                            
+                            Amenity.objects.update_or_create(
                                 amenity_type=amenity_type,
-                                external_id=str(external_id),
+                                external_id=amenity_id,
                                 defaults={
-                                    "name": prop_name,
-                                    "location": Point(
-                                        float(lon_decimal),
-                                        float(lat_decimal),
-                                        srid=4326,
-                                    ),
-                                    "description": f"Type: {feature_type_name}",
+                                    "name": prop_name[:200],
+                                    "latitude": float(lat_decimal),
+                                    "longitude": float(lon_decimal),
                                     "active": is_active,
-                                },
+                                }
                             )
 
-                            print(f"Added/Updated: {obj.name} (ID: {obj.id})")
+                            print(f"Added/Updated: {prop_name} (ID: {amenity_id})")
                         except (ValueError, InvalidOperation):
                             print(f"Invalid coordinates for site: \
                                     {site.get('propertyname', 'Unknown')} \
                                         - lat: {latitude}, lon: {longitude}")
                             skipped_count += 1
                             continue
-
-                        if created:
-                            created_count += 1
-                        else:
-                            updated_count += 1
 
                     except (ValueError, IndexError, TypeError, KeyError) as e:
                         self.stdout.write(
@@ -165,8 +186,8 @@ class Command(BaseCommand):
                         continue
 
             self.stdout.write(
-                self.style.SUCCESS(f"\nImport complete!\nCreated: {created_count}\n \
-                        Updated: {updated_count}\nSkipped: {skipped_count}")
+                self.style.SUCCESS(f"\nImport complete!\nProcessed (upserted): {processed_count}\n \
+                        Skipped: {skipped_count}")
             )
 
         except requests.exceptions.RequestException as e:

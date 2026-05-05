@@ -1,9 +1,18 @@
 import requests
 import time
+from decimal import Decimal
 from django.core.management.base import BaseCommand
-from django.contrib.gis.geos import GEOSGeometry
-from django.db import transaction
+from django.conf import settings
 from maps.models import AmenityType, Amenity
+import boto3
+import geohash2
+
+def get_dynamodb_table():
+    kwargs = {'region_name': settings.DYNAMODB_REGION}
+    if getattr(settings, 'DYNAMODB_ENDPOINT_URL', None):
+        kwargs['endpoint_url'] = settings.DYNAMODB_ENDPOINT_URL
+    dynamodb = boto3.resource('dynamodb', **kwargs)
+    return dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
 
 class Command(BaseCommand):
@@ -48,11 +57,11 @@ class Command(BaseCommand):
             fountains = data["value"]
             self.stdout.write(f"Found {len(fountains)} water fountains")
 
-            created_count = 0
-            updated_count = 0
+            processed_count = 0
             skipped_count = 0
+            table = get_dynamodb_table()
 
-            with transaction.atomic():
+            with table.batch_writer() as batch:
                 for fountain in fountains:
                     try:
                         # OData format
@@ -91,24 +100,44 @@ class Command(BaseCommand):
                             active = active_str in ["true", "yes", "1", "y", "active"]
 
                         geom = fountain["the_geom"]
+                        lat = 0.0
+                        lon = 0.0
+                        if isinstance(geom, dict) and "coordinates" in geom:
+                            lon = geom["coordinates"][0]
+                            lat = geom["coordinates"][1]
 
-                        # use composite key (amenity_type, external_id)
-                        obj, created = Amenity.objects.update_or_create(
+                        amenity_id = str(external_id)
+                        location_hash = geohash2.encode(float(lat), float(lon), precision=6)
+                        
+                        item = {
+                            'PK': f"AMENITY#{amenity_id}",
+                            'SK': f"AMENITY#{amenity_id}",
+                            'GSI1PK': f"GEOHASH#{location_hash}", 
+                            'GSI1SK': f"TYPE#Water Fountain#ACTIVE#{active}", 
+                            'Id': amenity_id,
+                            'Name': str(name)[:200],
+                            'Type': "Water Fountain",
+                            'Address': str(prop_name)[:200],
+                            'Description': str(position)[:500],
+                            'Latitude': Decimal(str(lat)),
+                            'Longitude': Decimal(str(lon)),
+                            'Active': active,
+                            'AverageRating': Decimal('0'),
+                            'ReviewCount': 0
+                        }
+                        batch.put_item(Item=item)
+                        processed_count += 1
+                        
+                        Amenity.objects.update_or_create(
                             amenity_type=amenity_type,
-                            external_id=str(external_id),
+                            external_id=amenity_id,
                             defaults={
                                 "name": str(name)[:200],
-                                "location": GEOSGeometry(str(geom)),
-                                "description": str(position)[:500],
-                                "prop_name": str(prop_name)[:200],
+                                "latitude": float(lat),
+                                "longitude": float(lon),
                                 "active": active,
-                            },
+                            }
                         )
-
-                        if created:
-                            created_count += 1
-                        else:
-                            updated_count += 1
 
                     except (ValueError, IndexError, TypeError, KeyError) as e:
                         self.stdout.write(self.style.WARNING(f"Skipped entry: {e}"))
@@ -118,8 +147,7 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.SUCCESS(
                     f"\nImport complete!\n"
-                    f"Created: {created_count}\n"
-                    f"Updated: {updated_count}\n"
+                    f"Processed (upserted): {processed_count}\n"
                     f"Skipped: {skipped_count}"
                 )
             )

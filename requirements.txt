@@ -9,8 +9,9 @@ django-allauth
 PyJWT
 cryptography
 gevent
-psycopg[binary]
-psycopg-pool
 starlette
 uvicorn[standard]
 gunicorn
+geohash2
+geojson
+python-dotenv

@@ -2,7 +2,6 @@ import json
 from django.test import TestCase, Client, override_settings
 from django.test.client import BOUNDARY, MULTIPART_CONTENT, encode_multipart
 from django.urls import reverse
-from django.contrib.gis.geos import Point
 from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils.html import escape
@@ -78,7 +77,8 @@ class ViewsCoverageTest(TestCase):
             external_id="test_active_restroom",
             defaults={
                 "name": "Active Test Restroom",
-                "location": Point(-73.99, 40.73),
+                "latitude": 40.73,
+                "longitude": -73.99,
                 "active": True,
                 "accessibility": "Fully Accessible",
             },
@@ -88,7 +88,8 @@ class ViewsCoverageTest(TestCase):
             external_id="test_inactive_bike",
             defaults={
                 "name": "Inactive Test Bike Rack",
-                "location": Point(-73.98, 40.74),
+                "latitude": 40.74,
+                "longitude": -73.98,
                 "active": False,
                 "accessibility": "Not Accessible",
             },
@@ -98,7 +99,8 @@ class ViewsCoverageTest(TestCase):
             external_id="test_cluster1_bike",
             defaults={
                 "name": "Bike Rack Cluster 1",
-                "location": Point(-73.9801, 40.7401),
+                "latitude": 40.7401,
+                "longitude": -73.9801,
                 "active": True,
                 "accessibility": "Partially Accessible",
             },
@@ -108,7 +110,8 @@ class ViewsCoverageTest(TestCase):
             external_id="test_cluster2_bike",
             defaults={
                 "name": "Bike Rack Cluster 2",
-                "location": Point(-73.9802, 40.7402),
+                "latitude": 40.7402,
+                "longitude": -73.9802,
                 "active": True,
                 "accessibility": "Partially Accessible",
             },
@@ -218,14 +221,14 @@ class ViewsCoverageTest(TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
-    @patch("maps.views.cluster_amenities")
+    @patch("maps.views.cluster_amenities_python")
     def test_amenities_api_clustering(self, mock_cluster):
         mock_cluster.return_value = [
             (
                 [self.amenity_bike_cluster1.id, self.amenity_bike_cluster2.id],
                 2,
-                "POINT(-73.98015 40.74015)",
-                None,
+                40.74015,
+                -73.98015,
             )
         ]
         response = self.client.get(
@@ -235,18 +238,19 @@ class ViewsCoverageTest(TestCase):
         clusters = [a for a in data["amenities"] if a.get("is_cluster")]
         self.assertTrue(len(clusters) > 0)
 
-    @patch("maps.views.cluster_amenities")
+    @patch("maps.views.cluster_amenities_python")
     def test_amenities_api_clustering_single_point(self, mock_cluster):
         distant, _ = Amenity.objects.get_or_create(
             amenity_type=self.type_bike,
             external_id="test_distant_bike",
             defaults={
                 "name": "Distant Rack",
-                "location": Point(10.0, 10.0),
+                "latitude": 10.0,
+                "longitude": 10.0,
                 "active": True,
             },
         )
-        mock_cluster.return_value = [([distant.id], 1, "POINT(10.0 10.0)", None)]
+        mock_cluster.return_value = [([distant.id], 1, 10.0, 10.0)]
         response = self.client.get(
             reverse("maps:amenities_api"),
             {

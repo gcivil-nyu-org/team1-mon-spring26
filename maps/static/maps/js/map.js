@@ -646,8 +646,7 @@ function addAmenityMarker(amenity) {
         icon = L.divIcon({
             html: `<div style="width:24px;height:32px;filter:${filt}">
             <svg viewBox="0 0 24 32" width="24" height="32" xmlns="http://www.w3.org/2000/svg">
-                <defs><style>.p${amenity.id}{fill:${amenity.color};stroke:rgba(0,0,0,.22);stroke-width:.5}</style></defs>
-                <g class="p${amenity.id}">${svgPaths[amenity.icon] || svgPaths.default}</g>
+                <g fill="${amenity.color}" stroke="rgba(0,0,0,.22)" stroke-width=".5">${svgPaths[amenity.icon] || svgPaths.default}</g>
             </svg></div>`,
             iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -32], className: 'leaflet-div-icon-custom amenity-marker-icon',
         });

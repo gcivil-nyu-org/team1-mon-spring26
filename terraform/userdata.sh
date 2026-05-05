@@ -8,13 +8,6 @@ exec > >(tee /var/log/userdata-execution.log) 2>&1
 dnf update -y
 dnf install -y git python3.14 python3.14-pip nginx
 
-# Install PgBouncer using the repository previously used in Elastic Beanstalk
-dnf install -y spal-release
-dnf install -y pgbouncer
-
-# Install GDAL & GEOS for geospatial support (required by PostGIS and Django's GIS features)
-dnf install -y gdal310 geos
-
 # 2. Install Cloudflare WARP (Provides outbound IPv4 access for GitHub and AWS SSM)
 curl -fsSl https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo | tee /etc/yum.repos.d/cloudflare-warp.repo
 dnf install -y cloudflare-warp
@@ -148,6 +141,6 @@ setsebool -P httpd_can_network_connect 1 || true
 setsebool -P httpd_read_user_content 1 || true
 
 systemctl daemon-reload
-systemctl enable django-wsgi django-asgi nginx pgbouncer
+systemctl enable django-wsgi django-asgi nginx
 
 # (GitHub Actions handles the rest on its next run!)

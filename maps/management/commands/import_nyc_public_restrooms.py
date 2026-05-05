@@ -2,10 +2,19 @@ import re
 import json
 import datetime
 import requests
+from decimal import Decimal
 from django.core.management.base import BaseCommand
-from django.db import transaction
-from django.contrib.gis.geos import GEOSGeometry
+from django.conf import settings
 from maps.models import AmenityType, Amenity
+import boto3
+import geohash2
+
+def get_dynamodb_table():
+    kwargs = {'region_name': settings.DYNAMODB_REGION}
+    if getattr(settings, 'DYNAMODB_ENDPOINT_URL', None):
+        kwargs['endpoint_url'] = settings.DYNAMODB_ENDPOINT_URL
+    dynamodb = boto3.resource('dynamodb', **kwargs)
+    return dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
 # ---------------------------------------------------------------------------
 # Hours parsing
@@ -327,42 +336,6 @@ def parse_hours(raw: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def hours_to_day_fields(hours: dict) -> dict:
-    fields = {f"{d.lower()}_open": None for d in DAYS}
-    fields.update({f"{d.lower()}_close": None for d in DAYS})
-    fields["is_open_24hrs"] = bool(hours.get("is_24hrs"))
-
-    if hours.get("is_24hrs"):
-        midnight = datetime.time(0, 0)
-        for day in DAYS:
-            fields[f"{day.lower()}_open"] = midnight
-            fields[f"{day.lower()}_close"] = midnight
-        return fields
-
-    def to_time(val):
-        if not val or not isinstance(val, str) or ":" not in val:
-            return None
-        try:
-            h, m = val.split(":")
-            return datetime.time(int(h) % 24, int(m))
-        except (ValueError, AttributeError):
-            return None
-
-    for day in DAYS:
-        val = hours.get(day)
-        if isinstance(val, list) and len(val) == 2:
-            fields[f"{day.lower()}_open"] = to_time(val[0])
-            fields[f"{day.lower()}_close"] = to_time(val[1])
-
-    default = hours.get("default")
-    if isinstance(default, list) and len(default) == 2:
-        for day in DAYS:
-            if fields[f"{day.lower()}_open"] is None:
-                fields[f"{day.lower()}_open"] = to_time(default[0])
-                fields[f"{day.lower()}_close"] = to_time(default[1])
-
-    return fields
-
 
 # ---------------------------------------------------------------------------
 # Management command
@@ -403,9 +376,11 @@ class Command(BaseCommand):
             restrooms = data["value"]
             self.stdout.write(f"Found {len(restrooms)} restrooms")
 
-            created_count = updated_count = skipped_count = 0
+            processed_count = 0
+            skipped_count = 0
+            table = get_dynamodb_table()
 
-            with transaction.atomic():
+            with table.batch_writer() as batch:
                 for restroom in restrooms:
                     try:
                         if not isinstance(restroom, dict):
@@ -443,7 +418,6 @@ class Command(BaseCommand):
 
                         raw_hours = restroom.get("hours_of_operation") or ""
                         hours_dict = parse_hours(raw_hours)
-                        day_fields = hours_to_day_fields(hours_dict)
 
                         seasonal = (
                             str(restroom.get("open_year_round", "")).strip().lower()
@@ -471,27 +445,44 @@ class Command(BaseCommand):
                             == "operational"
                         )
 
-                        _, was_created = Amenity.objects.update_or_create(
+                        lat = float(geom['coordinates'][1])
+                        lon = float(geom['coordinates'][0])
+                        amenity_id = str(external_id)
+                        location_hash = geohash2.encode(lat, lon, precision=6)
+                        
+                        item = {
+                            'PK': f"AMENITY#{amenity_id}",
+                            'SK': f"AMENITY#{amenity_id}",
+                            'GSI1PK': f"GEOHASH#{location_hash}", 
+                            'GSI1SK': f"TYPE#Restroom#ACTIVE#{active}", 
+                            'Id': amenity_id,
+                            'Name': str(name)[:200],
+                            'Type': "Restroom",
+                            'Description': str(description)[:1000],
+                            'Operator': str(operator)[:200],
+                            'HoursOfOperation': hours_dict,
+                            'ChangingStations': changing_stations,
+                            'Accessibility': accessibility,
+                            'Seasonal': seasonal,
+                            'Latitude': Decimal(str(lat)),
+                            'Longitude': Decimal(str(lon)),
+                            'Active': active,
+                            'AverageRating': Decimal('0'),
+                            'ReviewCount': 0
+                        }
+                        batch.put_item(Item=item)
+                        processed_count += 1
+                        
+                        Amenity.objects.update_or_create(
                             amenity_type=amenity_type,
-                            external_id=str(external_id),
+                            external_id=amenity_id,
                             defaults={
                                 "name": str(name)[:200],
-                                "location": GEOSGeometry(json.dumps(geom)),
-                                "description": str(description)[:1000],
-                                "operator": str(operator)[:200],
-                                "hours_of_operation": hours_dict,
-                                **day_fields,
-                                "changing_stations": changing_stations,
-                                "accessibility": accessibility,
-                                "seasonal": seasonal,
+                                "latitude": float(lat),
+                                "longitude": float(lon),
                                 "active": active,
-                            },
+                            }
                         )
-
-                        if was_created:
-                            created_count += 1
-                        else:
-                            updated_count += 1
 
                     except (ValueError, IndexError, TypeError, KeyError) as e:
                         self.stdout.write(self.style.WARNING(f"Skipped entry: {e}"))
@@ -501,8 +492,7 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.SUCCESS(
                     f"\nImport complete!\n"
-                    f"Created: {created_count}\n"
-                    f"Updated: {updated_count}\n"
+                    f"Processed (upserted): {processed_count}\n"
                     f"Skipped: {skipped_count}"
                 )
             )
