@@ -45,8 +45,7 @@ jobs:
       - name: Run Tests
         run: |
           python manage.py migrate --noinput
-          # Temporarily restrict to basic tests until test_views is migrated to DynamoDB
-          coverage run -m pytest test_app.py
+          coverage run -m pytest
           
         env:
           # DB/APP_ENV, and AWS vars

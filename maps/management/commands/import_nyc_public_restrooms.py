@@ -382,114 +382,113 @@ class Command(BaseCommand):
             skipped_count = 0
             table = get_dynamodb_table()
 
-            with table.batch_writer() as batch:
-                for restroom in restrooms:
-                    try:
-                        if not isinstance(restroom, dict):
-                            skipped_count += 1
-                            continue
-
-                        geom = restroom.get("location_1")
-                        if not geom:
-                            skipped_count += 1
-                            continue
-
-                        external_id = restroom.get("__id") or (
-                            f"restroom_"
-                            f"{geom['coordinates'][1]}_"
-                            f"{geom['coordinates'][0]}"
-                        )
-                        name = restroom.get("facility_name") or "Public Restroom"
-
-                        description_parts = [
-                            p
-                            for p in [
-                                (
-                                    f"Type: {restroom.get('restroom_type')}"
-                                    if restroom.get("restroom_type")
-                                    else ""
-                                ),
-                                restroom.get("location_type") or "",
-                                restroom.get("additional_notes") or "",
-                            ]
-                            if p
-                        ]
-                        description = " | ".join(description_parts)
-
-                        operator = restroom.get("operator") or ""
-
-                        raw_hours = restroom.get("hours_of_operation") or ""
-                        hours_dict = parse_hours(raw_hours)
-
-                        seasonal = (
-                            str(restroom.get("open_year_round", "")).strip().lower()
-                            == "seasonal"
-                        )
-
-                        cs_raw = (
-                            str(restroom.get("changing_stations", "")).strip().lower()
-                        )
-                        changing_stations = cs_raw.startswith("yes")
-
-                        accessibility = ""
-                        acc = str(restroom.get("accessibility", "")).strip().lower()
-                        if "fully" in acc:
-                            accessibility = "Fully Accessible"
-                        elif "partial" in acc:
-                            accessibility = "Partially Accessible"
-                        elif "limited" in acc:
-                            accessibility = "Limited Accessibility"
-                        elif "not" in acc or acc == "no":
-                            accessibility = "Not Accessible"
-
-                        active = (
-                            str(restroom.get("status", "")).strip().lower()
-                            == "operational"
-                        )
-
-                        lat = float(geom["coordinates"][1])
-                        lon = float(geom["coordinates"][0])
-                        amenity_id = str(external_id)
-                        location_hash = geohash2.encode(lat, lon, precision=6)
-
-                        item = {
-                            "PK": f"AMENITY#{amenity_id}",
-                            "SK": f"AMENITY#{amenity_id}",
-                            "GSI1PK": f"GEOHASH#{location_hash}",
-                            "GSI1SK": f"TYPE#Restroom#ACTIVE#{active}",
-                            "Id": amenity_id,
-                            "Name": str(name)[:200],
-                            "Type": "Restroom",
-                            "Description": str(description)[:1000],
-                            "Operator": str(operator)[:200],
-                            "HoursOfOperation": hours_dict,
-                            "ChangingStations": changing_stations,
-                            "Accessibility": accessibility,
-                            "Seasonal": seasonal,
-                            "Latitude": Decimal(str(lat)),
-                            "Longitude": Decimal(str(lon)),
-                            "Active": active,
-                            "AverageRating": Decimal("0"),
-                            "ReviewCount": 0,
-                        }
-                        batch.put_item(Item=item)
-                        processed_count += 1
-
-                        Amenity.objects.update_or_create(
-                            amenity_type=amenity_type,
-                            external_id=amenity_id,
-                            defaults={
-                                "name": str(name)[:200],
-                                "latitude": float(lat),
-                                "longitude": float(lon),
-                                "active": active,
-                            },
-                        )
-
-                    except (ValueError, IndexError, TypeError, KeyError) as e:
-                        self.stdout.write(self.style.WARNING(f"Skipped entry: {e}"))
+            for restroom in restrooms:
+                try:
+                    if not isinstance(restroom, dict):
                         skipped_count += 1
                         continue
+
+                    geom = restroom.get("location_1")
+                    if not geom:
+                        skipped_count += 1
+                        continue
+
+                    external_id = restroom.get("__id") or (
+                        f"restroom_"
+                        f"{geom['coordinates'][1]}_"
+                        f"{geom['coordinates'][0]}"
+                    )
+                    name = restroom.get("facility_name") or "Public Restroom"
+
+                    description_parts = [
+                        p
+                        for p in [
+                            (
+                                f"Type: {restroom.get('restroom_type')}"
+                                if restroom.get("restroom_type")
+                                else ""
+                            ),
+                            restroom.get("location_type") or "",
+                            restroom.get("additional_notes") or "",
+                        ]
+                        if p
+                    ]
+                    description = " | ".join(description_parts)
+
+                    operator = restroom.get("operator") or ""
+
+                    raw_hours = restroom.get("hours_of_operation") or ""
+                    hours_dict = parse_hours(raw_hours)
+
+                    seasonal = (
+                        str(restroom.get("open_year_round", "")).strip().lower()
+                        == "seasonal"
+                    )
+
+                    cs_raw = (
+                        str(restroom.get("changing_stations", "")).strip().lower()
+                    )
+                    changing_stations = cs_raw.startswith("yes")
+
+                    accessibility = ""
+                    acc = str(restroom.get("accessibility", "")).strip().lower()
+                    if "fully" in acc:
+                        accessibility = "Fully Accessible"
+                    elif "partial" in acc:
+                        accessibility = "Partially Accessible"
+                    elif "limited" in acc:
+                        accessibility = "Limited Accessibility"
+                    elif "not" in acc or acc == "no":
+                        accessibility = "Not Accessible"
+
+                    active = (
+                        str(restroom.get("status", "")).strip().lower()
+                        == "operational"
+                    )
+
+                    lat = float(geom["coordinates"][1])
+                    lon = float(geom["coordinates"][0])
+                    amenity_id = str(external_id)
+                    location_hash = geohash2.encode(lat, lon, precision=6)
+
+                    item = {
+                        "PK": f"AMENITY#{amenity_id}",
+                        "SK": f"AMENITY#{amenity_id}",
+                        "GSI1PK": f"GEOHASH#{location_hash}",
+                        "GSI1SK": f"TYPE#Restroom#ACTIVE#{active}",
+                        "Id": amenity_id,
+                        "Name": str(name)[:200],
+                        "Type": "Restroom",
+                        "Description": str(description)[:1000],
+                        "Operator": str(operator)[:200],
+                        "HoursOfOperation": hours_dict,
+                        "ChangingStations": changing_stations,
+                        "Accessibility": accessibility,
+                        "Seasonal": seasonal,
+                        "Latitude": Decimal(str(lat)),
+                        "Longitude": Decimal(str(lon)),
+                        "Active": active,
+                        "AverageRating": Decimal("0"),
+                        "ReviewCount": 0,
+                    }
+                    table.put_item(Item=item)
+                    processed_count += 1
+
+                    Amenity.objects.update_or_create(
+                        amenity_type=amenity_type,
+                        external_id=amenity_id,
+                        defaults={
+                            "name": str(name)[:200],
+                            "latitude": float(lat),
+                            "longitude": float(lon),
+                            "active": active,
+                        },
+                    )
+
+                except (ValueError, IndexError, TypeError, KeyError) as e:
+                    self.stdout.write(self.style.WARNING(f"Skipped entry: {e}"))
+                    skipped_count += 1
+                    continue
 
             self.stdout.write(
                 self.style.SUCCESS(

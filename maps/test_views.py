@@ -9,6 +9,11 @@ from unittest.mock import patch
 from django.utils import timezone
 from datetime import timedelta
 
+import boto3
+from decimal import Decimal
+from moto import mock_dynamodb
+import geohash2
+
 from maps.models import (
     AmenityType,
     Amenity,
@@ -32,7 +37,10 @@ from maps.views import normalize_longitude, get_cluster_grid_size
             "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
         },
     }
+    DYNAMODB_TABLE_NAME="NycNowData",
+    DYNAMODB_REGION="us-east-2"
 )
+@mock_dynamodb
 class ViewsCoverageTest(TestCase):
     def setUp(self):
         self.client = Client()
@@ -116,6 +124,54 @@ class ViewsCoverageTest(TestCase):
                 "accessibility": "Partially Accessible",
             },
         )
+        self.setup_dynamodb()
+        
+    def setup_dynamodb(self):
+        self.dynamodb = boto3.resource("dynamodb", region_name="us-east-2")
+        self.table = self.dynamodb.create_table(
+            TableName="NycNowData",
+            KeySchema=[
+                {"AttributeName": "PK", "KeyType": "HASH"},
+                {"AttributeName": "SK", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "PK", "AttributeType": "S"},
+                {"AttributeName": "SK", "AttributeType": "S"},
+                {"AttributeName": "GSI1PK", "AttributeType": "S"},
+                {"AttributeName": "GSI1SK", "AttributeType": "S"},
+            ],
+            GlobalSecondaryIndexes=[
+                {
+                    "IndexName": "GeohashIndex",
+                    "KeySchema": [
+                        {"AttributeName": "GSI1PK", "KeyType": "HASH"},
+                        {"AttributeName": "GSI1SK", "KeyType": "RANGE"},
+                    ],
+                    "Projection": {"ProjectionType": "ALL"},
+                }
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        self._put_dynamo_amenity(self.amenity_active)
+        self._put_dynamo_amenity(self.amenity_inactive)
+        self._put_dynamo_amenity(self.amenity_bike_cluster1)
+        self._put_dynamo_amenity(self.amenity_bike_cluster2)
+        
+    def _put_dynamo_amenity(self, amenity):
+        location_hash = geohash2.encode(amenity.latitude, amenity.longitude, precision=6)
+        self.table.put_item(Item={
+            "PK": f"AMENITY#{amenity.external_id or amenity.id}",
+            "SK": f"AMENITY#{amenity.external_id or amenity.id}",
+            "GSI1PK": f"GEOHASH#{location_hash}",
+            "GSI1SK": f"TYPE#{amenity.amenity_type.name}#ACTIVE#{amenity.active}",
+            "Id": str(amenity.external_id or amenity.id),
+            "Name": amenity.name,
+            "Type": amenity.amenity_type.name,
+            "Latitude": Decimal(str(amenity.latitude)),
+            "Longitude": Decimal(str(amenity.longitude)),
+            "Active": amenity.active,
+            "Accessibility": amenity.accessibility,
+        })
 
     def test_normalize_longitude(self):
         self.assertEqual(normalize_longitude(100), 100)
@@ -161,8 +217,8 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         ids = [a.get("id") for a in data["amenities"] if "id" in a]
-        self.assertIn(self.amenity_active.id, ids)
-        self.assertNotIn(self.amenity_inactive.id, ids)
+        self.assertIn(self.amenity_active.external_id, ids)
+        self.assertNotIn(self.amenity_inactive.external_id, ids)
 
     def test_amenities_api_include_inactive(self):
         response = self.client.get(
@@ -170,7 +226,7 @@ class ViewsCoverageTest(TestCase):
         )
         data = response.json()
         ids = [a.get("id") for a in data["amenities"] if "id" in a]
-        self.assertIn(self.amenity_inactive.id, ids)
+        self.assertIn(self.amenity_inactive.external_id, ids)
 
     def test_amenities_api_only_accessible(self):
         response = self.client.get(
@@ -179,8 +235,8 @@ class ViewsCoverageTest(TestCase):
         )
         data = response.json()
         ids = [a.get("id") for a in data["amenities"] if "id" in a]
-        self.assertIn(self.amenity_active.id, ids)  # Fully Accessible
-        self.assertNotIn(self.amenity_inactive.id, ids)  # Not Accessible
+        self.assertIn(self.amenity_active.external_id, ids)  # Fully Accessible
+        self.assertNotIn(self.amenity_inactive.external_id, ids)  # Not Accessible
 
     def test_amenities_api_filter_by_type_id(self):
         response = self.client.get(
@@ -189,7 +245,7 @@ class ViewsCoverageTest(TestCase):
         data = response.json()
         self.assertTrue(len(data["amenities"]) >= 1)
         ids = [a["id"] for a in data["amenities"]]
-        self.assertIn(self.amenity_active.id, ids)
+        self.assertIn(self.amenity_active.external_id, ids)
 
     def test_amenities_api_filter_by_type_name(self):
         response = self.client.get(
@@ -198,7 +254,7 @@ class ViewsCoverageTest(TestCase):
         data = response.json()
         self.assertTrue(len(data["amenities"]) >= 1)
         ids = [a["id"] for a in data["amenities"]]
-        self.assertIn(self.amenity_active.id, ids)
+        self.assertIn(self.amenity_active.external_id, ids)
 
     def test_amenities_api_bbox_filter(self):
         response = self.client.get(
@@ -225,7 +281,7 @@ class ViewsCoverageTest(TestCase):
     def test_amenities_api_clustering(self, mock_cluster):
         mock_cluster.return_value = [
             (
-                [self.amenity_bike_cluster1.id, self.amenity_bike_cluster2.id],
+                [self.amenity_bike_cluster1.external_id, self.amenity_bike_cluster2.external_id],
                 2,
                 40.74015,
                 -73.98015,
@@ -250,7 +306,8 @@ class ViewsCoverageTest(TestCase):
                 "active": True,
             },
         )
-        mock_cluster.return_value = [([distant.id], 1, 10.0, 10.0)]
+        self._put_dynamo_amenity(distant)
+        mock_cluster.return_value = [([distant.external_id], 1, 10.0, 10.0)]
         response = self.client.get(
             reverse("maps:amenities_api"),
             {
@@ -265,7 +322,7 @@ class ViewsCoverageTest(TestCase):
         data = response.json()
         self.assertFalse(any(a.get("is_cluster") for a in data["amenities"]))
         ids = [a["id"] for a in data["amenities"]]
-        self.assertIn(distant.id, ids)
+        self.assertIn(distant.external_id, ids)
 
     def test_amenities_api_zoomed_in_bike_racks(self):
         response = self.client.get(
@@ -279,7 +336,7 @@ class ViewsCoverageTest(TestCase):
         response2 = self.client.get(reverse("maps:amenities_api"))
         self.assertEqual(response2.status_code, 200)
 
-    def test_amenities_api_serialization_with_reviews_and_photos(self):
+    def test_amenity_detail_api_serialization_with_reviews_and_photos(self):
         Review.objects.create(
             amenity=self.amenity_active,
             user=self.test_user,
@@ -293,11 +350,10 @@ class ViewsCoverageTest(TestCase):
             amenity=self.amenity_active, uploaded_by=self.test_user, photo=photo
         )
 
-        response = self.client.get(reverse("maps:amenities_api"))
+        response = self.client.get(reverse("maps:amenity_detail_api", args=[self.amenity_active.external_id]))
         data = response.json()
-        active = next(
-            (a for a in data["amenities"] if a["id"] == self.amenity_active.id), None
-        )
+        active = data.get("amenity")
+        
         self.assertIsNotNone(active)
         self.assertTrue(len(active["reviews"]) > 0)
         self.assertEqual(active["reviews"][0]["rating"], 4)
@@ -488,22 +544,19 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
-        active = next(
-            (a for a in data["amenities"] if a.get("id") == self.amenity_active.id),
-            None,
-        )
+        active = next((a for a in data["amenities"] if a.get("id") == self.amenity_active.external_id), None)
         self.assertIsNotNone(active)
         self.assertTrue(active.get("is_favorited"))
 
     def test_amenity_detail_api_returns_amenity(self):
         self.client.force_login(self.test_user)
         response = self.client.get(
-            reverse("maps:amenity_detail_api", args=[self.amenity_active.id])
+            reverse("maps:amenity_detail_api", args=[self.amenity_active.external_id])
         )
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("amenity", data)
-        self.assertEqual(data["amenity"]["id"], self.amenity_active.id)
+        self.assertEqual(data["amenity"]["id"], self.amenity_active.external_id)
 
     def test_settings_view_requires_login(self):
         response = self.client.get(reverse("maps:settings"))
@@ -1323,7 +1376,7 @@ class ViewsCoverageTest(TestCase):
         )
         response = self.client.get(
             reverse("maps:get_amenity_reviews_api"),
-            {"amenity_id": self.amenity_active.id},
+            {"amenity_id": self.amenity_active.external_id},
         )
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -1333,14 +1386,14 @@ class ViewsCoverageTest(TestCase):
     def test_get_amenity_reviews_api_pagination(self):
         response = self.client.get(
             reverse("maps:get_amenity_reviews_api"),
-            {"amenity_id": self.amenity_active.id, "page": 1, "page_size": 5},
+            {"amenity_id": self.amenity_active.external_id, "page": 1, "page_size": 5},
         )
         self.assertEqual(response.status_code, 200)
 
     def test_get_amenity_reviews_api_invalid_page(self):
         response = self.client.get(
             reverse("maps:get_amenity_reviews_api"),
-            {"amenity_id": self.amenity_active.id, "page": "abc"},
+            {"amenity_id": self.amenity_active.external_id, "page": "abc"},
         )
         self.assertEqual(response.status_code, 400)
 
@@ -1383,17 +1436,17 @@ class ViewsCoverageTest(TestCase):
         )
         response = self.client.get(
             reverse("maps:get_amenity_reviewers_api"),
-            {"amenity_id": self.amenity_active.id},
+            {"amenity_id": self.amenity_active.external_id},
         )
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("reviewers", data)
-        self.assertEqual(data["amenity_id"], self.amenity_active.id)
+        self.assertEqual(data["amenity_id"], self.amenity_active.external_id)
 
     def test_get_amenity_reviewers_api_invalid_limit(self):
         response = self.client.get(
             reverse("maps:get_amenity_reviewers_api"),
-            {"amenity_id": self.amenity_active.id, "limit": "abc"},
+            {"amenity_id": self.amenity_active.external_id, "limit": "abc"},
         )
         self.assertEqual(response.status_code, 400)
 
@@ -1714,7 +1767,7 @@ class ViewsCoverageTest(TestCase):
                         self.test_user2.email,
                         self.test_user3.email,
                     ],
-                    "amenity_id": self.amenity_active.id,
+                    "amenity_id": self.amenity_active.external_id,
                 }
             ),
             content_type="application/json",
@@ -2218,7 +2271,7 @@ class ViewsCoverageTest(TestCase):
     def test_get_amenity_reviews_api_returns_total_reviews_key(self):
         response = self.client.get(
             reverse("maps:get_amenity_reviews_api"),
-            {"amenity_id": self.amenity_active.id},
+            {"amenity_id": self.amenity_active.external_id},
         )
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -2226,7 +2279,7 @@ class ViewsCoverageTest(TestCase):
 
     def test_get_availability_status_empty(self):
         response = self.client.get(
-            f"/api/amenities/{self.amenity_active.id}/availability/"
+            f"/api/amenities/{self.amenity_active.external_id}/availability/"
         )
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -2237,7 +2290,7 @@ class ViewsCoverageTest(TestCase):
 
     def test_post_availability_report(self):
         response = self.client.post(
-            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            f"/api/amenities/{self.amenity_active.external_id}/availability/report/",
             data='{"is_available": true}',
             content_type="application/json",
         )
@@ -2247,32 +2300,38 @@ class ViewsCoverageTest(TestCase):
         self.assertEqual(data["available"], 1)
         self.assertEqual(data["unavailable"], 0)
         self.assertEqual(data["user_vote"], "available")
-        self.assertEqual(AvailabilityReport.objects.count(), 1)
+        
+        res2 = self.client.get(f"/api/amenities/{self.amenity_active.external_id}/availability/")
+        self.assertEqual(res2.json()["available"], 1)
 
     def test_change_availability_vote(self):
         self.client.post(
-            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            f"/api/amenities/{self.amenity_active.external_id}/availability/report/",
             data='{"is_available": true}',
             content_type="application/json",
         )
         self.client.post(
-            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            f"/api/amenities/{self.amenity_active.external_id}/availability/report/",
             data='{"is_available": false}',
             content_type="application/json",
         )
-        self.assertEqual(AvailabilityReport.objects.count(), 1)
-        self.assertFalse(AvailabilityReport.objects.first().is_available)
+        res2 = self.client.get(f"/api/amenities/{self.amenity_active.external_id}/availability/")
+        self.assertEqual(res2.json()["available"], 0)
+        self.assertEqual(res2.json()["unavailable"], 1)
 
     def test_expired_availability_reports_excluded(self):
-        report = AvailabilityReport.objects.create(
-            amenity=self.amenity_active,
-            is_available=True,
-            session_key="old-session",
-        )
         old_time = timezone.now() - timedelta(hours=4)
-        AvailabilityReport.objects.filter(pk=report.pk).update(reported_at=old_time)
+        self.table.put_item(
+            Item={
+                "PK": f"AMENITY#{self.amenity_active.external_id}",
+                "SK": "AVAILABILITY#test_session",
+                "IsAvailable": True,
+                "ReportedAt": old_time.isoformat(),
+                "ExpiresAt": 0,
+            }
+        )
         response = self.client.get(
-            f"/api/amenities/{self.amenity_active.id}/availability/"
+            f"/api/amenities/{self.amenity_active.external_id}/availability/"
         )
         self.assertEqual(response.json()["total"], 0)
 
@@ -2282,7 +2341,7 @@ class ViewsCoverageTest(TestCase):
 
     def test_availability_missing_is_available_field(self):
         response = self.client.post(
-            f"/api/amenities/{self.amenity_active.id}/availability/report/",
+            f"/api/amenities/{self.amenity_active.external_id}/availability/report/",
             data="{}",
             content_type="application/json",
         )

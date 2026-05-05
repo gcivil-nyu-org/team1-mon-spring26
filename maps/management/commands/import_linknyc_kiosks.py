@@ -329,61 +329,60 @@ class Command(BaseCommand):
             skipped_count = 0
             table = get_dynamodb_table()
 
-            with table.batch_writer() as batch:
-                for record in merged_by_primary_key.values():
-                    try:
-                        lat_decimal = record.get("latitude")
-                        lon_decimal = record.get("longitude")
-                        if lat_decimal is None or lon_decimal is None:
-                            skipped_count += 1
-                            continue
-
-                        external_id = self._build_external_id(record)
-                        is_active = bool(record.get("active", True))
-                        location_hash = geohash2.encode(
-                            float(lat_decimal), float(lon_decimal), precision=6
-                        )
-
-                        item = {
-                            "PK": f"AMENITY#{external_id}",
-                            "SK": f"AMENITY#{external_id}",
-                            "GSI1PK": f"GEOHASH#{location_hash}",
-                            "GSI1SK": f"TYPE#LinkNYC Kiosk#ACTIVE#{is_active}",
-                            "Id": str(external_id),
-                            "Name": str(record.get("name") or "LinkNYC Kiosk")[:200],
-                            "Type": "LinkNYC Kiosk",
-                            "Address": str(record.get("address") or "")[:300],
-                            "PropName": str(record.get("prop_name") or "")[:200],
-                            "Description": str(record.get("description") or "")[:1000],
-                            "Operator": str(record.get("provider") or "")[:200],
-                            "Latitude": Decimal(str(lat_decimal)),
-                            "Longitude": Decimal(str(lon_decimal)),
-                            "Active": is_active,
-                            "AverageRating": Decimal("0"),
-                            "ReviewCount": 0,
-                        }
-                        batch.put_item(Item=item)
-                        processed_count += 1
-
-                        Amenity.objects.update_or_create(
-                            amenity_type=amenity_type,
-                            external_id=str(external_id),
-                            defaults={
-                                "name": str(record.get("name") or "LinkNYC Kiosk")[
-                                    :200
-                                ],
-                                "latitude": float(lat_decimal),
-                                "longitude": float(lon_decimal),
-                                "active": is_active,
-                            },
-                        )
-
-                    except (ValueError, IndexError, TypeError, KeyError) as e:
-                        self.stdout.write(
-                            self.style.WARNING(f"Skipped entry: {e} - {record}")
-                        )
+            for record in merged_by_primary_key.values():
+                try:
+                    lat_decimal = record.get("latitude")
+                    lon_decimal = record.get("longitude")
+                    if lat_decimal is None or lon_decimal is None:
                         skipped_count += 1
                         continue
+
+                    external_id = self._build_external_id(record)
+                    is_active = bool(record.get("active", True))
+                    location_hash = geohash2.encode(
+                        float(lat_decimal), float(lon_decimal), precision=6
+                    )
+
+                    item = {
+                        "PK": f"AMENITY#{external_id}",
+                        "SK": f"AMENITY#{external_id}",
+                        "GSI1PK": f"GEOHASH#{location_hash}",
+                        "GSI1SK": f"TYPE#LinkNYC Kiosk#ACTIVE#{is_active}",
+                        "Id": str(external_id),
+                        "Name": str(record.get("name") or "LinkNYC Kiosk")[:200],
+                        "Type": "LinkNYC Kiosk",
+                        "Address": str(record.get("address") or "")[:300],
+                        "PropName": str(record.get("prop_name") or "")[:200],
+                        "Description": str(record.get("description") or "")[:1000],
+                        "Operator": str(record.get("provider") or "")[:200],
+                        "Latitude": Decimal(str(lat_decimal)),
+                        "Longitude": Decimal(str(lon_decimal)),
+                        "Active": is_active,
+                        "AverageRating": Decimal("0"),
+                        "ReviewCount": 0,
+                    }
+                    table.put_item(Item=item)
+                    processed_count += 1
+
+                    Amenity.objects.update_or_create(
+                        amenity_type=amenity_type,
+                        external_id=str(external_id),
+                        defaults={
+                            "name": str(record.get("name") or "LinkNYC Kiosk")[
+                                :200
+                            ],
+                            "latitude": float(lat_decimal),
+                            "longitude": float(lon_decimal),
+                            "active": is_active,
+                        },
+                    )
+
+                except (ValueError, IndexError, TypeError, KeyError) as e:
+                    self.stdout.write(
+                        self.style.WARNING(f"Skipped entry: {e} - {record}")
+                    )
+                    skipped_count += 1
+                    continue
 
             self.stdout.write(
                 self.style.SUCCESS(

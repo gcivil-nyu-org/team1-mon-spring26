@@ -232,49 +232,6 @@ def get_review_prefetch_queryset(user):
     return queryset
 
 
-def serialize_map_amenity(amenity, user, favorite_amenity_ids=None):
-    if favorite_amenity_ids is None:
-        favorite_amenity_ids = set()
-
-    photo_urls_by_user = {}
-    for photo in amenity.photos.all():
-        if photo.uploaded_by_id not in photo_urls_by_user:
-            photo_urls_by_user[photo.uploaded_by_id] = []
-        photo_urls_by_user[photo.uploaded_by_id].append(photo.photo.url)
-
-    return {
-        "id": amenity.id,
-        "name": amenity.name,
-        "latitude": amenity.latitude,
-        "longitude": amenity.longitude,
-        "address": amenity.address,
-        "prop_name": amenity.prop_name,
-        "description": amenity.description,
-        "operator": amenity.operator,
-        "hours_of_operation": amenity.hours_of_operation,
-        "changing_stations": amenity.changing_stations,
-        "accessibility": amenity.accessibility,
-        "rating": getattr(amenity, "avg_rating", None),
-        "review_count": getattr(amenity, "review_count", 0),
-        "reviews": [
-            serialize_amenity_review(
-                review,
-                photo_url=photo_urls_by_user.get(review.user_id, [None])[0],
-                photo_urls=photo_urls_by_user.get(review.user_id, []),
-                current_user=user,
-            )
-            for review in amenity.reviews.all()[:5]
-        ],
-        "photo_url": getattr(amenity, "primary_photo_url", None),
-        "active": amenity.active,
-        "type": amenity.amenity_type.name,
-        "type_id": amenity.amenity_type.id,
-        "icon": amenity.amenity_type.icon,
-        "color": amenity.amenity_type.color,
-        "is_favorited": amenity.id in favorite_amenity_ids,
-    }
-
-
 def amenities_api(request):
     """API endpoint to fetch amenities from DynamoDB,
     optionally filtered by type and bounding box."""
@@ -455,59 +412,37 @@ def amenity_detail_api(request, amenity_id):
         if not amenity:
             return JsonResponse({"error": "Amenity not found"}, status=404)
 
-        reviews = [item for item in items if item["SK"].startswith("REVIEW#")]
-        photos = [item for item in items if item["SK"].startswith("PHOTO#")]
-
-        photo_urls_by_user = {}
-        for photo in photos:
-            user_id = photo.get("UploadedById")
-            if user_id not in photo_urls_by_user:
-                photo_urls_by_user[user_id] = []
-            photo_urls_by_user[user_id].append(photo.get("PhotoUrl"))
-
+        try:
+            sqlite_amenity = Amenity.objects.get(external_id=amenity_id)
+        except Amenity.DoesNotExist:
+            try:
+                sqlite_amenity = Amenity.objects.get(id=amenity_id)
+            except (Amenity.DoesNotExist, ValueError):
+                sqlite_amenity = None
+                
         is_fav = False
-        if request.user.is_authenticated:
-            is_fav = Favorite.objects.filter(
-                Q(user=request.user)
-                & (
-                    Q(amenity__external_id=amenity_id)
-                    | Q(amenity_id=int(amenity_id) if str(amenity_id).isdigit() else 0)
-                )
-            ).exists()
-
         serialized_reviews = []
-        for review in reviews[:5]:
-            user_id = review.get("UserId")
-            user_vote = 0
+        avg_rating = 0.0
+        review_count = 0
+        
+        if sqlite_amenity:
             if request.user.is_authenticated:
-                rv = ReviewVote.objects.filter(
-                    review_id=review.get("Id"), user=request.user
-                ).first()
-                if rv:
-                    user_vote = rv.value
-
-            serialized_reviews.append(
-                {
-                    "id": review.get("Id"),
-                    "amenity_id": amenity.get("Id"),
-                    "user_name": review.get("UserName", "Anonymous"),
-                    "user_email": review.get("UserEmail", ""),
-                    "user_avatar_url": review.get("UserAvatarUrl", ""),
-                    "rating": int(review.get("Rating", 0)),
-                    "vote_score": int(review.get("VoteScore", 0)),
-                    "upvote_count": int(review.get("UpvoteCount", 0)),
-                    "downvote_count": int(review.get("DownvoteCount", 0)),
-                    "user_vote": user_vote,
-                    "review_text": review.get("ReviewText", ""),
-                    "photo_url": (
-                        photo_urls_by_user.get(user_id, [None])[0]
-                        if photo_urls_by_user.get(user_id)
-                        else None
-                    ),
-                    "photo_urls": photo_urls_by_user.get(user_id, []),
-                    "created_at": review.get("CreatedAt", ""),
-                }
-            )
+                is_fav = Favorite.objects.filter(user=request.user, amenity=sqlite_amenity).exists()
+                
+            avg_rating = sqlite_amenity.get_average_rating() or 0.0
+            review_count = sqlite_amenity.get_review_count()
+            
+            reviews_qs = get_review_prefetch_queryset(request.user).filter(amenity=sqlite_amenity)[:5]
+            for review in reviews_qs:
+                photo_urls = [p.photo.url for p in review.photos.all()]
+                serialized_reviews.append(
+                    serialize_amenity_review(
+                        review,
+                        photo_url=photo_urls[0] if photo_urls else None,
+                        photo_urls=photo_urls,
+                        current_user=request.user
+                    )
+                )
 
         amenity_data = {
             "id": amenity.get("Id"),
@@ -521,15 +456,9 @@ def amenity_detail_api(request, amenity_id):
             "hours_of_operation": amenity.get("HoursOfOperation", {}),
             "changing_stations": amenity.get("ChangingStations", False),
             "accessibility": amenity.get("Accessibility", ""),
-            "rating": (
-                float(amenity.get("AverageRating", 0))
-                if amenity.get("AverageRating")
-                else None
-            ),
-            "review_count": int(amenity.get("ReviewCount", 0)),
-            "reviews": sorted(
-                serialized_reviews, key=lambda x: (-x["vote_score"], x["created_at"])
-            )[:5],
+            "rating": float(avg_rating) if avg_rating else None,
+            "review_count": int(review_count),
+            "reviews": serialized_reviews,
             "photo_url": amenity.get("PrimaryPhotoUrl", None),
             "active": amenity.get("Active", True),
             "type": amenity.get("Type", ""),
@@ -1545,51 +1474,39 @@ def get_amenity_reviews_api(request):
         if not amenity_id:
             return JsonResponse({"error": "amenity_id parameter required"}, status=400)
 
-        dynamodb = get_dynamodb_resource()
-        table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
+        try:
+            sqlite_amenity = Amenity.objects.get(external_id=amenity_id)
+        except Amenity.DoesNotExist:
+            try:
+                sqlite_amenity = Amenity.objects.get(id=amenity_id)
+            except (Amenity.DoesNotExist, ValueError):
+                return JsonResponse({"error": "Amenity not found"}, status=404)
+                
+        reviews_qs = Review.objects.filter(amenity=sqlite_amenity).select_related("user").order_by("-created_at")
 
-        amenity_response = table.get_item(
-            Key={"PK": f"AMENITY#{amenity_id}", "SK": f"AMENITY#{amenity_id}"}
-        )
-        amenity = amenity_response.get("Item")
-        if not amenity:
-            return JsonResponse({"error": "Amenity not found"}, status=404)
-
-        response = table.query(
-            KeyConditionExpression=Key("PK").eq(f"AMENITY#{amenity_id}")
-            & Key("SK").begins_with("REVIEW#")
-        )
-        reviews = response.get("Items", [])
-
-        reviews = sorted(reviews, key=lambda x: x.get("CreatedAt", ""), reverse=True)
-
-        total_count = len(reviews)
+        total_count = reviews_qs.count()
         start_idx = (page - 1) * page_size
         end_idx = start_idx + page_size
-        paginated_reviews = reviews[start_idx:end_idx]
+        paginated_reviews = reviews_qs[start_idx:end_idx]
 
         reviews_data = [
             {
-                "id": r.get("Id"),
-                "user_name": r.get("UserName", "Anonymous"),
-                "rating": int(r.get("Rating", 0)),
-                "review_text": r.get("ReviewText", ""),
-                "created_at": r.get("CreatedAt", ""),
-                "updated_at": r.get("UpdatedAt", ""),
+                "id": r.id,
+                "user_name": r.user.username or r.user.email if r.user else "Anonymous",
+                "rating": r.rating,
+                "review_text": r.review_text,
+                "created_at": r.created_at.isoformat(),
+                "updated_at": r.updated_at.isoformat(),
             }
             for r in paginated_reviews
         ]
 
         return JsonResponse(
             {
-                "amenity_id": amenity.get("Id"),
-                "amenity_name": amenity.get("Name"),
+                "amenity_id": amenity_id,
+                "amenity_name": sqlite_amenity.name,
                 "total_reviews": total_count,
-                "average_rating": (
-                    float(amenity.get("AverageRating", 0))
-                    if amenity.get("AverageRating")
-                    else None
-                ),
+                "average_rating": float(sqlite_amenity.get_average_rating() or 0),
                 "page": page,
                 "page_size": page_size,
                 "total_pages": (total_count + page_size - 1) // page_size,
@@ -2268,44 +2185,33 @@ def get_amenity_reviewers_api(request):
         if not amenity_id:
             return JsonResponse({"error": "amenity_id parameter required"}, status=400)
 
-        dynamodb = get_dynamodb_resource()
-        table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
-
-        amenity_response = table.get_item(
-            Key={"PK": f"AMENITY#{amenity_id}", "SK": f"AMENITY#{amenity_id}"}
-        )
-        amenity = amenity_response.get("Item")
-        if not amenity:
-            return JsonResponse({"error": "Amenity not found"}, status=404)
-
-        response = table.query(
-            KeyConditionExpression=Key("PK").eq(f"AMENITY#{amenity_id}")
-            & Key("SK").begins_with("REVIEW#")
-        )
-        reviews = response.get("Items", [])
-
-        reviews = sorted(reviews, key=lambda x: x.get("CreatedAt", ""), reverse=True)[
-            :limit
-        ]
+        try:
+            sqlite_amenity = Amenity.objects.get(external_id=amenity_id)
+        except Amenity.DoesNotExist:
+            try:
+                sqlite_amenity = Amenity.objects.get(id=amenity_id)
+            except (Amenity.DoesNotExist, ValueError):
+                return JsonResponse({"error": "Amenity not found"}, status=404)
+                
+        reviews_qs = Review.objects.filter(amenity=sqlite_amenity, user__isnull=False).select_related("user").order_by("-created_at")[:limit]
 
         reviewers_data = [
             {
-                "user_id": r.get("UserId"),
-                "email": r.get("UserEmail"),
-                "rating": int(r.get("Rating", 0)),
+                "user_id": r.user.id,
+                "email": r.user.email,
+                "rating": r.rating,
                 "review_text": (
-                    r.get("ReviewText", "")[:100] if r.get("ReviewText") else None
+                    r.review_text[:100] if r.review_text else None
                 ),
-                "created_at": r.get("CreatedAt", ""),
+                "created_at": r.created_at.isoformat(),
             }
-            for r in reviews
-            if r.get("UserId")
+            for r in reviews_qs
         ]
 
         return JsonResponse(
             {
-                "amenity_id": amenity.get("Id"),
-                "amenity_name": amenity.get("Name"),
+                "amenity_id": amenity_id,
+                "amenity_name": sqlite_amenity.name,
                 "reviewers": reviewers_data,
                 "total_reviewers": len(reviewers_data),
             },
