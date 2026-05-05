@@ -229,3 +229,5 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+db.sqlite3
+db 2.sqlite3
