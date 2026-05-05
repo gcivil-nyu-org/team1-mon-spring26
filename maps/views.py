@@ -251,8 +251,21 @@ def amenities_api(request):
         east = request.GET.get("east")
         west = request.GET.get("west")
 
-        if north and south and east and west:
-            hashes = get_geohashes_in_bbox(north, south, east, west, precision=6)
+        try:
+            if north and south and east and west:
+                north_f = float(north)
+                south_f = float(south)
+                east_f = float(east)
+                west_f = float(west)
+                hashes = get_geohashes_in_bbox(
+                    north_f, south_f, east_f, west_f, precision=6
+                )
+            else:
+                hashes = None
+        except (TypeError, ValueError):
+            hashes = None
+
+        if hashes is not None:
 
             def fetch_hash(h):
                 try:
@@ -293,6 +306,14 @@ def amenities_api(request):
             unique_amenities.append(item)
 
     amenity_types_map = {t.name: t for t in AmenityType.objects.all()}
+
+    favorite_ids = set()
+    if request.user.is_authenticated:
+        fav_qs = Favorite.objects.filter(user=request.user).select_related("amenity")
+        for fav in fav_qs:
+            if fav.amenity.external_id:
+                favorite_ids.add(fav.amenity.external_id)
+            favorite_ids.add(str(fav.amenity.id))
 
     # In-Memory Single-Table Design Filtering
     filtered_amenities = []
@@ -363,6 +384,8 @@ def amenities_api(request):
             fallback_icon = "bicycle"
             fallback_color = "#FF9800"
 
+        is_fav = str(a.get("Id")) in favorite_ids
+
         final_amenities_list.append(
             {
                 "id": a.get("Id"),
@@ -385,7 +408,7 @@ def amenities_api(request):
                 "type_id": amenity_type_obj.id if amenity_type_obj else None,
                 "icon": amenity_type_obj.icon if amenity_type_obj else fallback_icon,
                 "color": amenity_type_obj.color if amenity_type_obj else fallback_color,
-                "is_favorited": False,
+                "is_favorited": is_fav,
             }
         )
 

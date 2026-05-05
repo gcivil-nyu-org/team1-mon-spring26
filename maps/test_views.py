@@ -226,7 +226,7 @@ class ViewsCoverageTest(TestCase):
 
     def test_amenities_api_include_inactive(self):
         response = self.client.get(
-            reverse("maps:amenities_api"), {"include_inactive": "true"}
+            reverse("maps:amenities_api"), {"include_inactive": "true", "zoom": 19}
         )
         data = response.json()
         ids = [a.get("id") for a in data["amenities"] if "id" in a]
@@ -475,7 +475,9 @@ class ViewsCoverageTest(TestCase):
         data = response.json()
         self.assertIn("favorites", data)
         self.assertEqual(len(data["favorites"]), 1)
-        self.assertEqual(data["favorites"][0]["amenity_id"], self.amenity_active.id)
+        self.assertEqual(
+            data["favorites"][0]["amenity_id"], self.amenity_active.external_id
+        )
         self.assertTrue(data["favorites"][0]["notify_on_updates"])
 
     def test_profile_favorites_api_returns_requested_users_favorites(self):
@@ -489,7 +491,7 @@ class ViewsCoverageTest(TestCase):
 
         favorites = response.json()["favorites"]
         self.assertEqual(len(favorites), 1)
-        self.assertEqual(favorites[0]["amenity_id"], self.amenity_inactive.id)
+        self.assertEqual(favorites[0]["amenity_id"], self.amenity_inactive.external_id)
 
     def test_favorite_notification_preference_api_updates_flag(self):
         favorite = Favorite.objects.create(
@@ -1363,7 +1365,9 @@ class ViewsCoverageTest(TestCase):
 
         payload = response.json()["amenities"]
         amenity_payload = next(
-            item for item in payload if item.get("id") == self.amenity_active.id
+            item
+            for item in payload
+            if item.get("id") == self.amenity_active.external_id
         )
 
         self.assertGreaterEqual(len(amenity_payload["reviews"]), 2)

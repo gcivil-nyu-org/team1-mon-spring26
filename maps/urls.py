@@ -19,6 +19,12 @@ urlpatterns = [
     ),
     path("chats/", views.chats_view, name="chats"),
     path("api/amenities/", views.amenities_api, name="amenities_api"),
+    path("api/amenities/search/", views.amenity_search_api, name="amenity_search_api"),
+    path(
+        "api/amenities/reviewers/",
+        views.get_amenity_reviewers_api,
+        name="get_amenity_reviewers_api",
+    ),
     path(
         "api/amenities/<str:amenity_id>/",
         views.amenity_detail_api,
@@ -96,11 +102,5 @@ urlpatterns = [
         name="add_chat_participants_api",
     ),
     path("api/chats/leave/", views.leave_chat_api, name="leave_chat_api"),
-    path("api/amenities/search/", views.amenity_search_api, name="amenity_search_api"),
     path("api/users/search/", views.user_search_api, name="user_search_api"),
-    path(
-        "api/amenities/reviewers/",
-        views.get_amenity_reviewers_api,
-        name="get_amenity_reviewers_api",
-    ),
 ]
