@@ -115,6 +115,32 @@ resource "aws_iam_role_policy" "s3_access_policy" {
   })
 }
 
+# Allow the EC2 instance to access DynamoDB for map data
+resource "aws_iam_role_policy" "dynamodb_access_policy" {
+  name = "NycNow-EC2-DynamoDB-Policy"
+  role = aws_iam_role.ec2_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = [
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:Query",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:DescribeTable"
+      ]
+      Effect = "Allow"
+      Resource = [
+        "arn:aws:dynamodb:${var.aws_region}:*:table/*",
+        "arn:aws:dynamodb:${var.aws_region}:*:table/*/index/*"
+      ]
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "ec2_profile" {
   name = "NycNow-EC2-Profile"
   role = aws_iam_role.ec2_role.name
