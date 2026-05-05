@@ -10,7 +10,6 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from django.core.exceptions import ValidationError
-from django.views.decorators.cache import cache_control
 from django.utils import timezone
 from datetime import timedelta
 import json
@@ -45,15 +44,25 @@ from boto3.dynamodb.conditions import Key, Attr
 import geohash2
 import concurrent.futures
 from collections import defaultdict
+import threading
+from botocore.config import Config
 
 AVAILABILITY_WINDOW_HOURS = 3
 
+_thread_local = threading.local()
+
 
 def get_dynamodb_resource():
-    kwargs = {"region_name": settings.DYNAMODB_REGION}
-    if getattr(settings, "DYNAMODB_ENDPOINT_URL", None):
-        kwargs["endpoint_url"] = settings.DYNAMODB_ENDPOINT_URL
-    return boto3.resource("dynamodb", **kwargs)
+    if not hasattr(_thread_local, "dynamodb"):
+        kwargs = {"region_name": settings.DYNAMODB_REGION}
+        if getattr(settings, "DYNAMODB_ENDPOINT_URL", None):
+            kwargs["endpoint_url"] = settings.DYNAMODB_ENDPOINT_URL
+        # Global connection pool caching and throttling protection
+        config = Config(
+            retries={"max_attempts": 3, "mode": "standard"}, max_pool_connections=30
+        )
+        _thread_local.dynamodb = boto3.resource("dynamodb", config=config, **kwargs)
+    return _thread_local.dynamodb
 
 
 def normalize_longitude(lon):
@@ -233,17 +242,22 @@ def get_review_prefetch_queryset(user):
     return queryset
 
 
-@cache_control(public=True, max_age=300)
 def amenities_api(request):
     """API endpoint to fetch amenities from DynamoDB,
     optionally filtered by type and bounding box."""
     amenity_type_name = request.GET.get("type")
+    type_ids = request.GET.getlist("type_id")
     include_inactive = request.GET.get("include_inactive", "false").lower() == "true"
     only_accessible = request.GET.get("only_accessible", "false").lower() == "true"
     zoom = int(request.GET.get("zoom", 0))
 
-    dynamodb = get_dynamodb_resource()
-    table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
+    type_names = []
+    if type_ids:
+        type_names = list(
+            AmenityType.objects.filter(id__in=type_ids).values_list("name", flat=True)
+        )
+    elif amenity_type_name:
+        type_names = [amenity_type_name]
 
     amenities_data = []
 
@@ -259,6 +273,21 @@ def amenities_api(request):
                 south_f = float(south)
                 east_f = float(east)
                 west_f = float(west)
+
+                # Prevent massive queries by centering around the middle point
+                MAX_LAT_SPAN = 0.02  # ~2.2 km
+                MAX_LON_SPAN = 0.02
+
+                if (north_f - south_f) > MAX_LAT_SPAN:
+                    center_lat = (north_f + south_f) / 2.0
+                    north_f = center_lat + (MAX_LAT_SPAN / 2.0)
+                    south_f = center_lat - (MAX_LAT_SPAN / 2.0)
+
+                if (east_f - west_f) > MAX_LON_SPAN:
+                    center_lon = (east_f + west_f) / 2.0
+                    east_f = center_lon + (MAX_LON_SPAN / 2.0)
+                    west_f = center_lon - (MAX_LON_SPAN / 2.0)
+
                 hashes = get_geohashes_in_bbox(
                     north_f, south_f, east_f, west_f, precision=6
                 )
@@ -271,10 +300,26 @@ def amenities_api(request):
 
             def fetch_hash(h):
                 try:
-                    response = table.query(
-                        IndexName="GeohashIndex",
-                        KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{h}"),
-                    )
+                    # Instantiate per thread to avoid Boto3 thread-locking
+                    local_dynamo = get_dynamodb_resource()
+                    local_table = local_dynamo.Table(settings.DYNAMODB_TABLE_NAME)
+
+                    # Optimization: Query via DynamoDB index if only 1 type is selected
+                    if len(type_names) == 1:
+                        sk_prefix = f"TYPE#{type_names[0]}#"
+                        if not include_inactive:
+                            sk_prefix += "ACTIVE#True"
+
+                        response = local_table.query(
+                            IndexName="GeohashIndex",
+                            KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{h}")
+                            & Key("GSI1SK").begins_with(sk_prefix),
+                        )
+                    else:
+                        response = local_table.query(
+                            IndexName="GeohashIndex",
+                            KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{h}"),
+                        )
                     return response.get("Items", [])
                 except Exception as e:
                     print(f"DynamoDB Query Error: {e}")
@@ -286,6 +331,8 @@ def amenities_api(request):
                 for res in results:
                     amenities_data.extend(res)
         else:
+            dynamodb = get_dynamodb_resource()
+            table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
             # Scan fallback for broad non-bounds requests
             response = table.scan(FilterExpression=Attr("PK").begins_with("AMENITY#"))
             amenities_data = response.get("Items", [])
@@ -309,12 +356,20 @@ def amenities_api(request):
 
     amenity_types_map = {t.name: t for t in AmenityType.objects.all()}
 
+    favorite_ids = set()
+    if request.user.is_authenticated:
+        fav_qs = Favorite.objects.filter(user=request.user).select_related("amenity")
+        for fav in fav_qs:
+            if fav.amenity.external_id:
+                favorite_ids.add(fav.amenity.external_id)
+            favorite_ids.add(str(fav.amenity.id))
+
     # In-Memory Single-Table Design Filtering
     filtered_amenities = []
     for item in unique_amenities:
         if not include_inactive and not item.get("Active", True):
             continue
-        if amenity_type_name and item.get("Type") != amenity_type_name:
+        if type_names and item.get("Type") not in type_names:
             continue
         if only_accessible and item.get("Accessibility", "") == "Not Accessible":
             continue
@@ -331,9 +386,7 @@ def amenities_api(request):
         a for a in filtered_amenities if a.get("Type") != BIKE_RACK_TYPE_NAME
     ]
 
-    is_bike_rack_query = (
-        amenity_type_name == BIKE_RACK_TYPE_NAME
-    ) or not amenity_type_name
+    is_bike_rack_query = (BIKE_RACK_TYPE_NAME in type_names) if type_names else True
 
     if is_bike_rack_query and zoom < CLUSTER_ZOOM_THRESHOLD:
         clusters = cluster_amenities_python(bike_rack_amenities, zoom)
@@ -378,6 +431,8 @@ def amenities_api(request):
             fallback_icon = "bicycle"
             fallback_color = "#FF9800"
 
+        is_fav = str(a.get("Id")) in favorite_ids
+
         final_amenities_list.append(
             {
                 "id": a.get("Id"),
@@ -400,7 +455,7 @@ def amenities_api(request):
                 "type_id": amenity_type_obj.id if amenity_type_obj else None,
                 "icon": amenity_type_obj.icon if amenity_type_obj else fallback_icon,
                 "color": amenity_type_obj.color if amenity_type_obj else fallback_color,
-                "is_favorited": False,
+                "is_favorited": is_fav,
             }
         )
 
@@ -503,7 +558,6 @@ def amenity_detail_api(request, amenity_id):
         return JsonResponse({"error": str(e)}, status=500)
 
 
-@cache_control(public=True, max_age=86400)
 def amenity_types_api(request):
     """API endpoint to fetch all amenity types."""
     # Fetch only top-level types (those without a parent)
@@ -1069,7 +1123,6 @@ def toggle_favorite_api(request, amenity_id):
     )
 
 
-@cache_control(public=True, max_age=300)
 @require_http_methods(["GET"])
 def amenity_rating_distribution_api(request, amenity_id):
     """API endpoint to fetch the rating distribution for a specific amenity."""
