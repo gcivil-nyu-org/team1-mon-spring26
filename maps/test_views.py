@@ -330,9 +330,11 @@ class ViewsCoverageTest(TestCase):
         self.assertFalse(any(a.get("is_cluster") for a in data["amenities"]))
         ids = [a["id"] for a in data["amenities"]]
         self.assertIn(distant.external_id, ids)
-        
+
     def test_amenity_tile_api(self):
-        hash_val = geohash2.encode(self.amenity_active.latitude, self.amenity_active.longitude, precision=6)
+        hash_val = geohash2.encode(
+            self.amenity_active.latitude, self.amenity_active.longitude, precision=6
+        )
         response = self.client.get(reverse("maps:amenity_tile_api", args=[hash_val]))
         self.assertEqual(response.status_code, 200)
         data = response.json()

@@ -41,6 +41,7 @@ from PIL import Image, ImageOps
 from django.core.files.uploadedfile import InMemoryUploadedFile
 
 import boto3
+from decimal import Decimal
 from boto3.dynamodb.conditions import Key, Attr
 import geohash2
 import concurrent.futures
@@ -1252,18 +1253,43 @@ def create_review_api(request):
                 }
             )
 
-            def send_notification():
-                for recipient_id in recipient_ids:
-                    try:
-                        requests.post(
-                            "http://127.0.0.1:8001/api/internal/publish/",
-                            json={"user_id": recipient_id, "payload": payload},
-                            timeout=1,
-                        )
-                    except Exception:
-                        pass
+            def on_commit_tasks():
+                # Send notifications to favorited users
+                if recipient_ids:
+                    for recipient_id in recipient_ids:
+                        try:
+                            requests.post(
+                                "http://127.0.0.1:8001/api/internal/publish/",
+                                json={"user_id": recipient_id, "payload": payload},
+                                timeout=1,
+                            )
+                        except Exception:
+                            pass
 
-            transaction.on_commit(send_notification)
+                # Update denormalized counts/ratings in DynamoDB
+                try:
+                    dynamodb = get_dynamodb_resource()
+                    table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
+
+                    new_avg_rating = amenity.get_average_rating() or 0
+                    new_review_count = amenity.get_review_count()
+
+                    table.update_item(
+                        Key={
+                            "PK": f"AMENITY#{amenity.external_id or amenity.id}",
+                            "SK": f"AMENITY#{amenity.external_id or amenity.id}",
+                        },
+                        UpdateExpression="SET AverageRating = :rating, ReviewCount = :count",  # noqa: E501
+                        ExpressionAttributeValues={
+                            ":rating": Decimal(str(round(new_avg_rating, 2))),
+                            ":count": int(new_review_count),
+                        },
+                    )
+                except Exception as e:
+                    # Log this error but don't fail the request
+                    print(f"Error updating DynamoDB after review creation: {e}")
+
+            transaction.on_commit(on_commit_tasks)
 
         response_data = serialize_amenity_review(
             review,
@@ -1380,7 +1406,30 @@ def review_detail_api(request, review_id):
             return JsonResponse({"error": "Review not found"}, status=404)
 
         if request.method == "DELETE":
+            amenity = review.amenity
             review.delete()
+
+            # After deleting, update the denormalized data in DynamoDB
+            try:
+                dynamodb = get_dynamodb_resource()
+                table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
+                new_avg_rating = amenity.get_average_rating() or 0
+                new_review_count = amenity.get_review_count()
+
+                table.update_item(
+                    Key={
+                        "PK": f"AMENITY#{amenity.external_id or amenity.id}",
+                        "SK": f"AMENITY#{amenity.external_id or amenity.id}",
+                    },
+                    UpdateExpression="SET AverageRating = :rating, ReviewCount = :count",  # noqa: E501
+                    ExpressionAttributeValues={
+                        ":rating": Decimal(str(round(new_avg_rating, 2))),
+                        ":count": int(new_review_count),
+                    },
+                )
+            except Exception as e:
+                print(f"Error updating DynamoDB after review deletion: {e}")
+
             return JsonResponse(
                 {"message": "Review deleted successfully"},
                 status=200,
@@ -1463,6 +1512,27 @@ def review_detail_api(request, review_id):
                 is_primary=(is_first_amenity_photo and index == 0),
                 caption=f"Review photo by {request.user.email}",
             )
+
+        # After updating the review, also update the denormalized data in DynamoDB
+        try:
+            dynamodb = get_dynamodb_resource()
+            table = dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
+            new_avg_rating = review.amenity.get_average_rating() or 0
+            new_review_count = review.amenity.get_review_count()
+
+            table.update_item(
+                Key={
+                    "PK": f"AMENITY#{review.amenity.external_id or review.amenity.id}",
+                    "SK": f"AMENITY#{review.amenity.external_id or review.amenity.id}",
+                },
+                UpdateExpression="SET AverageRating = :rating, ReviewCount = :count",
+                ExpressionAttributeValues={
+                    ":rating": Decimal(str(round(new_avg_rating, 2))),
+                    ":count": int(new_review_count),
+                },
+            )
+        except Exception as e:
+            print(f"Error updating DynamoDB after review update: {e}")
 
         refreshed_review = (
             annotate_reviews_with_vote_score(Review.objects.filter(id=review.id))
@@ -2186,7 +2256,7 @@ def leave_chat_api(request):
 
 @cache_control(public=True, max_age=300)
 def amenity_tile_api(request, geohash_val):
-    """API endpoint to fetch amenities from DynamoDB for a specific atomic geohash tile."""
+    """API endpoint to fetch amenities from DynamoDB for a specific atomic geohash tile."""  # noqa: E501
     type_ids = request.GET.getlist("type_id")
     include_inactive = request.GET.get("include_inactive", "false").lower() == "true"
     only_accessible = request.GET.get("only_accessible", "false").lower() == "true"
@@ -2270,8 +2340,12 @@ def amenity_tile_api(request, geohash_val):
                         "longitude": centroid_lon,
                         "type": BIKE_RACK_TYPE_NAME,
                         "type_id": amenity_type_obj.id if amenity_type_obj else None,
-                        "icon": amenity_type_obj.icon if amenity_type_obj else "bicycle",
-                        "color": amenity_type_obj.color if amenity_type_obj else "#FF9800",
+                        "icon": (
+                            amenity_type_obj.icon if amenity_type_obj else "bicycle"
+                        ),  # noqa: E501
+                        "color": (
+                            amenity_type_obj.color if amenity_type_obj else "#FF9800"
+                        ),  # noqa: E501
                         "is_favorited": False,
                     }
                 )
