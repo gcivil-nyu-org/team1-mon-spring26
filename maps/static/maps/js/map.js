@@ -9,6 +9,7 @@ const initialCenter = restoredState ? restoredState.center : [40.73, -73.99];
 const initialZoom = restoredState ? restoredState.zoom : 13;
 
 const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0 }).setView(initialCenter, initialZoom);
+const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0, maxZoom: 19 }).setView(initialCenter, initialZoom);
 
 const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const tileUrl = isLocalhost ? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' : '/tiles/{z}/{x}/{y}.png';
@@ -702,6 +703,7 @@ function addAmenityMarker(amenity) {
         const icon = L.divIcon({ html: `<div style="background:${amenity.color}"><span>${count}</span></div>`, className: cls, iconSize: L.point(40, 40) });
         const m = L.marker([amenity.latitude, amenity.longitude], { icon });
         m.on('click', () => map.flyTo([amenity.latitude, amenity.longitude], map.getZoom() + 2));
+        m.on('click', () => map.flyTo([amenity.latitude, amenity.longitude], Math.min(map.getZoom() + 2, 19)));
         bikeRackMarkers.addLayer(m);
         return;
     }
@@ -1176,6 +1178,7 @@ function renderNearbyTab(a) {
                 
                 if (found.is_cluster) {
                     map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
+                    map.flyTo([found.latitude, found.longitude], Math.min(map.getZoom() + 2, 19));
                     closeDetailPanel();
                 } else {
                     map.flyTo([found.latitude, found.longitude], map.getZoom()); showDetailPanel(found, 'nearby');
@@ -1230,6 +1233,7 @@ function renderNearbyTab(a) {
             
             if (found.is_cluster) {
                 map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
+                map.flyTo([found.latitude, found.longitude], Math.min(map.getZoom() + 2, 19));
                 closeDetailPanel();
             } else {
                 map.flyTo([found.latitude, found.longitude], map.getZoom()); showDetailPanel(found, 'nearby');
