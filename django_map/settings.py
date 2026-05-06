@@ -14,6 +14,13 @@ import os
 
 from pathlib import Path
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env.local", override=True)
+except ImportError:
+    pass
+
 # generate SECRET_KEY instead of hard coding it
 # from django.core.management.utils import get_random_secret_key
 SECRET_KEY = os.environ.get("SECRET_KEY", "non-random-secret-key-for-dev-only")
@@ -49,8 +56,6 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "django.contrib.gis",
-    "django.contrib.postgres",
     "django.contrib.sites",
     "maps",
     "storages",
@@ -108,55 +113,18 @@ if not DB_USER:
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-# if running as root(=0), we are in pre-deploy and should use RDS DB directly
-RUNNING_AS = os.getuid()
-if os.environ.get("RDS_HOSTNAME") and RUNNING_AS != 0:
-    # on AWS, use RDS pgbouncer proxy
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.contrib.gis.db.backends.postgis",
-            "NAME": DB_NAME,
-            "USER": DB_USER,
-            "PASSWORD": os.environ.get(
-                "DB_PASSWORD",
-                os.environ.get(
-                    "RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword")
-                ),
-            ),
-            "HOST": "localhost",
-            "PORT": 6432,  # pgbouncer port
-            "CONN_MAX_AGE": 0,  # Don't cache connections; let pgbouncer manage pooling
-            "OPTIONS": {
-                # Use pgbouncer's transaction pooling mode
-                # See https://www.pgbouncer.org/config.html#server-pooler-mode
-                # "sslmode": "require",
-                # "connect_timeout": 10,
-                "pool": {
-                    "min_size": 2,
-                    "max_size": 20,  # Adjust based on your expected concurrency per worker
-                    "timeout": 10,  # Seconds to wait for a connection
-                },
-            },
-        }
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
     }
-else:
-    # local
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.contrib.gis.db.backends.postgis",
-            "NAME": DB_NAME,
-            "USER": DB_USER,
-            "PASSWORD": os.environ.get(
-                "DB_PASSWORD",
-                os.environ.get(
-                    "RDS_PASSWORD", os.environ.get("DB_PASSWORD", "mypassword")
-                ),
-            ),
-            "HOST": os.environ.get("RDS_HOSTNAME", "localhost"),
-            "PORT": os.environ.get("RDS_PORT", os.environ.get("PGPORT", "5432")),
-        }
-    }
+}
 
+
+# DynamoDB Configuration
+DYNAMODB_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME", "NycNowData")
+DYNAMODB_REGION = os.environ.get("AWS_DYNAMODB_REGION", "us-east-2")
+DYNAMODB_ENDPOINT_URL = os.environ.get("AWS_DYNAMODB_ENDPOINT_URL", None)
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -294,6 +262,7 @@ else:
                 "region_name": os.environ["AWS_S3_REGION_NAME"],
                 "querystring_auth": True,
                 "default_acl": None,
+                "addressing_style": "virtual",
             },
         },
         "staticfiles": {

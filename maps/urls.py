@@ -19,13 +19,24 @@ urlpatterns = [
     ),
     path("chats/", views.chats_view, name="chats"),
     path("api/amenities/", views.amenities_api, name="amenities_api"),
+    path("api/amenities/search/", views.amenity_search_api, name="amenity_search_api"),
     path(
-        "api/amenities/<int:amenity_id>/",
+        "api/amenities/tile/<str:geohash_val>/",
+        views.amenity_tile_api,
+        name="amenity_tile_api",
+    ),
+    path(
+        "api/amenities/reviewers/",
+        views.get_amenity_reviewers_api,
+        name="get_amenity_reviewers_api",
+    ),
+    path(
+        "api/amenities/<str:amenity_id>/",
         views.amenity_detail_api,
         name="amenity_detail_api",
     ),
     path(
-        "api/amenities/<int:amenity_id>/favorite/",
+        "api/amenities/<str:amenity_id>/favorite/",
         views.toggle_favorite_api,
         name="toggle_favorite_api",
     ),
@@ -35,17 +46,17 @@ urlpatterns = [
         name="favorite_notification_preference_api",
     ),
     path(
-        "api/amenities/<int:amenity_id>/rating-distribution/",
+        "api/amenities/<str:amenity_id>/rating-distribution/",
         views.amenity_rating_distribution_api,
         name="amenity_rating_distribution_api",
     ),
     path(
-        "api/amenities/<int:amenity_id>/availability/",
+        "api/amenities/<str:amenity_id>/availability/",
         views.availability_status_api,
         name="availability_status_api",
     ),
     path(
-        "api/amenities/<int:amenity_id>/availability/report/",
+        "api/amenities/<str:amenity_id>/availability/report/",
         views.report_availability_api,
         name="report_availability_api",
     ),
@@ -96,11 +107,5 @@ urlpatterns = [
         name="add_chat_participants_api",
     ),
     path("api/chats/leave/", views.leave_chat_api, name="leave_chat_api"),
-    path("api/amenities/search/", views.amenity_search_api, name="amenity_search_api"),
     path("api/users/search/", views.user_search_api, name="user_search_api"),
-    path(
-        "api/amenities/reviewers/",
-        views.get_amenity_reviewers_api,
-        name="get_amenity_reviewers_api",
-    ),
 ]

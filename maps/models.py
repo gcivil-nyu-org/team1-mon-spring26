@@ -1,5 +1,4 @@
-from django.contrib.gis.db import models
-from django.contrib.postgres.indexes import GistIndex
+from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.templatetags.static import static
 import datetime
@@ -70,7 +69,8 @@ class Amenity(models.Model):
         AmenityType, on_delete=models.CASCADE, related_name="amenities"
     )
     name = models.CharField(max_length=200)
-    location = models.PointField(srid=4326, null=False)
+    latitude = models.FloatField(default=0.0)
+    longitude = models.FloatField(default=0.0)
     address = models.CharField(max_length=300, blank=True, null=True)
     prop_name = models.CharField(max_length=200, blank=True)
     description = models.TextField(blank=True)
@@ -116,7 +116,6 @@ class Amenity(models.Model):
         ordering = ["-created_at"]
         unique_together = [("amenity_type", "external_id")]
         indexes = [
-            GistIndex(fields=["location"], name="amenity_location_gist_idx"),
             models.Index(fields=["active"]),
             models.Index(fields=["amenity_type", "active"]),
             models.Index(fields=["is_open_24hrs"]),

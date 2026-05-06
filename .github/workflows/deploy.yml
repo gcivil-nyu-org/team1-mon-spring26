@@ -29,20 +29,6 @@ jobs:
     environment: feature
     # Skip tests if the trigger is the ASG Lambda (repository_dispatch)
     if: github.repository_owner == 'ajslezak' && github.event_name != 'repository_dispatch'
-    services:
-      postgres:
-        image: postgis/postgis:17-3.5 # Includes PostGIS out of the box
-        env:
-          POSTGRES_DB: amenities
-          POSTGRES_USER: amenities_${{ vars.APP_ENV || 'feature' }}
-          POSTGRES_PASSWORD: mypassword
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -50,10 +36,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.14' # Matches your EC2 environment
-
-      - name: Install GDAL
-        run: |
-          sudo apt-get install -y gdal-bin
 
       - name: Install Dependencies
         run: |
@@ -158,9 +140,7 @@ jobs:
               "sudo chcon -Rt httpd_sys_content_t /home/ec2-user/app/static || true",
               "sudo cp /home/ec2-user/app/https.conf /etc/nginx/nginx.conf",
               "sudo rm -rf /etc/nginx/conf.d/*",
-              "sudo bash /home/ec2-user/app/scripts/configure_pgbouncer.sh",
-              "sudo systemctl enable pgbouncer",
-              "sudo systemctl restart django-wsgi django-asgi nginx pgbouncer"
+              "sudo systemctl restart django-wsgi django-asgi nginx"
             ]' \
             --query "Command.CommandId" \
             --output text)

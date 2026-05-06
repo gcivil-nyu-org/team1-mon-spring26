@@ -8,7 +8,7 @@ try {
 const initialCenter = restoredState ? restoredState.center : [40.73, -73.99];
 const initialZoom = restoredState ? restoredState.zoom : 13;
 
-const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0 }).setView(initialCenter, initialZoom);
+const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0, maxZoom: 19 }).setView(initialCenter, initialZoom);
 
 const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const tileUrl = isLocalhost ? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' : '/tiles/{z}/{x}/{y}.png';
@@ -37,13 +37,63 @@ let allAmenitiesData       = {};
 let searchTimeout          = null;
 let searchAbortController  = null;
 let currentDetailAmenity   = null;
-let amenityAbortController = null;
 let nearbyHoverMarker      = null;
 let pinnedHoverAmenity     = null;
 let blockNearbyHover       = false;
 let currentUser            = null;
 let hoverTooltipTimer      = null;
 let pendingAmenityFromQuery = null;
+let loadedTiles            = new Set();
+let currentZoomLevel       = null;
+
+const BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz";
+function encodeGeohash(lat, lon, precision) {
+    let idx = 0, bit = 0, evenBit = true;
+    let hash = '';
+    let latMin = -90, latMax = 90;
+    let lonMin = -180, lonMax = 180;
+    
+    while (hash.length < precision) {
+        if (evenBit) {
+            const mid = (lonMin + lonMax) / 2;
+            if (lon >= mid) { idx = idx * 2 + 1; lonMin = mid; }
+            else { idx = idx * 2; lonMax = mid; }
+        } else {
+            const mid = (latMin + latMax) / 2;
+            if (lat >= mid) { idx = idx * 2 + 1; latMin = mid; }
+            else { idx = idx * 2; latMax = mid; }
+        }
+        evenBit = !evenBit;
+        if (++bit === 5) {
+            hash += BASE32[idx];
+            bit = 0; idx = 0;
+        }
+    }
+    return hash;
+}
+
+function getGeohashesInBBox(north, south, east, west, precision) {
+    const hashes = new Set();
+    const latStep = 0.005; 
+    const lonStep = 0.01;
+    let lat = south;
+    while (lat <= north + latStep) {
+        let lon = west;
+        while (lon <= east + lonStep) {
+            hashes.add(encodeGeohash(lat, lon, precision));
+            lon += lonStep;
+        }
+        lat += latStep;
+    }
+    return Array.from(hashes);
+}
+
+function resetTilesAndReload() {
+    loadedTiles.clear();
+    allAmenitiesData = {};
+    updateDisplayedAmenities();
+    loadAmenities();
+}
 
 const hoursFilter = {
     openNow:      false,
@@ -173,11 +223,10 @@ function loadAmenityTypes() {
                         if (scb.checked !== cb.checked) { scb.checked = cb.checked; scb.dispatchEvent(new Event('change')); }
                     });
                 }
-                updateHoursFilterVisibility();
             });
         });
         updateHoursFilterVisibility();
-        loadAmenities();
+        resetTilesAndReload();
     }).catch(e => console.error('Error loading types:', e));
 }
 
@@ -186,14 +235,13 @@ function toggleType(typeId, el, cb, subIds = []) {
     if (cb.checked) {
         activeAmenityTypes.add(typeId); el.classList.add('active'); if (icon) icon.textContent = '✓';
         subIds.forEach(id => activeAmenityTypes.add(id));
-        if (!allAmenitiesData[typeId]) loadAmenities(); else updateDisplayedAmenities();
     } else {
         activeAmenityTypes.delete(typeId); el.classList.remove('active'); if (icon) icon.textContent = '';
         subIds.forEach(id => activeAmenityTypes.delete(id));
-        updateDisplayedAmenities();
     }
     localStorage.setItem('activeAmenityTypes', JSON.stringify([...activeAmenityTypes]));
     updateHoursFilterVisibility();
+    resetTilesAndReload();
 }
 
 function updateHoursFilterVisibility() {
@@ -207,9 +255,6 @@ function updateHoursFilterVisibility() {
 }
 
 function loadAmenities() {
-    if (amenityAbortController) amenityAbortController.abort();
-    amenityAbortController = new AbortController();
-
     if (!activeAmenityTypes.size) { 
         allAmenitiesData = {}; 
         updateDisplayedAmenities(); 
@@ -217,25 +262,64 @@ function loadAmenities() {
     }
 
     const b = map.getBounds();
-    const params = new URLSearchParams({
-        north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest(),
-        zoom: Math.round(map.getZoom()),
-        include_inactive: document.getElementById('include-inactive').checked,
-        only_accessible:  document.getElementById('only-accessible').checked,
-    });
-    activeAmenityTypes.forEach(id => params.append('type_id', id));
-    fetch(`/api/amenities/?${params}`, { signal: amenityAbortController.signal }).then(r => r.json()).then(data => {
+    const zoom = Math.round(map.getZoom());
+    const includeInactive = document.getElementById('include-inactive').checked;
+    const onlyAccessible = document.getElementById('only-accessible').checked;
+
+    if (currentZoomLevel !== zoom) {
+        loadedTiles.clear();
         allAmenitiesData = {};
-        data.amenities.forEach(a => {
-            if (!allAmenitiesData[a.type_id]) allAmenitiesData[a.type_id] = [];
-            if (!allAmenitiesData[a.type_id].some(x => x.id === a.id)) allAmenitiesData[a.type_id].push(a);
-        });
-        updateDisplayedAmenities();
-        updateHoursFilterVisibility();
-        if (currentDetailAmenity) {
-            renderNearbyTab(currentDetailAmenity);
-        }
-    }).catch(e => { if (e.name !== 'AbortError') console.error('Error loading amenities:', e); });
+        currentZoomLevel = zoom;
+    }
+
+    const params = new URLSearchParams({
+        zoom: zoom,
+        include_inactive: includeInactive,
+        only_accessible:  onlyAccessible,
+    });
+    
+    Array.from(activeAmenityTypes).sort().forEach(id => params.append('type_id', id));
+    const paramStr = params.toString();
+    
+    let north = b.getNorth(), south = b.getSouth(), east = b.getEast(), west = b.getWest();
+    const MAX_LAT_SPAN = 0.02;
+    const MAX_LON_SPAN = 0.02;
+    if ((north - south) > MAX_LAT_SPAN) {
+        const centerLat = (north + south) / 2.0;
+        north = centerLat + (MAX_LAT_SPAN / 2.0);
+        south = centerLat - (MAX_LAT_SPAN / 2.0);
+    }
+    if ((east - west) > MAX_LON_SPAN) {
+        const centerLon = (east + west) / 2.0;
+        east = centerLon + (MAX_LON_SPAN / 2.0);
+        west = centerLon - (MAX_LON_SPAN / 2.0);
+    }
+    
+    const hashes = getGeohashesInBBox(north, south, east, west, 6);
+    
+    hashes.forEach(hash => {
+        const cacheKey = `${hash}_${paramStr}`;
+        if (loadedTiles.has(cacheKey)) return;
+        loadedTiles.add(cacheKey);
+        
+        fetch(`/api/amenities/tile/${hash}/?${paramStr}`).then(r => r.json()).then(data => {
+            if (!data.amenities) return;
+            data.amenities.forEach(a => {
+                if (!allAmenitiesData[a.type_id]) allAmenitiesData[a.type_id] = [];
+                allAmenitiesData[a.type_id] = allAmenitiesData[a.type_id].filter(x => x.id !== a.id);
+                allAmenitiesData[a.type_id].push(a);
+            });
+            
+            clearTimeout(window._updateTilesTimer);
+            window._updateTilesTimer = setTimeout(() => {
+                updateDisplayedAmenities();
+                updateHoursFilterVisibility();
+                if (currentDetailAmenity) {
+                    renderNearbyTab(currentDetailAmenity);
+                }
+            }, 50);
+        }).catch(e => console.error(e));
+    });
 }
 
 function evaluateHoursFilter(amenity) {
@@ -617,7 +701,7 @@ function addAmenityMarker(amenity) {
         const cls = 'marker-cluster marker-cluster-' + (count < 10 ? 'small' : count < 100 ? 'medium' : 'large');
         const icon = L.divIcon({ html: `<div style="background:${amenity.color}"><span>${count}</span></div>`, className: cls, iconSize: L.point(40, 40) });
         const m = L.marker([amenity.latitude, amenity.longitude], { icon });
-        m.on('click', () => map.flyTo([amenity.latitude, amenity.longitude], map.getZoom() + 2));
+        m.on('click', () => map.flyTo([amenity.latitude, amenity.longitude], Math.min(map.getZoom() + 2, 19)));
         bikeRackMarkers.addLayer(m);
         return;
     }
@@ -646,8 +730,7 @@ function addAmenityMarker(amenity) {
         icon = L.divIcon({
             html: `<div style="width:24px;height:32px;filter:${filt}">
             <svg viewBox="0 0 24 32" width="24" height="32" xmlns="http://www.w3.org/2000/svg">
-                <defs><style>.p${amenity.id}{fill:${amenity.color};stroke:rgba(0,0,0,.22);stroke-width:.5}</style></defs>
-                <g class="p${amenity.id}">${svgPaths[amenity.icon] || svgPaths.default}</g>
+                <g fill="${amenity.color}" stroke="rgba(0,0,0,.22)" stroke-width=".5">${svgPaths[amenity.icon] || svgPaths.default}</g>
             </svg></div>`,
             iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -32], className: 'leaflet-div-icon-custom amenity-marker-icon',
         });
@@ -733,6 +816,18 @@ function showDetailPanel(amenity, activeTab = 'overview') {
     }
 
     wireFavoriteToggle(amenity);
+
+    fetch(`/api/amenities/${amenity.id}/`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.amenity && currentDetailAmenity && currentDetailAmenity.id === amenity.id) {
+                Object.assign(amenity, data.amenity);
+                renderOverviewTab(amenity);
+                renderReviewsTab(amenity);
+                wireFavoriteToggle(amenity);
+            }
+        })
+        .catch(e => console.error(e));
 }
 
 function switchDetailTab(name) {
@@ -1080,7 +1175,7 @@ function renderNearbyTab(a) {
                 if (navigator.vibrate) navigator.vibrate(50);
                 
                 if (found.is_cluster) {
-                    map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
+                    map.flyTo([found.latitude, found.longitude], Math.min(map.getZoom() + 2, 19));
                     closeDetailPanel();
                 } else {
                     map.flyTo([found.latitude, found.longitude], map.getZoom()); showDetailPanel(found, 'nearby');
@@ -1134,7 +1229,7 @@ function renderNearbyTab(a) {
             document.addEventListener('mousemove', () => { blockNearbyHover = false; }, { once: true });
             
             if (found.is_cluster) {
-                map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
+                map.flyTo([found.latitude, found.longitude], Math.min(map.getZoom() + 2, 19));
                 closeDetailPanel();
             } else {
                 map.flyTo([found.latitude, found.longitude], map.getZoom()); showDetailPanel(found, 'nearby');
@@ -2601,8 +2696,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    document.getElementById('include-inactive').addEventListener('change', loadAmenities);
-    document.getElementById('only-accessible').addEventListener('change', loadAmenities);
+    document.getElementById('include-inactive').addEventListener('change', resetTilesAndReload);
+    document.getElementById('only-accessible').addEventListener('change', resetTilesAndReload);
 
     const si  = document.getElementById('search-input');
     const sc  = document.getElementById('search-clear');

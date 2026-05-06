@@ -1,9 +1,21 @@
 import requests
 import time
+from decimal import Decimal
 from django.core.management.base import BaseCommand
-from django.contrib.gis.geos import GEOSGeometry
-from django.db import transaction
+from django.conf import settings
 from maps.models import AmenityType, Amenity
+import boto3
+import geohash2
+from botocore.config import Config
+
+
+def get_dynamodb_table():
+    kwargs = {"region_name": settings.DYNAMODB_REGION}
+    if getattr(settings, "DYNAMODB_ENDPOINT_URL", None):
+        kwargs["endpoint_url"] = settings.DYNAMODB_ENDPOINT_URL
+    config = Config(retries={"max_attempts": 50, "mode": "adaptive"})
+    dynamodb = boto3.resource("dynamodb", config=config, **kwargs)
+    return dynamodb.Table(settings.DYNAMODB_TABLE_NAME)
 
 
 class Command(BaseCommand):
@@ -48,78 +60,96 @@ class Command(BaseCommand):
             fountains = data["value"]
             self.stdout.write(f"Found {len(fountains)} water fountains")
 
-            created_count = 0
-            updated_count = 0
+            processed_count = 0
             skipped_count = 0
+            table = get_dynamodb_table()
 
-            with transaction.atomic():
-                for fountain in fountains:
-                    try:
-                        # OData format
-                        if not isinstance(fountain, dict):
-                            skipped_count += 1
-                            continue
-
-                        # Extract basic info
-                        propnum = fountain.get("gispropnum", "")
-                        external_id = (
-                            fountain.get("system")
-                            or fountain.get("_id")
-                            or fountain.get("ID")
-                            or f"{propnum}_{int(time.time() * 1000)}"
-                        )
-                        name = (
-                            fountain.get("Location")
-                            or fountain.get("location")
-                            or "Water Fountain"
-                        )
-                        position = (
-                            fountain.get("Position") or fountain.get("position") or ""
-                        )
-                        prop_name = (
-                            fountain.get("propertyna")
-                            or fountain.get("PropName")
-                            or fountain.get("propName")
-                            or fountain.get("prop_name")
-                            or ""
-                        )
-
-                        # Check active status
-                        active = True
-                        if "Active" in fountain:
-                            active_str = str(fountain["Active"]).lower()
-                            active = active_str in ["true", "yes", "1", "y", "active"]
-
-                        geom = fountain["the_geom"]
-
-                        # use composite key (amenity_type, external_id)
-                        obj, created = Amenity.objects.update_or_create(
-                            amenity_type=amenity_type,
-                            external_id=str(external_id),
-                            defaults={
-                                "name": str(name)[:200],
-                                "location": GEOSGeometry(str(geom)),
-                                "description": str(position)[:500],
-                                "prop_name": str(prop_name)[:200],
-                                "active": active,
-                            },
-                        )
-
-                        if created:
-                            created_count += 1
-                        else:
-                            updated_count += 1
-
-                    except (ValueError, IndexError, TypeError, KeyError) as e:
-                        self.stdout.write(self.style.WARNING(f"Skipped entry: {e}"))
+            for fountain in fountains:
+                try:
+                    # OData format
+                    if not isinstance(fountain, dict):
                         skipped_count += 1
                         continue
+
+                    # Extract basic info
+                    propnum = fountain.get("gispropnum", "")
+                    external_id = (
+                        fountain.get("system")
+                        or fountain.get("_id")
+                        or fountain.get("ID")
+                        or f"{propnum}_{int(time.time() * 1000)}"
+                    )
+                    name = (
+                        fountain.get("Location")
+                        or fountain.get("location")
+                        or "Water Fountain"
+                    )
+                    position = (
+                        fountain.get("Position") or fountain.get("position") or ""
+                    )
+                    prop_name = (
+                        fountain.get("propertyna")
+                        or fountain.get("PropName")
+                        or fountain.get("propName")
+                        or fountain.get("prop_name")
+                        or ""
+                    )
+
+                    # Check active status
+                    active = True
+                    if "Active" in fountain:
+                        active_str = str(fountain["Active"]).lower()
+                        active = active_str in ["true", "yes", "1", "y", "active"]
+
+                    geom = fountain["the_geom"]
+                    lat = 0.0
+                    lon = 0.0
+                    if isinstance(geom, dict) and "coordinates" in geom:
+                        lon = geom["coordinates"][0]
+                        lat = geom["coordinates"][1]
+
+                    amenity_id = str(external_id)
+                    location_hash = geohash2.encode(float(lat), float(lon), precision=6)
+
+                    item = {
+                        "PK": f"AMENITY#{amenity_id}",
+                        "SK": f"AMENITY#{amenity_id}",
+                        "GSI1PK": f"GEOHASH#{location_hash}",
+                        "GSI1SK": f"TYPE#Water Fountain#ACTIVE#{active}",
+                        "Id": amenity_id,
+                        "Name": str(name)[:200],
+                        "Type": "Water Fountain",
+                        "Address": str(prop_name)[:200],
+                        "Description": str(position)[:500],
+                        "Latitude": Decimal(str(lat)),
+                        "Longitude": Decimal(str(lon)),
+                        "Active": active,
+                        "AverageRating": Decimal("0"),
+                        "ReviewCount": 0,
+                    }
+                    table.put_item(Item=item)
+                    processed_count += 1
+
+                    Amenity.objects.update_or_create(
+                        amenity_type=amenity_type,
+                        external_id=amenity_id,
+                        defaults={
+                            "name": str(name)[:200],
+                            "latitude": float(lat),
+                            "longitude": float(lon),
+                            "active": active,
+                        },
+                    )
+
+                except (ValueError, IndexError, TypeError, KeyError) as e:
+                    self.stdout.write(self.style.WARNING(f"Skipped entry: {e}"))
+                    skipped_count += 1
+                    continue
 
             self.stdout.write(
                 self.style.SUCCESS(
                     f"\nImport complete!\n"
-                    f"Created: {created_count}\n"
-                    f"Updated: {updated_count}\n"
+                    f"Processed (upserted): {processed_count}\n"
                     f"Skipped: {skipped_count}"
                 )
             )
