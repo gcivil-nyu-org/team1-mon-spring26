@@ -8,7 +8,6 @@ try {
 const initialCenter = restoredState ? restoredState.center : [40.73, -73.99];
 const initialZoom = restoredState ? restoredState.zoom : 13;
 
-const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0 }).setView(initialCenter, initialZoom);
 const map = L.map('map', { renderer: L.canvas(), zoomControl: false, zoomSnap: 0, maxZoom: 19 }).setView(initialCenter, initialZoom);
 
 const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -702,7 +701,6 @@ function addAmenityMarker(amenity) {
         const cls = 'marker-cluster marker-cluster-' + (count < 10 ? 'small' : count < 100 ? 'medium' : 'large');
         const icon = L.divIcon({ html: `<div style="background:${amenity.color}"><span>${count}</span></div>`, className: cls, iconSize: L.point(40, 40) });
         const m = L.marker([amenity.latitude, amenity.longitude], { icon });
-        m.on('click', () => map.flyTo([amenity.latitude, amenity.longitude], map.getZoom() + 2));
         m.on('click', () => map.flyTo([amenity.latitude, amenity.longitude], Math.min(map.getZoom() + 2, 19)));
         bikeRackMarkers.addLayer(m);
         return;
@@ -1177,7 +1175,6 @@ function renderNearbyTab(a) {
                 if (navigator.vibrate) navigator.vibrate(50);
                 
                 if (found.is_cluster) {
-                    map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
                     map.flyTo([found.latitude, found.longitude], Math.min(map.getZoom() + 2, 19));
                     closeDetailPanel();
                 } else {
@@ -1232,7 +1229,6 @@ function renderNearbyTab(a) {
             document.addEventListener('mousemove', () => { blockNearbyHover = false; }, { once: true });
             
             if (found.is_cluster) {
-                map.flyTo([found.latitude, found.longitude], map.getZoom() + 2);
                 map.flyTo([found.latitude, found.longitude], Math.min(map.getZoom() + 2, 19));
                 closeDetailPanel();
             } else {
