@@ -2184,6 +2184,145 @@ def leave_chat_api(request):
         return JsonResponse({"error": str(e)}, status=500)
 
 
+@cache_control(public=True, max_age=300)
+def amenity_tile_api(request, geohash_val):
+    """API endpoint to fetch amenities from DynamoDB for a specific atomic geohash tile."""
+    type_ids = request.GET.getlist("type_id")
+    include_inactive = request.GET.get("include_inactive", "false").lower() == "true"
+    only_accessible = request.GET.get("only_accessible", "false").lower() == "true"
+    zoom = int(request.GET.get("zoom", 0))
+
+    type_names = []
+    if type_ids:
+        type_names = list(
+            AmenityType.objects.filter(id__in=type_ids).values_list("name", flat=True)
+        )
+
+    local_dynamo = get_dynamodb_resource()
+    local_table = local_dynamo.Table(settings.DYNAMODB_TABLE_NAME)
+
+    try:
+        if len(type_names) == 1:
+            sk_prefix = f"TYPE#{type_names[0]}#"
+            if not include_inactive:
+                sk_prefix += "ACTIVE#True"
+
+            response = local_table.query(
+                IndexName="GeohashIndex",
+                KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{geohash_val}")
+                & Key("GSI1SK").begins_with(sk_prefix),
+            )
+        else:
+            response = local_table.query(
+                IndexName="GeohashIndex",
+                KeyConditionExpression=Key("GSI1PK").eq(f"GEOHASH#{geohash_val}"),
+            )
+        items = response.get("Items", [])
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+    # Deduplicate overlapping results
+    seen_ids = set()
+    unique_amenities = []
+    for item in items:
+        if item["Id"] not in seen_ids:
+            seen_ids.add(item["Id"])
+            unique_amenities.append(item)
+
+    amenity_types_map = {t.name: t for t in AmenityType.objects.all()}
+
+    # In-Memory Single-Table Design Filtering
+    filtered_amenities = []
+    for item in unique_amenities:
+        if not include_inactive and not item.get("Active", True):
+            continue
+        if type_names and item.get("Type") not in type_names:
+            continue
+        if only_accessible and item.get("Accessibility", "") == "Not Accessible":
+            continue
+        filtered_amenities.append(item)
+
+    BIKE_RACK_TYPE_NAME = "Bike Rack"
+    CLUSTER_ZOOM_THRESHOLD = 18
+    final_amenities_list = []
+
+    bike_rack_amenities = [
+        a for a in filtered_amenities if a.get("Type") == BIKE_RACK_TYPE_NAME
+    ]
+    other_amenities = [
+        a for a in filtered_amenities if a.get("Type") != BIKE_RACK_TYPE_NAME
+    ]
+
+    is_bike_rack_query = (BIKE_RACK_TYPE_NAME in type_names) if type_names else True
+
+    if is_bike_rack_query and zoom < CLUSTER_ZOOM_THRESHOLD:
+        clusters = cluster_amenities_python(bike_rack_amenities, zoom)
+
+        for ids, count, centroid_lat, centroid_lon in clusters:
+            if count > 1:
+                amenity_type_obj = amenity_types_map.get(BIKE_RACK_TYPE_NAME)
+                final_amenities_list.append(
+                    {
+                        "id": f"cluster_{centroid_lat}_{centroid_lon}",
+                        "is_cluster": True,
+                        "point_count": count,
+                        "latitude": centroid_lat,
+                        "longitude": centroid_lon,
+                        "type": BIKE_RACK_TYPE_NAME,
+                        "type_id": amenity_type_obj.id if amenity_type_obj else None,
+                        "icon": amenity_type_obj.icon if amenity_type_obj else "bicycle",
+                        "color": amenity_type_obj.color if amenity_type_obj else "#FF9800",
+                        "is_favorited": False,
+                    }
+                )
+            else:
+                single_id = ids[0]
+                single_item = next(
+                    (a for a in bike_rack_amenities if a["Id"] == single_id), None
+                )
+                if single_item:
+                    other_amenities.append(single_item)
+    elif is_bike_rack_query:
+        other_amenities.extend(bike_rack_amenities)
+
+    for a in other_amenities:
+        amenity_type_obj = amenity_types_map.get(a.get("Type", ""))
+
+        fallback_icon = "map-marker"
+        fallback_color = "#1E88E5"
+        if a.get("Type") == BIKE_RACK_TYPE_NAME:
+            fallback_icon = "bicycle"
+            fallback_color = "#FF9800"
+
+        final_amenities_list.append(
+            {
+                "id": a.get("Id"),
+                "name": a.get("Name"),
+                "latitude": float(a.get("Latitude", 0)),
+                "longitude": float(a.get("Longitude", 0)),
+                "address": a.get("Address", ""),
+                "prop_name": a.get("Name", ""),
+                "description": a.get("Description", ""),
+                "operator": a.get("Operator", ""),
+                "hours_of_operation": a.get("HoursOfOperation", {}),
+                "changing_stations": a.get("ChangingStations", False),
+                "accessibility": a.get("Accessibility", ""),
+                "rating": float(a.get("AverageRating", 0)),
+                "review_count": int(a.get("ReviewCount", 0)),
+                "reviews": [],
+                "photo_url": a.get("PrimaryPhotoUrl", None),
+                "active": a.get("Active", True),
+                "type": a.get("Type", ""),
+                "type_id": amenity_type_obj.id if amenity_type_obj else None,
+                "icon": amenity_type_obj.icon if amenity_type_obj else fallback_icon,
+                "color": amenity_type_obj.color if amenity_type_obj else fallback_color,
+                "is_favorited": False,
+            }
+        )
+
+    return JsonResponse({"amenities": final_amenities_list})
+
+
 @require_http_methods(["GET"])
 def amenity_search_api(request):
     """Search amenities by name for group chat creation."""

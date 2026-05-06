@@ -21,6 +21,11 @@ urlpatterns = [
     path("api/amenities/", views.amenities_api, name="amenities_api"),
     path("api/amenities/search/", views.amenity_search_api, name="amenity_search_api"),
     path(
+        "api/amenities/tile/<str:geohash_val>/",
+        views.amenity_tile_api,
+        name="amenity_tile_api",
+    ),
+    path(
         "api/amenities/reviewers/",
         views.get_amenity_reviewers_api,
         name="get_amenity_reviewers_api",
